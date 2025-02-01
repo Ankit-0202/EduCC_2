@@ -1,2 +1,26 @@
-build/
+# Build directories and binaries
+/build/
 C99Compiler
+output
+output.ll
+output.s
+
+# Compiled object files
+*.o
+
+# Temporary files
+*.tmp
+*.log
+
+# macOS system files
+.DS_Store
+
+# LLVM intermediate files (if any)
+*.bc
+*.bc.*
+*.opt
+
+# Backup files
+*~
+*.swp
+*.bak
