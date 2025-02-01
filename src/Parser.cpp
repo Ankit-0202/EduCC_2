@@ -227,7 +227,6 @@ StatementPtr Parser::parseIfStatement() {
 }
 
 StatementPtr Parser::parseWhileStatement() {
-    // while ( condition ) statement
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'while'");
     ExpressionPtr condition = parseExpression();
     consume(TokenType::DELIM_RPAREN, "Expected ')' after while condition");
@@ -236,9 +235,7 @@ StatementPtr Parser::parseWhileStatement() {
 }
 
 StatementPtr Parser::parseForStatement() {
-    // for ( initializer ; condition ; increment ) statement
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'for'");
-    
     // For initializer: either a variable declaration statement or an expression statement.
     StatementPtr initializer = nullptr;
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
@@ -247,7 +244,6 @@ StatementPtr Parser::parseForStatement() {
     } else {
         initializer = parseExpressionStatement();
     }
-    
     // Condition expression: optional. If missing, assume true.
     ExpressionPtr condition = nullptr;
     if (!check(TokenType::DELIM_SEMICOLON)) {
@@ -256,14 +252,12 @@ StatementPtr Parser::parseForStatement() {
         condition = std::make_shared<Literal>(true);
     }
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after for loop condition");
-    
     // Increment expression: optional.
     ExpressionPtr increment = nullptr;
     if (!check(TokenType::DELIM_RPAREN)) {
         increment = parseExpression();
     }
     consume(TokenType::DELIM_RPAREN, "Expected ')' after for loop increment");
-    
     StatementPtr body = parseStatement();
     return std::make_shared<ForStatement>(initializer, condition, increment, body);
 }
@@ -308,12 +302,36 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     return std::make_shared<VariableDeclarationStatement>(type, varName, initializer);
 }
 
+// New: Parse logical AND (&&) operators.
+ExpressionPtr Parser::parseLogicalAnd() {
+    ExpressionPtr expr = parseEquality();
+    while (match(TokenType::OP_LOGICAL_AND)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseEquality();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
+// New: Parse logical OR (||) operators.
+ExpressionPtr Parser::parseLogicalOr() {
+    ExpressionPtr expr = parseLogicalAnd();
+    while (match(TokenType::OP_LOGICAL_OR)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseLogicalAnd();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
 ExpressionPtr Parser::parseExpression() {
     return parseAssignment();
 }
 
 ExpressionPtr Parser::parseAssignment() {
-    ExpressionPtr expr = parseEquality();
+    ExpressionPtr expr = parseLogicalOr();
     if (match(TokenType::OP_ASSIGN)) {
         if (auto identifier = std::dynamic_pointer_cast<Identifier>(expr)) {
             std::string varName = identifier->name;

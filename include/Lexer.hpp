@@ -31,6 +31,8 @@ enum class TokenType {
     OP_GREATER,
     OP_LESS_EQUAL,
     OP_GREATER_EQUAL,
+    OP_LOGICAL_AND,  // &&
+    OP_LOGICAL_OR,   // ||
     // Delimiters
     DELIM_SEMICOLON,
     DELIM_COMMA,
@@ -70,7 +72,7 @@ private:
     void skipWhitespace();
     Token identifier();
     Token number();
-    Token character(); // New function for char literals.
+    Token character(); // For character literals.
     Token opOrDelim();
     bool isAtEnd() const;
 

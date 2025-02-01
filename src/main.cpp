@@ -9,11 +9,15 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/FileSystem.h>
 #include <system_error>
+#include <string>
 
 std::string tokenTypeToString(TokenType type) {
     switch (type) {
         case TokenType::KW_INT: return "KW_INT";
         case TokenType::KW_FLOAT: return "KW_FLOAT";
+        case TokenType::KW_CHAR: return "KW_CHAR";
+        case TokenType::KW_DOUBLE: return "KW_DOUBLE";
+        case TokenType::KW_BOOL: return "KW_BOOL";
         case TokenType::KW_RETURN: return "KW_RETURN";
         case TokenType::KW_IF: return "KW_IF";
         case TokenType::KW_ELSE: return "KW_ELSE";
@@ -30,6 +34,8 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::OP_GREATER: return "OP_GREATER";
         case TokenType::OP_LESS_EQUAL: return "OP_LESS_EQUAL";
         case TokenType::OP_GREATER_EQUAL: return "OP_GREATER_EQUAL";
+        case TokenType::OP_LOGICAL_AND: return "OP_LOGICAL_AND";
+        case TokenType::OP_LOGICAL_OR: return "OP_LOGICAL_OR";
         case TokenType::DELIM_SEMICOLON: return "DELIM_SEMICOLON";
         case TokenType::DELIM_COMMA: return "DELIM_COMMA";
         case TokenType::DELIM_LPAREN: return "DELIM_LPAREN";
@@ -38,6 +44,7 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::DELIM_RBRACE: return "DELIM_RBRACE";
         case TokenType::LITERAL_INT: return "LITERAL_INT";
         case TokenType::LITERAL_FLOAT: return "LITERAL_FLOAT";
+        case TokenType::LITERAL_CHAR: return "LITERAL_CHAR";
         case TokenType::IDENTIFIER: return "IDENTIFIER";
         case TokenType::EOF_TOKEN: return "EOF_TOKEN";
         default: return "UNKNOWN";
@@ -104,7 +111,6 @@ int main(int argc, char* argv[]) {
     try {
         std::unique_ptr<llvm::Module> module = codeGen.generateCode(ast);
         std::error_code EC;
-        // Cast 0 to llvm::sys::fs::OpenFlags so that the correct constructor is called
         llvm::raw_fd_ostream dest("output.ll", EC, static_cast<llvm::sys::fs::OpenFlags>(0));
         if (EC) {
             std::cerr << "Could not open file: " << EC.message() << "\n";

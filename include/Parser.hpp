@@ -39,6 +39,8 @@ private:
 
     ExpressionPtr parseExpression();
     ExpressionPtr parseAssignment();
+    ExpressionPtr parseLogicalOr();          // New: logical OR level
+    ExpressionPtr parseLogicalAnd();         // New: logical AND level
     ExpressionPtr parseEquality();
     ExpressionPtr parseComparison();
     ExpressionPtr parseTerm();

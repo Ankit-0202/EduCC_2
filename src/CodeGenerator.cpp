@@ -91,67 +91,91 @@ bool CodeGenerator::generateStatement(const StatementPtr& stmt) {
         return true;
     }
     else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
+        // Generate condition.
         Value* cond = generateExpression(ifStmt->condition);
+        // Ensure the condition is an i1.
         if (cond->getType() != Type::getInt1Ty(context))
             cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "ifcond");
+
         Function* theFunction = builder.GetInsertBlock()->getParent();
         BasicBlock* thenBB  = BasicBlock::Create(context, "then", theFunction);
         BasicBlock* elseBB  = BasicBlock::Create(context, "else", theFunction);
         BasicBlock* mergeBB = BasicBlock::Create(context, "ifcont", theFunction);
+
         builder.CreateCondBr(cond, thenBB, elseBB);
+
+        // Then branch.
         builder.SetInsertPoint(thenBB);
         bool thenTerminated = generateStatement(ifStmt->thenBranch);
         if (!thenTerminated)
             builder.CreateBr(mergeBB);
+
+        // Else branch.
         builder.SetInsertPoint(elseBB);
         bool elseTerminated = false;
         if (ifStmt->elseBranch.has_value())
             elseTerminated = generateStatement(ifStmt->elseBranch.value());
         if (!elseTerminated)
             builder.CreateBr(mergeBB);
+
+        // Merge block.
         builder.SetInsertPoint(mergeBB);
         return false;
     }
+    // New: Generate code for while loops.
     else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
         Function* theFunction = builder.GetInsertBlock()->getParent();
         BasicBlock* condBB = BasicBlock::Create(context, "while.cond", theFunction);
-        BasicBlock* loopBB = BasicBlock::Create(context, "while.body", theFunction);
+        BasicBlock* bodyBB = BasicBlock::Create(context, "while.body", theFunction);
         BasicBlock* afterBB = BasicBlock::Create(context, "while.after", theFunction);
+
+        // Jump to the condition block.
         builder.CreateBr(condBB);
         builder.SetInsertPoint(condBB);
         Value* cond = generateExpression(whileStmt->condition);
         if (cond->getType() != Type::getInt1Ty(context))
             cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "whilecond");
-        builder.CreateCondBr(cond, loopBB, afterBB);
-        builder.SetInsertPoint(loopBB);
-        generateStatement(whileStmt->body);
-        if (!builder.GetInsertBlock()->getTerminator())
+        builder.CreateCondBr(cond, bodyBB, afterBB);
+
+        // Generate the loop body.
+        builder.SetInsertPoint(bodyBB);
+        bool bodyTerminated = generateStatement(whileStmt->body);
+        if (!bodyTerminated)
             builder.CreateBr(condBB);
+
+        // Continue here after loop.
         builder.SetInsertPoint(afterBB);
         return false;
     }
+    // New: Generate code for for loops.
     else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
         Function* theFunction = builder.GetInsertBlock()->getParent();
-        // Process initializer.
+        // Generate initializer statement.
         if (forStmt->initializer)
             generateStatement(forStmt->initializer);
+
         BasicBlock* condBB = BasicBlock::Create(context, "for.cond", theFunction);
-        BasicBlock* loopBB = BasicBlock::Create(context, "for.body", theFunction);
+        BasicBlock* bodyBB = BasicBlock::Create(context, "for.body", theFunction);
         BasicBlock* incrBB = BasicBlock::Create(context, "for.incr", theFunction);
         BasicBlock* afterBB = BasicBlock::Create(context, "for.after", theFunction);
+
         builder.CreateBr(condBB);
         builder.SetInsertPoint(condBB);
         Value* cond = generateExpression(forStmt->condition);
         if (cond->getType() != Type::getInt1Ty(context))
             cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "forcond");
-        builder.CreateCondBr(cond, loopBB, afterBB);
-        builder.SetInsertPoint(loopBB);
-        generateStatement(forStmt->body);
-        builder.CreateBr(incrBB);
+        builder.CreateCondBr(cond, bodyBB, afterBB);
+
+        builder.SetInsertPoint(bodyBB);
+        bool bodyTerminated = generateStatement(forStmt->body);
+        if (!bodyTerminated)
+            builder.CreateBr(incrBB);
+
         builder.SetInsertPoint(incrBB);
         if (forStmt->increment)
             generateExpression(forStmt->increment);
         builder.CreateBr(condBB);
+
         builder.SetInsertPoint(afterBB);
         return false;
     }
@@ -167,6 +191,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
         Value* left  = generateExpression(binExpr->left);
         Value* right = generateExpression(binExpr->right);
+        // Convert types if necessary.
         if (left->getType() != right->getType()) {
             if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy())
                 left = builder.CreateSIToFP(left, right->getType(), "sitofp");
@@ -175,71 +200,89 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             else
                 throw runtime_error("CodeGenerator Error: Incompatible types in binary expression.");
         }
-        if (binExpr->op == "+") {
+        if (binExpr->op.compare("+") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFAdd(left, right, "faddtmp");
             else
                 return builder.CreateAdd(left, right, "addtmp");
         }
-        else if (binExpr->op == "-") {
+        else if (binExpr->op.compare("-") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFSub(left, right, "fsubtmp");
             else
                 return builder.CreateSub(left, right, "subtmp");
         }
-        else if (binExpr->op == "*") {
+        else if (binExpr->op.compare("*") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFMul(left, right, "fmultmp");
             else
                 return builder.CreateMul(left, right, "multmp");
         }
-        else if (binExpr->op == "/") {
+        else if (binExpr->op.compare("/") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFDiv(left, right, "fdivtmp");
             else
                 return builder.CreateSDiv(left, right, "divtmp");
         }
-        else if (binExpr->op == "<=") {
+        // Comparison operators.
+        else if (binExpr->op.compare("<=") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOLE(left, right, "cmptmp");
             else
                 return builder.CreateICmpSLE(left, right, "cmptmp");
         }
-        else if (binExpr->op == "<") {
+        else if (binExpr->op.compare("<") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOLT(left, right, "cmptmp");
             else
                 return builder.CreateICmpSLT(left, right, "cmptmp");
         }
-        else if (binExpr->op == ">=") {
+        else if (binExpr->op.compare(">=") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOGE(left, right, "cmptmp");
             else
                 return builder.CreateICmpSGE(left, right, "cmptmp");
         }
-        else if (binExpr->op == ">") {
+        else if (binExpr->op.compare(">") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOGT(left, right, "cmptmp");
             else
                 return builder.CreateICmpSGT(left, right, "cmptmp");
         }
-        else if (binExpr->op == "==") {
+        else if (binExpr->op.compare("==") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOEQ(left, right, "cmptmp");
             else
                 return builder.CreateICmpEQ(left, right, "cmptmp");
         }
-        else if (binExpr->op == "!=") {
+        else if (binExpr->op.compare("!=") == 0) {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpONE(left, right, "cmptmp");
             else
                 return builder.CreateICmpNE(left, right, "cmptmp");
+        }
+        // New support for logical AND
+        else if (binExpr->op.compare("&&") == 0) {
+            if (left->getType() != Type::getInt1Ty(context))
+                left = builder.CreateICmpNE(left, ConstantInt::get(left->getType(), 0), "booltmp");
+            if (right->getType() != Type::getInt1Ty(context))
+                right = builder.CreateICmpNE(right, ConstantInt::get(right->getType(), 0), "booltmp");
+            return builder.CreateAnd(left, right, "andtmp");
+        }
+        // New support for logical OR
+        else if (binExpr->op.compare("||") == 0) {
+            if (left->getType() != Type::getInt1Ty(context))
+                left = builder.CreateICmpNE(left, ConstantInt::get(left->getType(), 0), "booltmp");
+            if (right->getType() != Type::getInt1Ty(context))
+                right = builder.CreateICmpNE(right, ConstantInt::get(right->getType(), 0), "booltmp");
+            return builder.CreateOr(left, right, "ortmp");
         }
         else {
             throw runtime_error("CodeGenerator Error: Unsupported binary operator '" + binExpr->op + "'.");
         }
     }
     else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+        // With our variant ordering: char, bool, int, float, double.
         if (std::holds_alternative<char>(lit->value))
             return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
         else if (std::holds_alternative<bool>(lit->value))
@@ -287,6 +330,9 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     throw runtime_error("CodeGenerator Error: Unsupported expression type.");
 }
 
+//
+// generateFunction: Generates code for a function declaration.
+//
 void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& funcDecl) {
     Type* retType = getLLVMType(funcDecl->returnType);
     vector<Type*> paramTypes;
@@ -305,6 +351,7 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
     BasicBlock* entry = BasicBlock::Create(context, "entry", function);
     builder.SetInsertPoint(entry);
 
+    // Allocate space for parameters.
     localVariables.clear();
     index = 0;
     for (auto& arg : function->args()) {
@@ -314,12 +361,14 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
         index++;
     }
 
+    // Generate code for the function body.
     if (auto compound = std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body)) {
         generateStatement(compound);
     } else {
         throw runtime_error("CodeGenerator Error: Function body is not a compound statement.");
     }
 
+    // Ensure the function has a terminator.
     if (!builder.GetInsertBlock()->getTerminator()) {
         if (funcDecl->returnType == "void")
             builder.CreateRetVoid();
@@ -338,6 +387,9 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
     }
 }
 
+//
+// generateVariableDeclarationStatement: Generates code for a local variable declaration.
+//
 void CodeGenerator::generateVariableDeclarationStatement(
     const shared_ptr<VariableDeclarationStatement>& varDeclStmt) {
     Type* varType = getLLVMType(varDeclStmt->type);
