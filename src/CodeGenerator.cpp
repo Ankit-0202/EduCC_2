@@ -112,6 +112,49 @@ bool CodeGenerator::generateStatement(const StatementPtr& stmt) {
         builder.SetInsertPoint(mergeBB);
         return false;
     }
+    else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
+        Function* theFunction = builder.GetInsertBlock()->getParent();
+        BasicBlock* condBB = BasicBlock::Create(context, "while.cond", theFunction);
+        BasicBlock* loopBB = BasicBlock::Create(context, "while.body", theFunction);
+        BasicBlock* afterBB = BasicBlock::Create(context, "while.after", theFunction);
+        builder.CreateBr(condBB);
+        builder.SetInsertPoint(condBB);
+        Value* cond = generateExpression(whileStmt->condition);
+        if (cond->getType() != Type::getInt1Ty(context))
+            cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "whilecond");
+        builder.CreateCondBr(cond, loopBB, afterBB);
+        builder.SetInsertPoint(loopBB);
+        generateStatement(whileStmt->body);
+        if (!builder.GetInsertBlock()->getTerminator())
+            builder.CreateBr(condBB);
+        builder.SetInsertPoint(afterBB);
+        return false;
+    }
+    else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
+        Function* theFunction = builder.GetInsertBlock()->getParent();
+        // Process initializer.
+        if (forStmt->initializer)
+            generateStatement(forStmt->initializer);
+        BasicBlock* condBB = BasicBlock::Create(context, "for.cond", theFunction);
+        BasicBlock* loopBB = BasicBlock::Create(context, "for.body", theFunction);
+        BasicBlock* incrBB = BasicBlock::Create(context, "for.incr", theFunction);
+        BasicBlock* afterBB = BasicBlock::Create(context, "for.after", theFunction);
+        builder.CreateBr(condBB);
+        builder.SetInsertPoint(condBB);
+        Value* cond = generateExpression(forStmt->condition);
+        if (cond->getType() != Type::getInt1Ty(context))
+            cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "forcond");
+        builder.CreateCondBr(cond, loopBB, afterBB);
+        builder.SetInsertPoint(loopBB);
+        generateStatement(forStmt->body);
+        builder.CreateBr(incrBB);
+        builder.SetInsertPoint(incrBB);
+        if (forStmt->increment)
+            generateExpression(forStmt->increment);
+        builder.CreateBr(condBB);
+        builder.SetInsertPoint(afterBB);
+        return false;
+    }
     else {
         throw runtime_error("CodeGenerator Error: Unsupported statement type.");
     }
@@ -197,7 +240,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         }
     }
     else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
-        // Note: With our updated variant ordering (char, bool, int, float, double)
         if (std::holds_alternative<char>(lit->value))
             return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
         else if (std::holds_alternative<bool>(lit->value))

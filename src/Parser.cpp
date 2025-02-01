@@ -200,6 +200,10 @@ StatementPtr Parser::parseStatement() {
         return parseIfStatement();
     } else if (match(TokenType::KW_RETURN)) {
         return parseReturnStatement();
+    } else if (match(TokenType::KW_WHILE)) {
+        return parseWhileStatement();
+    } else if (match(TokenType::KW_FOR)) {
+        return parseForStatement();
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
     } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
@@ -220,6 +224,48 @@ StatementPtr Parser::parseIfStatement() {
         elseBranch = parseStatement();
     }
     return std::make_shared<IfStatement>(condition, thenBranch, elseBranch);
+}
+
+StatementPtr Parser::parseWhileStatement() {
+    // while ( condition ) statement
+    consume(TokenType::DELIM_LPAREN, "Expected '(' after 'while'");
+    ExpressionPtr condition = parseExpression();
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after while condition");
+    StatementPtr body = parseStatement();
+    return std::make_shared<WhileStatement>(condition, body);
+}
+
+StatementPtr Parser::parseForStatement() {
+    // for ( initializer ; condition ; increment ) statement
+    consume(TokenType::DELIM_LPAREN, "Expected '(' after 'for'");
+    
+    // For initializer: either a variable declaration statement or an expression statement.
+    StatementPtr initializer = nullptr;
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
+        initializer = parseVariableDeclarationStatement();
+    } else {
+        initializer = parseExpressionStatement();
+    }
+    
+    // Condition expression: optional. If missing, assume true.
+    ExpressionPtr condition = nullptr;
+    if (!check(TokenType::DELIM_SEMICOLON)) {
+        condition = parseExpression();
+    } else {
+        condition = std::make_shared<Literal>(true);
+    }
+    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after for loop condition");
+    
+    // Increment expression: optional.
+    ExpressionPtr increment = nullptr;
+    if (!check(TokenType::DELIM_RPAREN)) {
+        increment = parseExpression();
+    }
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after for loop increment");
+    
+    StatementPtr body = parseStatement();
+    return std::make_shared<ForStatement>(initializer, condition, increment, body);
 }
 
 StatementPtr Parser::parseReturnStatement() {

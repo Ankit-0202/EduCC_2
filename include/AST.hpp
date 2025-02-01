@@ -33,7 +33,6 @@ struct BinaryExpression : public Expression {
     std::string op;
     ExpressionPtr left;
     ExpressionPtr right;
-
     BinaryExpression(const std::string& oper, ExpressionPtr lhs, ExpressionPtr rhs)
         : op(oper), left(lhs), right(rhs) {}
 };
@@ -41,16 +40,13 @@ struct BinaryExpression : public Expression {
 struct UnaryExpression : public Expression {
     std::string op;
     ExpressionPtr operand;
-
     UnaryExpression(const std::string& oper, ExpressionPtr opd)
         : op(oper), operand(opd) {}
 };
 
-// --- UPDATED: Literal now holds a variant with an explicit order to avoid ambiguity ---
-// The order is: char, bool, int, float, double.
+// Literal: The variant order is: char, bool, int, float, double.
 struct Literal : public Expression {
     std::variant<char, bool, int, float, double> value;
-
     Literal(int val) : value(val) {}
     Literal(float val) : value(val) {}
     Literal(char val) : value(val) {}
@@ -60,14 +56,12 @@ struct Literal : public Expression {
 
 struct Identifier : public Expression {
     std::string name;
-
     Identifier(const std::string& n) : name(n) {}
 };
 
 struct Assignment : public Expression {
     std::string lhs;
     ExpressionPtr rhs;
-
     Assignment(const std::string& left, ExpressionPtr right)
         : lhs(left), rhs(right) {}
 };
@@ -75,7 +69,6 @@ struct Assignment : public Expression {
 struct FunctionCall : public Expression {
     std::string functionName;
     std::vector<ExpressionPtr> arguments;
-
     FunctionCall(const std::string& name, const std::vector<ExpressionPtr>& args)
         : functionName(name), arguments(args) {}
 };
@@ -87,7 +80,6 @@ struct Statement : public ASTNode {
 
 struct CompoundStatement : public Statement {
     std::vector<StatementPtr> statements;
-
     void addStatement(StatementPtr stmt) {
         statements.push_back(stmt);
     }
@@ -95,13 +87,11 @@ struct CompoundStatement : public Statement {
 
 struct ExpressionStatement : public Statement {
     ExpressionPtr expression;
-
     ExpressionStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
 struct ReturnStatement : public Statement {
     ExpressionPtr expression;
-
     ReturnStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
@@ -109,9 +99,28 @@ struct IfStatement : public Statement {
     ExpressionPtr condition;
     StatementPtr thenBranch;
     std::optional<StatementPtr> elseBranch;
-
     IfStatement(ExpressionPtr cond, StatementPtr thenStmt, std::optional<StatementPtr> elseStmt = std::nullopt)
         : condition(cond), thenBranch(thenStmt), elseBranch(elseStmt) {}
+};
+
+// New: While statement
+struct WhileStatement : public Statement {
+    ExpressionPtr condition;
+    StatementPtr body;
+    WhileStatement(ExpressionPtr cond, StatementPtr body)
+        : condition(cond), body(body) {}
+};
+
+// New: For statement
+struct ForStatement : public Statement {
+    // The initializer is a statement (either a variable declaration or an expression statement),
+    // condition and increment are expressions (if omitted, condition is treated as true).
+    StatementPtr initializer;
+    ExpressionPtr condition;
+    ExpressionPtr increment;
+    StatementPtr body;
+    ForStatement(StatementPtr init, ExpressionPtr cond, ExpressionPtr incr, StatementPtr body)
+        : initializer(init), condition(cond), increment(incr), body(body) {}
 };
 
 // Declaration Nodes
@@ -123,7 +132,6 @@ struct VariableDeclaration : public Declaration {
     std::string type;
     std::string name;
     std::optional<ExpressionPtr> initializer;
-
     VariableDeclaration(const std::string& ty, const std::string& nm, std::optional<ExpressionPtr> init = std::nullopt)
         : type(ty), name(nm), initializer(init) {}
 };
@@ -133,7 +141,6 @@ struct FunctionDeclaration : public Declaration {
     std::string name;
     std::vector<std::pair<std::string, std::string>> parameters; // pair<type, name>
     StatementPtr body;
-
     FunctionDeclaration(const std::string& retType, const std::string& nm,
                         const std::vector<std::pair<std::string, std::string>>& params,
                         StatementPtr stmt)
@@ -143,7 +150,6 @@ struct FunctionDeclaration : public Declaration {
 // Program Node
 struct Program : public ASTNode {
     std::vector<DeclarationPtr> declarations;
-
     void addDeclaration(DeclarationPtr decl) {
         declarations.push_back(decl);
     }
@@ -154,7 +160,6 @@ struct VariableDeclarationStatement : public Statement {
     std::string type;
     std::string name;
     std::optional<ExpressionPtr> initializer;
-
     VariableDeclarationStatement(const std::string& ty, const std::string& nm, std::optional<ExpressionPtr> init = std::nullopt)
         : type(ty), name(nm), initializer(init) {}
 };

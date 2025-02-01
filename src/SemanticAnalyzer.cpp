@@ -75,8 +75,18 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr& stmt) {
         analyzeStatement(ifStmt->thenBranch);
         if (ifStmt->elseBranch)
             analyzeStatement(ifStmt->elseBranch.value());
+    } else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
+        analyzeExpression(whileStmt->condition);
+        analyzeStatement(whileStmt->body);
+    } else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
+        if (forStmt->initializer)
+            analyzeStatement(forStmt->initializer);
+        if (forStmt->condition)
+            analyzeExpression(forStmt->condition);
+        if (forStmt->increment)
+            analyzeExpression(forStmt->increment);
+        analyzeStatement(forStmt->body);
     } else if (auto varDeclStmt = std::dynamic_pointer_cast<VariableDeclarationStatement>(stmt)) {
-        // Create a temporary VariableDeclaration and analyze it
         auto tempVarDecl = std::make_shared<VariableDeclaration>(varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer);
         analyzeVariableDeclaration(tempVarDecl);
     } else {

@@ -31,6 +31,8 @@ private:
     std::shared_ptr<CompoundStatement> parseCompoundStatement();
     StatementPtr parseStatement();
     StatementPtr parseIfStatement();
+    StatementPtr parseWhileStatement();      // New: while statement
+    StatementPtr parseForStatement();        // New: for statement
     StatementPtr parseReturnStatement();
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();

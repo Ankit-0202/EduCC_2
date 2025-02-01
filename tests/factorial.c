@@ -1,4 +1,3 @@
-// test1.c
 // A simple C program to test the compiler
 
 // Recursive function to calculate factorial
