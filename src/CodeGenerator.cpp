@@ -1,5 +1,3 @@
-// src/CodeGenerator.cpp
-
 #include "CodeGenerator.hpp"
 #include "AST.hpp"
 #include "SymbolTable.hpp"
@@ -53,6 +51,12 @@ Type* CodeGenerator::getLLVMType(const string& type) {
         return Type::getInt32Ty(context);
     else if (type == "float")
         return Type::getFloatTy(context);
+    else if (type == "char")
+        return Type::getInt8Ty(context);
+    else if (type == "double")
+        return Type::getDoubleTy(context);
+    else if (type == "bool")
+        return Type::getInt1Ty(context);
     else if (type == "void")
         return Type::getVoidTy(context);
     else
@@ -87,36 +91,24 @@ bool CodeGenerator::generateStatement(const StatementPtr& stmt) {
         return true;
     }
     else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
-        // Generate condition.
         Value* cond = generateExpression(ifStmt->condition);
-        // Ensure the condition is an i1.
         if (cond->getType() != Type::getInt1Ty(context))
             cond = builder.CreateICmpNE(cond, ConstantInt::get(cond->getType(), 0), "ifcond");
-
         Function* theFunction = builder.GetInsertBlock()->getParent();
-        // Create basic blocks for then, else, and merge; insert them into the function.
         BasicBlock* thenBB  = BasicBlock::Create(context, "then", theFunction);
         BasicBlock* elseBB  = BasicBlock::Create(context, "else", theFunction);
         BasicBlock* mergeBB = BasicBlock::Create(context, "ifcont", theFunction);
-
-        // Create conditional branch.
         builder.CreateCondBr(cond, thenBB, elseBB);
-
-        // Then branch.
         builder.SetInsertPoint(thenBB);
         bool thenTerminated = generateStatement(ifStmt->thenBranch);
         if (!thenTerminated)
             builder.CreateBr(mergeBB);
-
-        // Else branch.
         builder.SetInsertPoint(elseBB);
         bool elseTerminated = false;
         if (ifStmt->elseBranch.has_value())
             elseTerminated = generateStatement(ifStmt->elseBranch.value());
         if (!elseTerminated)
             builder.CreateBr(mergeBB);
-
-        // Merge block.
         builder.SetInsertPoint(mergeBB);
         return false;
     }
@@ -132,7 +124,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
         Value* left  = generateExpression(binExpr->left);
         Value* right = generateExpression(binExpr->right);
-        // Convert types if necessary.
         if (left->getType() != right->getType()) {
             if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy())
                 left = builder.CreateSIToFP(left, right->getType(), "sitofp");
@@ -165,7 +156,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             else
                 return builder.CreateSDiv(left, right, "divtmp");
         }
-        // Comparison operators.
         else if (binExpr->op == "<=") {
             if (left->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOLE(left, right, "cmptmp");
@@ -207,10 +197,17 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         }
     }
     else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
-        if (std::holds_alternative<int>(lit->value))
+        // Note: With our updated variant ordering (char, bool, int, float, double)
+        if (std::holds_alternative<char>(lit->value))
+            return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
+        else if (std::holds_alternative<bool>(lit->value))
+            return ConstantInt::get(Type::getInt1Ty(context), std::get<bool>(lit->value));
+        else if (std::holds_alternative<int>(lit->value))
             return ConstantInt::get(Type::getInt32Ty(context), std::get<int>(lit->value));
         else if (std::holds_alternative<float>(lit->value))
             return ConstantFP::get(Type::getFloatTy(context), std::get<float>(lit->value));
+        else if (std::holds_alternative<double>(lit->value))
+            return ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
     }
     else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
         auto it = localVariables.find(id->name);
@@ -248,9 +245,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     throw runtime_error("CodeGenerator Error: Unsupported expression type.");
 }
 
-//
-// generateFunction: Generates code for a function declaration.
-//
 void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& funcDecl) {
     Type* retType = getLLVMType(funcDecl->returnType);
     vector<Type*> paramTypes;
@@ -269,7 +263,6 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
     BasicBlock* entry = BasicBlock::Create(context, "entry", function);
     builder.SetInsertPoint(entry);
 
-    // Allocate space for parameters.
     localVariables.clear();
     index = 0;
     for (auto& arg : function->args()) {
@@ -279,14 +272,12 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
         index++;
     }
 
-    // Generate code for the function body.
     if (auto compound = std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body)) {
         generateStatement(compound);
     } else {
         throw runtime_error("CodeGenerator Error: Function body is not a compound statement.");
     }
 
-    // Ensure the function has a terminator.
     if (!builder.GetInsertBlock()->getTerminator()) {
         if (funcDecl->returnType == "void")
             builder.CreateRetVoid();
@@ -294,12 +285,17 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
             builder.CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
         else if (funcDecl->returnType == "float")
             builder.CreateRet(ConstantFP::get(Type::getFloatTy(context), 0.0f));
+        else if (funcDecl->returnType == "char")
+            builder.CreateRet(ConstantInt::get(Type::getInt8Ty(context), 0));
+        else if (funcDecl->returnType == "double")
+            builder.CreateRet(ConstantFP::get(Type::getDoubleTy(context), 0.0));
+        else if (funcDecl->returnType == "bool")
+            builder.CreateRet(ConstantInt::get(Type::getInt1Ty(context), 0));
+        else
+            throw runtime_error("CodeGenerator Error: Unsupported return type '" + funcDecl->returnType + "'.");
     }
 }
 
-//
-// generateVariableDeclarationStatement: Generates code for a local variable declaration.
-//
 void CodeGenerator::generateVariableDeclarationStatement(
     const shared_ptr<VariableDeclarationStatement>& varDeclStmt) {
     Type* varType = getLLVMType(varDeclStmt->type);

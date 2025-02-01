@@ -46,11 +46,16 @@ struct UnaryExpression : public Expression {
         : op(oper), operand(opd) {}
 };
 
+// --- UPDATED: Literal now holds a variant with an explicit order to avoid ambiguity ---
+// The order is: char, bool, int, float, double.
 struct Literal : public Expression {
-    std::variant<int, float> value;
+    std::variant<char, bool, int, float, double> value;
 
     Literal(int val) : value(val) {}
     Literal(float val) : value(val) {}
+    Literal(char val) : value(val) {}
+    Literal(double val) : value(val) {}
+    Literal(bool val) : value(val) {}
 };
 
 struct Identifier : public Expression {

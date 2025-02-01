@@ -91,3 +91,9 @@ test: $(BUILD_DIR)/$(TARGET)
 	echo "All tests passed."
 
 .PHONY: all clean run copy test
+
+# make all
+# ./build/C99Compiler tests/test2.c
+# llc output.ll -o output.s
+# clang output.s -o output
+# ./output

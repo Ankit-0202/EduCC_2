@@ -26,5 +26,4 @@ private:
     void generateVariableDeclarationStatement(const std::shared_ptr<VariableDeclarationStatement>& varDeclStmt);
 };
 
-
 #endif // CODE_GENERATOR_HPP

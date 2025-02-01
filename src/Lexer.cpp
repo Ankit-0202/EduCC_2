@@ -1,8 +1,10 @@
 #include "Lexer.hpp"
+#include <algorithm>
+#include <string>
 
-// List of keywords
+// List of keywords (note: "true" and "false" are included for boolean literals)
 const std::vector<std::string> keywords = {
-    "int", "float", "return", "if", "else", "while", "for"
+    "int", "float", "char", "double", "bool", "return", "if", "else", "while", "for", "true", "false"
 };
 
 // Constructor
@@ -66,12 +68,15 @@ Token Lexer::identifier() {
     if (std::find(keywords.begin(), keywords.end(), lexeme) != keywords.end()) {
         if (lexeme == "int") token.type = TokenType::KW_INT;
         else if (lexeme == "float") token.type = TokenType::KW_FLOAT;
+        else if (lexeme == "char") token.type = TokenType::KW_CHAR;
+        else if (lexeme == "double") token.type = TokenType::KW_DOUBLE;
+        else if (lexeme == "bool") token.type = TokenType::KW_BOOL;
         else if (lexeme == "return") token.type = TokenType::KW_RETURN;
         else if (lexeme == "if") token.type = TokenType::KW_IF;
         else if (lexeme == "else") token.type = TokenType::KW_ELSE;
         else if (lexeme == "while") token.type = TokenType::KW_WHILE;
         else if (lexeme == "for") token.type = TokenType::KW_FOR;
-        else token.type = TokenType::IDENTIFIER; // Fallback
+        else token.type = TokenType::IDENTIFIER; // "true" and "false" will be handled in the parser.
     } else {
         token.type = TokenType::IDENTIFIER;
     }
@@ -102,18 +107,34 @@ Token Lexer::number() {
     }
 
     Token token;
-    if (isFloat) {
-        token.type = TokenType::LITERAL_FLOAT;
-    } else {
-        token.type = TokenType::LITERAL_INT;
-    }
+    token.type = isFloat ? TokenType::LITERAL_FLOAT : TokenType::LITERAL_INT;
     token.lexeme = lexeme;
     token.line = startLine;
     token.column = startColumn;
     return token;
 }
 
-// Tokenize operators and delimiters
+Token Lexer::character() {
+    int startLine = line;
+    int startColumn = column;
+    std::string lexeme;
+    char openingQuote = get(); // should be '
+    if (openingQuote != '\'')
+        throw std::runtime_error("Lexer Error: Expected opening single quote for char literal");
+    // For simplicity, we assume a single character literal (no escape sequences)
+    char ch = get();
+    lexeme.push_back(ch);
+    if (peek() != '\'')
+        throw std::runtime_error("Lexer Error: Unterminated char literal");
+    get(); // consume closing '
+    Token token;
+    token.type = TokenType::LITERAL_CHAR;
+    token.lexeme = lexeme;
+    token.line = startLine;
+    token.column = startColumn;
+    return token;
+}
+
 Token Lexer::opOrDelim() {
     int startLine = line;
     int startColumn = column;
@@ -169,6 +190,11 @@ Token Lexer::opOrDelim() {
                 token.type = TokenType::OP_GREATER;
             }
             break;
+        case '\'':
+            // Roll back and call character()
+            currentPos--;
+            column--;
+            return character();
         default:
             token.type = TokenType::UNKNOWN;
             break;
@@ -193,6 +219,8 @@ std::vector<Token> Lexer::tokenize() {
             tokens.push_back(identifier());
         } else if (std::isdigit(c)) {
             tokens.push_back(number());
+        } else if (c == '\'') {
+            tokens.push_back(character());
         } else {
             tokens.push_back(opOrDelim());
         }
@@ -205,6 +233,5 @@ std::vector<Token> Lexer::tokenize() {
     eofToken.line = line;
     eofToken.column = column;
     tokens.push_back(eofToken);
-
     return tokens;
 }

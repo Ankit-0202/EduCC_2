@@ -65,13 +65,20 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT)) {
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
         size_t save = current;
         std::string type;
         if (match(TokenType::KW_INT)) {
             type = "int";
         } else if (match(TokenType::KW_FLOAT)) {
             type = "float";
+        } else if (match(TokenType::KW_CHAR)) {
+            type = "char";
+        } else if (match(TokenType::KW_DOUBLE)) {
+            type = "double";
+        } else if (match(TokenType::KW_BOOL)) {
+            type = "bool";
         } else {
             error("Expected type specifier");
         }
@@ -98,6 +105,12 @@ DeclarationPtr Parser::parseVariableDeclaration() {
         type = "int";
     } else if (match(TokenType::KW_FLOAT)) {
         type = "float";
+    } else if (match(TokenType::KW_CHAR)) {
+        type = "char";
+    } else if (match(TokenType::KW_DOUBLE)) {
+        type = "double";
+    } else if (match(TokenType::KW_BOOL)) {
+        type = "bool";
     } else {
         error("Expected type specifier");
     }
@@ -120,6 +133,12 @@ DeclarationPtr Parser::parseFunctionDeclaration() {
         returnType = "int";
     } else if (match(TokenType::KW_FLOAT)) {
         returnType = "float";
+    } else if (match(TokenType::KW_CHAR)) {
+        returnType = "char";
+    } else if (match(TokenType::KW_DOUBLE)) {
+        returnType = "double";
+    } else if (match(TokenType::KW_BOOL)) {
+        returnType = "bool";
     } else {
         error("Expected return type");
     }
@@ -138,13 +157,20 @@ DeclarationPtr Parser::parseFunctionDeclaration() {
 
 std::vector<std::pair<std::string, std::string>> Parser::parseParameters() {
     std::vector<std::pair<std::string, std::string>> params;
-    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT)) {
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
         do {
             std::string type;
             if (match(TokenType::KW_INT)) {
                 type = "int";
             } else if (match(TokenType::KW_FLOAT)) {
                 type = "float";
+            } else if (match(TokenType::KW_CHAR)) {
+                type = "char";
+            } else if (match(TokenType::KW_DOUBLE)) {
+                type = "double";
+            } else if (match(TokenType::KW_BOOL)) {
+                type = "bool";
             } else {
                 error("Expected parameter type");
             }
@@ -176,7 +202,8 @@ StatementPtr Parser::parseStatement() {
         return parseReturnStatement();
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
-    } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT)) {
+    } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+               check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
         return parseVariableDeclarationStatement();
     } else {
         return parseExpressionStatement();
@@ -213,6 +240,12 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
         type = "int";
     } else if (match(TokenType::KW_FLOAT)) {
         type = "float";
+    } else if (match(TokenType::KW_CHAR)) {
+        type = "char";
+    } else if (match(TokenType::KW_DOUBLE)) {
+        type = "double";
+    } else if (match(TokenType::KW_BOOL)) {
+        type = "bool";
     } else {
         error("Expected type specifier in variable declaration");
     }
@@ -305,8 +338,18 @@ ExpressionPtr Parser::parsePrimary() {
         float value = std::stof(tokens[current - 1].lexeme);
         return std::make_shared<Literal>(value);
     }
+    if (match(TokenType::LITERAL_CHAR)) {
+        char value = tokens[current - 1].lexeme[0];
+        return std::make_shared<Literal>(value);
+    }
     if (match(TokenType::IDENTIFIER)) {
         std::string name = tokens[current - 1].lexeme;
+        if (name == "true") {
+            return std::make_shared<Literal>(true);
+        }
+        if (name == "false") {
+            return std::make_shared<Literal>(false);
+        }
         if (match(TokenType::DELIM_LPAREN)) {
             std::vector<ExpressionPtr> args;
             if (!check(TokenType::DELIM_RPAREN)) {

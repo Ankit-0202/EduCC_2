@@ -11,6 +11,9 @@ enum class TokenType {
     // Keywords
     KW_INT,
     KW_FLOAT,
+    KW_CHAR,
+    KW_DOUBLE,
+    KW_BOOL,
     KW_RETURN,
     KW_IF,
     KW_ELSE,
@@ -38,6 +41,7 @@ enum class TokenType {
     // Literals
     LITERAL_INT,
     LITERAL_FLOAT,
+    LITERAL_CHAR,
     // Identifier
     IDENTIFIER,
     // End of File
@@ -66,6 +70,7 @@ private:
     void skipWhitespace();
     Token identifier();
     Token number();
+    Token character(); // New function for char literals.
     Token opOrDelim();
     bool isAtEnd() const;
 
