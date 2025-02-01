@@ -1,4 +1,3 @@
-// Parser.hpp
 #ifndef PARSER_HPP
 #define PARSER_HPP
 
@@ -6,6 +5,7 @@
 #include "Lexer.hpp"
 #include <vector>
 #include <memory>
+#include <stdexcept>
 
 class Parser {
 public:
@@ -22,12 +22,13 @@ private:
     Token peek() const;
     bool isAtEnd() const;
     void consume(TokenType type, const std::string& errorMessage);
+    void error(const std::string& message) const;
 
     DeclarationPtr parseDeclaration();
     DeclarationPtr parseVariableDeclaration();
     DeclarationPtr parseFunctionDeclaration();
     std::vector<std::pair<std::string, std::string>> parseParameters();
-    StatementPtr parseCompoundStatement();
+    std::shared_ptr<CompoundStatement> parseCompoundStatement();
     StatementPtr parseStatement();
     StatementPtr parseIfStatement();
     StatementPtr parseReturnStatement();
@@ -42,8 +43,6 @@ private:
     ExpressionPtr parseFactor();
     ExpressionPtr parseUnary();
     ExpressionPtr parsePrimary();
-
-    void error(const std::string& message) const;
 };
 
 #endif // PARSER_HPP

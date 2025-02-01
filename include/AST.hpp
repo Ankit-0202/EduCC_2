@@ -25,11 +25,11 @@ struct ASTNode {
 };
 
 // Expression Nodes
-struct Expression : ASTNode {
+struct Expression : public ASTNode {
     virtual ~Expression() = default;
 };
 
-struct BinaryExpression : Expression {
+struct BinaryExpression : public Expression {
     std::string op;
     ExpressionPtr left;
     ExpressionPtr right;
@@ -38,20 +38,28 @@ struct BinaryExpression : Expression {
         : op(oper), left(lhs), right(rhs) {}
 };
 
-struct Literal : Expression {
+struct UnaryExpression : public Expression {
+    std::string op;
+    ExpressionPtr operand;
+
+    UnaryExpression(const std::string& oper, ExpressionPtr opd)
+        : op(oper), operand(opd) {}
+};
+
+struct Literal : public Expression {
     std::variant<int, float> value;
 
     Literal(int val) : value(val) {}
     Literal(float val) : value(val) {}
 };
 
-struct Identifier : Expression {
+struct Identifier : public Expression {
     std::string name;
 
     Identifier(const std::string& n) : name(n) {}
 };
 
-struct Assignment : Expression {
+struct Assignment : public Expression {
     std::string lhs;
     ExpressionPtr rhs;
 
@@ -59,8 +67,7 @@ struct Assignment : Expression {
         : lhs(left), rhs(right) {}
 };
 
-// Function Call Expression
-struct FunctionCall : Expression {
+struct FunctionCall : public Expression {
     std::string functionName;
     std::vector<ExpressionPtr> arguments;
 
@@ -69,11 +76,11 @@ struct FunctionCall : Expression {
 };
 
 // Statement Nodes
-struct Statement : ASTNode {
+struct Statement : public ASTNode {
     virtual ~Statement() = default;
 };
 
-struct CompoundStatement : Statement {
+struct CompoundStatement : public Statement {
     std::vector<StatementPtr> statements;
 
     void addStatement(StatementPtr stmt) {
@@ -81,19 +88,19 @@ struct CompoundStatement : Statement {
     }
 };
 
-struct ExpressionStatement : Statement {
+struct ExpressionStatement : public Statement {
     ExpressionPtr expression;
 
     ExpressionStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
-struct ReturnStatement : Statement {
+struct ReturnStatement : public Statement {
     ExpressionPtr expression;
 
     ReturnStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
-struct IfStatement : Statement {
+struct IfStatement : public Statement {
     ExpressionPtr condition;
     StatementPtr thenBranch;
     std::optional<StatementPtr> elseBranch;
@@ -103,11 +110,11 @@ struct IfStatement : Statement {
 };
 
 // Declaration Nodes
-struct Declaration : ASTNode {
+struct Declaration : public ASTNode {
     virtual ~Declaration() = default;
 };
 
-struct VariableDeclaration : Declaration {
+struct VariableDeclaration : public Declaration {
     std::string type;
     std::string name;
     std::optional<ExpressionPtr> initializer;
@@ -116,7 +123,7 @@ struct VariableDeclaration : Declaration {
         : type(ty), name(nm), initializer(init) {}
 };
 
-struct FunctionDeclaration : Declaration {
+struct FunctionDeclaration : public Declaration {
     std::string returnType;
     std::string name;
     std::vector<std::pair<std::string, std::string>> parameters; // pair<type, name>
@@ -129,7 +136,7 @@ struct FunctionDeclaration : Declaration {
 };
 
 // Program Node
-struct Program : ASTNode {
+struct Program : public ASTNode {
     std::vector<DeclarationPtr> declarations;
 
     void addDeclaration(DeclarationPtr decl) {
@@ -137,8 +144,8 @@ struct Program : ASTNode {
     }
 };
 
-// **New AST Node for Local Variable Declarations**
-struct VariableDeclarationStatement : Statement {
+// New AST Node for local variable declarations (as statements)
+struct VariableDeclarationStatement : public Statement {
     std::string type;
     std::string name;
     std::optional<ExpressionPtr> initializer;
