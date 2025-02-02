@@ -1,6 +1,6 @@
 # Makefile for EduCC
 
-# Compiler and Flags
+# Compiler and flags
 CXX := clang++
 CXXFLAGS := -std=c++17 -Wall -Wextra -Iinclude -I/opt/homebrew/Cellar/llvm/19.1.7/include -I/opt/homebrew/opt/llvm/include -g
 
@@ -8,92 +8,86 @@ CXXFLAGS := -std=c++17 -Wall -Wextra -Iinclude -I/opt/homebrew/Cellar/llvm/19.1.
 SRC_DIR := src
 INC_DIR := include
 BUILD_DIR := build
+TEST_DIR := tests
 
 # Source and Object Files
 SRCS := $(wildcard $(SRC_DIR)/*.cpp)
-OBJS := $(SRCS:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
+OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Target Executable
 TARGET := C99Compiler
+TARGET_PATH := $(BUILD_DIR)/$(TARGET)
 
-# Extract test file from command-line arguments (for the run target)
+# Test settings
+TESTS := $(wildcard $(TEST_DIR)/*.c)
+LLFILE := output.ll
+OBJFILE := output.o
+OUR_EXE := our_executable
+NATIVE_CC := gcc
+GCC_EXE := gcc_executable
+
+# Allow a test file to be passed as a parameter to the run target:
 TEST_FILE := $(firstword $(filter-out run,$(MAKECMDGOALS)))
-# If a test file is provided on the command line, remove it from MAKECMDGOALS.
 ifneq ($(strip $(TEST_FILE)),)
   $(eval .DEFAULT_GOAL := run)
 endif
 
-# Default Target
-all: $(BUILD_DIR) $(TARGET)
+.PHONY: all clean test run
 
-# Create build directory if it doesn't exist
+# Default target: build the compiler
+all: $(TARGET_PATH)
+
+# Create build directory if needed
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Link Object Files to Create Executable
-$(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $(BUILD_DIR)/$(TARGET) $(OBJS) `llvm-config --cxxflags --ldflags --system-libs --libs all`
+# Link object files to create the compiler executable
+$(TARGET_PATH): $(BUILD_DIR) $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $(TARGET_PATH) $(OBJS) `llvm-config --cxxflags --ldflags --system-libs --libs all`
 
-# Compile Source Files to Object Files
+# Compile each source file into an object file
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Clean Build Artifacts
+# Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f $(TARGET) output.ll output.s output
+	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) our_output.txt gcc_output.txt
 
-# Copy source files to clipboard (if needed)
-copy:
-	@make clean
-	@find $(INC_DIR) $(SRC_DIR) tests -type f -exec cat {} + | pbcopy
-
-# Run the compiler on a specified test file.
-# Usage: make run [test_file]
-.PHONY: run
-run: all $(BUILD_DIR)/$(TARGET)
-	@echo "Copying binary from $(BUILD_DIR)/$(TARGET) to current directory..."
-	@cp $(BUILD_DIR)/$(TARGET) .
-	@if [ -z "$(TEST_FILE)" ]; then \
-		echo "No test file provided. Usage: make run <test_file>"; \
-		exit 1; \
-	fi
-	@echo "Running the compiler on $(TEST_FILE)..."
-	@./$(TARGET) $(TEST_FILE)
-	@echo "Compiling the generated LLVM IR to assembly..."
-	@llc output.ll -o output.s
-	@echo "Compiling the assembly to an executable..."
-	@clang output.s -o output
-	@echo "Running the produced executable..."
-	@./output
-
-# Test command: run all test cases in tests/*.c.
-# Each test file must have an expected output file with the same name plus a .expected suffix.
-.PHONY: test
-test: $(BUILD_DIR)/$(TARGET)
-	@echo "Running test cases..."
-	@for test in $(wildcard tests/*.c); do \
-		echo "Running test $$test..."; \
-		./$(BUILD_DIR)/$(TARGET) $$test; \
-		llc output.ll -o output.s; \
-		clang output.s -o output; \
-		./output > tmp.out; \
-		if diff -q tmp.out $$test.expected > /dev/null; then \
-			echo "$$test passed."; \
-		else \
-			echo "$$test failed:"; \
-			diff -u tmp.out $$test.expected; \
-			rm -f tmp.out; \
-			exit 1; \
-		fi; \
+# Test target: For every .c file in tests/, compile with both our compiler and gcc,
+# run the executables, and compare output and return codes.
+test: $(TARGET_PATH)
+	@for testfile in $(TESTS); do \
+	    echo "-----------------------------------------------------"; \
+	    echo "Testing $$testfile"; \
+	    $(TARGET_PATH) $$testfile > /dev/null 2>&1; \
+	    if [ ! -f $(LLFILE) ]; then \
+	        echo "Error: $(LLFILE) was not produced for $$testfile"; \
+	        exit 1; \
+	    fi; \
+	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
+	    clang $(OBJFILE) -o $(OUR_EXE); \
+	    ./$(OUR_EXE) > our_output.txt; \
+	    our_ret=$$?; \
+	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
+	    ./$(GCC_EXE) > gcc_output.txt; \
+	    gcc_ret=$$?; \
+	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret"; \
+	    if [ $$our_ret -ne $$gcc_ret ]; then \
+	        echo "Return code mismatch for $$testfile"; \
+	        exit 1; \
+	    fi; \
+	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
+	        echo "Output mismatch for $$testfile"; \
+	        exit 1; \
+	    else \
+	        echo "Test $$testfile passed."; \
+	    fi; \
 	done; \
-	rm -f tmp.out; \
-	echo "All tests passed."
+	echo "-----------------------------------------------------"; \
+	echo "All tests passed successfully."
 
-.PHONY: all clean run copy test
-
-# make all
-# ./build/C99Compiler tests/test2.c
-# llc output.ll -o output.s
-# clang output.s -o output
-# ./output
+# Run target: Run compiler on a single test file provided on the command line.
+run: $(TARGET_PATH)
+	@echo "Running $(TARGET_PATH) on $(TEST_FILE)..."
+	@$(TARGET_PATH) $(TEST_FILE)
