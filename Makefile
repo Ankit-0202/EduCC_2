@@ -70,7 +70,8 @@ test: $(TARGET_PATH) create_test_output_dir
 	    echo "Testing $$testfile" >> $$output_file; \
 	    $(TARGET_PATH) $$testfile > /dev/null 2>&1; \
 	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile" >> $$output_file; \
+	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
+	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
 	        continue; \
 	    fi; \
 	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
@@ -82,11 +83,13 @@ test: $(TARGET_PATH) create_test_output_dir
 	    gcc_ret=$$?; \
 	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "Return code mismatch for $$testfile" >> $$output_file; \
+	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
+	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
 	        continue; \
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
-	        echo "Output mismatch for $$testfile" >> $$output_file; \
+	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
+	        echo "[FAILED] $$testfile - Output mismatch" >&2; \
 	    else \
 	        echo "Test $$testfile passed." >> $$output_file; \
 	    fi; \
