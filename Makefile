@@ -2,7 +2,7 @@
 
 # Compiler and flags
 CXX := clang++
-CXXFLAGS := -std=c++17 -Wall -Wextra -Iinclude -I/opt/homebrew/Cellar/llvm/19.1.7/include -I/opt/homebrew/opt/llvm/include -g
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -Iinclude -I/opt/homebrew/Cellar/llvm/19.1.7/include -I/opt/homebrew/opt/llvm/include -g
 
 # Directories
 SRC_DIR := src
