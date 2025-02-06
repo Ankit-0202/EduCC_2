@@ -57,6 +57,7 @@ clean:
 # Test target: For every .c file in tests/, compile with both our compiler and gcc,
 # run the executables, and compare output and return codes.
 test: $(TARGET_PATH)
+	clear
 	@for testfile in $(TESTS); do \
 	    echo "-----------------------------------------------------"; \
 	    echo "Testing $$testfile"; \
