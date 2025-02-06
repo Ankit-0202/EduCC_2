@@ -32,7 +32,7 @@ ifneq ($(strip $(TEST_FILE)),)
   $(eval .DEFAULT_GOAL := run)
 endif
 
-.PHONY: all clean test run
+.PHONY: all copy clean test run
 
 # Default target: build the compiler
 all: $(TARGET_PATH)
@@ -91,3 +91,15 @@ test: $(TARGET_PATH)
 run: $(TARGET_PATH)
 	@echo "Running $(TARGET_PATH) on $(TEST_FILE)..."
 	@$(TARGET_PATH) $(TEST_FILE)
+
+# Copy source files to clipboard
+copy:
+	@make clean
+	@find $(INC_DIR) $(SRC_DIR) $(TEST_DIR) -type f -exec cat {} + | pbcopy
+
+
+# make all
+# ./build/C99Compiler tests/test2.c
+# llc output.ll -o output.s
+# clang output.s -o output
+# ./output
