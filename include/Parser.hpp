@@ -26,21 +26,24 @@ private:
 
     DeclarationPtr parseDeclaration();
     DeclarationPtr parseVariableDeclaration();
+
+    // Unify prototypes & definitions here.
     DeclarationPtr parseFunctionDeclaration();
+
     std::vector<std::pair<std::string, std::string>> parseParameters();
     std::shared_ptr<CompoundStatement> parseCompoundStatement();
     StatementPtr parseStatement();
     StatementPtr parseIfStatement();
-    StatementPtr parseWhileStatement();      // New: while statement
-    StatementPtr parseForStatement();        // New: for statement
+    StatementPtr parseWhileStatement();
+    StatementPtr parseForStatement();
     StatementPtr parseReturnStatement();
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();
 
     ExpressionPtr parseExpression();
     ExpressionPtr parseAssignment();
-    ExpressionPtr parseLogicalOr();          // New: logical OR level
-    ExpressionPtr parseLogicalAnd();         // New: logical AND level
+    ExpressionPtr parseLogicalOr();
+    ExpressionPtr parseLogicalAnd();
     ExpressionPtr parseEquality();
     ExpressionPtr parseComparison();
     ExpressionPtr parseTerm();

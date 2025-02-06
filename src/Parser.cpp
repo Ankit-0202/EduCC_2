@@ -1,3 +1,6 @@
+#ifndef PARSER_CPP
+#define PARSER_CPP
+
 #include "Parser.hpp"
 #include "AST.hpp"
 #include <stdexcept>
@@ -65,9 +68,12 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
+    // If the next token is a type, this could be a variable or function decl
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || 
+        check(TokenType::KW_BOOL)) {
         size_t save = current;
+        // We "peek ahead" to see if it's a function or variable:
         std::string type;
         if (match(TokenType::KW_INT)) {
             type = "int";
@@ -82,24 +88,30 @@ DeclarationPtr Parser::parseDeclaration() {
         } else {
             error("Expected type specifier");
         }
+
         if (check(TokenType::IDENTIFIER)) {
             Token identifier = advance();
+            // If next token is '(', likely a function
             if (check(TokenType::DELIM_LPAREN)) {
-                current = save;
+                // It's a function declaration. Rewind to that point and parse fully
+                current = save;  // revert 
                 return parseFunctionDeclaration();
             } else {
-                current = save;
+                // Not a function -> must be variable
+                current = save;  // revert 
                 return parseVariableDeclaration();
             }
         } else {
             error("Expected identifier after type");
         }
     }
+
     error("Expected declaration");
     return nullptr;
 }
 
 DeclarationPtr Parser::parseVariableDeclaration() {
+    // We expect <type> <identifier> [= ...] ;
     std::string type;
     if (match(TokenType::KW_INT)) {
         type = "int";
@@ -127,7 +139,9 @@ DeclarationPtr Parser::parseVariableDeclaration() {
     return std::make_shared<VariableDeclaration>(type, varName, initializer);
 }
 
+// CHANGED: Now can parse either a function definition or a prototype.
 DeclarationPtr Parser::parseFunctionDeclaration() {
+    // Parse return type
     std::string returnType;
     if (match(TokenType::KW_INT)) {
         returnType = "int";
@@ -142,14 +156,27 @@ DeclarationPtr Parser::parseFunctionDeclaration() {
     } else {
         error("Expected return type");
     }
+
+    // Parse function name
     if (!check(TokenType::IDENTIFIER)) {
         error("Expected function name");
     }
     Token funcNameToken = advance();
     std::string funcName = funcNameToken.lexeme;
+
+    // Parse parameter list
     consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
     std::vector<std::pair<std::string, std::string>> parameters = parseParameters();
     consume(TokenType::DELIM_RPAREN, "Expected ')' after parameters");
+
+    // **Check** if we have ';' -> function prototype
+    // or '{' -> full definition
+    if (match(TokenType::DELIM_SEMICOLON)) {
+        // It's just a prototype (no body)
+        return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters, nullptr);
+    }
+
+    // Otherwise, parse the function body
     consume(TokenType::DELIM_LBRACE, "Expected '{' before function body");
     StatementPtr body = parseCompoundStatement();
     return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters, body);
@@ -158,7 +185,8 @@ DeclarationPtr Parser::parseFunctionDeclaration() {
 std::vector<std::pair<std::string, std::string>> Parser::parseParameters() {
     std::vector<std::pair<std::string, std::string>> params;
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+        check(TokenType::KW_BOOL)) {
         do {
             std::string type;
             if (match(TokenType::KW_INT)) {
@@ -207,7 +235,8 @@ StatementPtr Parser::parseStatement() {
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
     } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-               check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
+               check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || 
+               check(TokenType::KW_BOOL)) {
         return parseVariableDeclarationStatement();
     } else {
         return parseExpressionStatement();
@@ -236,28 +265,27 @@ StatementPtr Parser::parseWhileStatement() {
 
 StatementPtr Parser::parseForStatement() {
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'for'");
-    // For initializer: either a variable declaration statement or an expression statement.
     StatementPtr initializer = nullptr;
+    // Could be a variable declaration or an expression statement
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || check(TokenType::KW_BOOL)) {
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+        check(TokenType::KW_BOOL)) {
         initializer = parseVariableDeclarationStatement();
     } else {
         initializer = parseExpressionStatement();
     }
-    // Condition expression: optional. If missing, assume true.
     ExpressionPtr condition = nullptr;
     if (!check(TokenType::DELIM_SEMICOLON)) {
         condition = parseExpression();
     } else {
         condition = std::make_shared<Literal>(true);
     }
-    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after for loop condition");
-    // Increment expression: optional.
+    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after for-loop condition");
     ExpressionPtr increment = nullptr;
     if (!check(TokenType::DELIM_RPAREN)) {
         increment = parseExpression();
     }
-    consume(TokenType::DELIM_RPAREN, "Expected ')' after for loop increment");
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after for-loop increment");
     StatementPtr body = parseStatement();
     return std::make_shared<ForStatement>(initializer, condition, increment, body);
 }
@@ -302,30 +330,7 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     return std::make_shared<VariableDeclarationStatement>(type, varName, initializer);
 }
 
-// New: Parse logical AND (&&) operators.
-ExpressionPtr Parser::parseLogicalAnd() {
-    ExpressionPtr expr = parseEquality();
-    while (match(TokenType::OP_LOGICAL_AND)) {
-        Token oper = tokens[current - 1];
-        std::string op = oper.lexeme;
-        ExpressionPtr right = parseEquality();
-        expr = std::make_shared<BinaryExpression>(op, expr, right);
-    }
-    return expr;
-}
-
-// New: Parse logical OR (||) operators.
-ExpressionPtr Parser::parseLogicalOr() {
-    ExpressionPtr expr = parseLogicalAnd();
-    while (match(TokenType::OP_LOGICAL_OR)) {
-        Token oper = tokens[current - 1];
-        std::string op = oper.lexeme;
-        ExpressionPtr right = parseLogicalAnd();
-        expr = std::make_shared<BinaryExpression>(op, expr, right);
-    }
-    return expr;
-}
-
+// Expression parsing below
 ExpressionPtr Parser::parseExpression() {
     return parseAssignment();
 }
@@ -340,6 +345,28 @@ ExpressionPtr Parser::parseAssignment() {
         } else {
             error("Invalid assignment target");
         }
+    }
+    return expr;
+}
+
+ExpressionPtr Parser::parseLogicalOr() {
+    ExpressionPtr expr = parseLogicalAnd();
+    while (match(TokenType::OP_LOGICAL_OR)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseLogicalAnd();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
+ExpressionPtr Parser::parseLogicalAnd() {
+    ExpressionPtr expr = parseEquality();
+    while (match(TokenType::OP_LOGICAL_AND)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseEquality();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
     }
     return expr;
 }
@@ -408,12 +435,14 @@ ExpressionPtr Parser::parsePrimary() {
     }
     if (match(TokenType::IDENTIFIER)) {
         std::string name = tokens[current - 1].lexeme;
+        // handle "true"/"false" as bools
         if (name == "true") {
             return std::make_shared<Literal>(true);
         }
         if (name == "false") {
             return std::make_shared<Literal>(false);
         }
+        // function call check
         if (match(TokenType::DELIM_LPAREN)) {
             std::vector<ExpressionPtr> args;
             if (!check(TokenType::DELIM_RPAREN)) {
@@ -424,6 +453,7 @@ ExpressionPtr Parser::parsePrimary() {
             consume(TokenType::DELIM_RPAREN, "Expected ')' after function arguments");
             return std::make_shared<FunctionCall>(name, args);
         } else {
+            // just an identifier
             return std::make_shared<Identifier>(name);
         }
     }
@@ -433,5 +463,7 @@ ExpressionPtr Parser::parsePrimary() {
         return expr;
     }
     error("Expected expression");
-    return nullptr;
+    return nullptr; // Unreachable
 }
+
+#endif // PARSER_CPP

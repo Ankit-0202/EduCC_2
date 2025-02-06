@@ -25,12 +25,14 @@ bool SymbolTable::declare(const Symbol& symbol) {
         throw std::runtime_error("SymbolTable Error: No active scope to declare symbol.");
     }
     auto& currentScope = scopes.back();
+
+    // Attempt to insert symbol
     auto result = currentScope.emplace(symbol.name, symbol);
-    return result.second; // true if inserted, false if already exists.
+    return result.second; // true if inserted, false if already exists in this scope
 }
 
-// Lookup a symbol starting from the innermost scope.
 std::optional<Symbol> SymbolTable::lookup(const std::string& name) const {
+    // Search from innermost scope outward
     for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
         const auto& scope = *it;
         auto found = scope.find(name);

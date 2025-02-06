@@ -99,11 +99,11 @@ struct IfStatement : public Statement {
     ExpressionPtr condition;
     StatementPtr thenBranch;
     std::optional<StatementPtr> elseBranch;
-    IfStatement(ExpressionPtr cond, StatementPtr thenStmt, std::optional<StatementPtr> elseStmt = std::nullopt)
+    IfStatement(ExpressionPtr cond, StatementPtr thenStmt,
+                std::optional<StatementPtr> elseStmt = std::nullopt)
         : condition(cond), thenBranch(thenStmt), elseBranch(elseStmt) {}
 };
 
-// New: While statement
 struct WhileStatement : public Statement {
     ExpressionPtr condition;
     StatementPtr body;
@@ -111,15 +111,13 @@ struct WhileStatement : public Statement {
         : condition(cond), body(body) {}
 };
 
-// New: For statement
 struct ForStatement : public Statement {
-    // The initializer is a statement (either a variable declaration or an expression statement),
-    // condition and increment are expressions (if omitted, condition is treated as true).
     StatementPtr initializer;
     ExpressionPtr condition;
     ExpressionPtr increment;
     StatementPtr body;
-    ForStatement(StatementPtr init, ExpressionPtr cond, ExpressionPtr incr, StatementPtr body)
+    ForStatement(StatementPtr init, ExpressionPtr cond,
+                 ExpressionPtr incr, StatementPtr body)
         : initializer(init), condition(cond), increment(incr), body(body) {}
 };
 
@@ -132,16 +130,20 @@ struct VariableDeclaration : public Declaration {
     std::string type;
     std::string name;
     std::optional<ExpressionPtr> initializer;
-    VariableDeclaration(const std::string& ty, const std::string& nm, std::optional<ExpressionPtr> init = std::nullopt)
+    VariableDeclaration(const std::string& ty, const std::string& nm,
+                        std::optional<ExpressionPtr> init = std::nullopt)
         : type(ty), name(nm), initializer(init) {}
 };
 
+// CHANGED: Now `body` can be `nullptr` to represent a prototype.
 struct FunctionDeclaration : public Declaration {
     std::string returnType;
     std::string name;
-    std::vector<std::pair<std::string, std::string>> parameters; // pair<type, name>
-    StatementPtr body;
-    FunctionDeclaration(const std::string& retType, const std::string& nm,
+    std::vector<std::pair<std::string, std::string>> parameters;
+    StatementPtr body;  // If this is nullptr, it's just a prototype.
+
+    FunctionDeclaration(const std::string& retType,
+                        const std::string& nm,
                         const std::vector<std::pair<std::string, std::string>>& params,
                         StatementPtr stmt)
         : returnType(retType), name(nm), parameters(params), body(stmt) {}
@@ -155,12 +157,12 @@ struct Program : public ASTNode {
     }
 };
 
-// New AST Node for local variable declarations (as statements)
 struct VariableDeclarationStatement : public Statement {
     std::string type;
     std::string name;
     std::optional<ExpressionPtr> initializer;
-    VariableDeclarationStatement(const std::string& ty, const std::string& nm, std::optional<ExpressionPtr> init = std::nullopt)
+    VariableDeclarationStatement(const std::string& ty, const std::string& nm,
+                                 std::optional<ExpressionPtr> init = std::nullopt)
         : type(ty), name(nm), initializer(init) {}
 };
 
