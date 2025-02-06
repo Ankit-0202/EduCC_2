@@ -4,6 +4,10 @@ C99Compiler
 output
 output.ll
 output.s
+our_output.txt
+gcc_executable
+gcc_output.txt
+our_executable
 
 # Compiled object files
 *.o
@@ -24,4 +28,3 @@ output.s
 *~
 *.swp
 *.bak
-our_output.txt
