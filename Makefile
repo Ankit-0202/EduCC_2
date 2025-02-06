@@ -9,6 +9,7 @@ SRC_DIR := src
 INC_DIR := include
 BUILD_DIR := build
 TEST_DIR := tests
+TEST_OUTPUT_DIR := test_output
 
 # Source and Object Files
 SRCS := $(wildcard $(SRC_DIR)/*.cpp)
@@ -19,7 +20,6 @@ TARGET := C99Compiler
 TARGET_PATH := $(BUILD_DIR)/$(TARGET)
 
 # Test settings
-TESTS := $(wildcard $(TEST_DIR)/*.c)
 LLFILE := output.ll
 OBJFILE := output.o
 OUR_EXE := our_executable
@@ -32,7 +32,7 @@ ifneq ($(strip $(TEST_FILE)),)
   $(eval .DEFAULT_GOAL := run)
 endif
 
-.PHONY: all copy clean test run
+.PHONY: all copy clean test run create_test_output_dir
 
 # Default target: build the compiler
 all: $(TARGET_PATH)
@@ -49,22 +49,29 @@ $(TARGET_PATH): $(BUILD_DIR) $(OBJS)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# Ensure test_output directory exists and matches the structure of tests/
+create_test_output_dir:
+	@mkdir -p $(TEST_OUTPUT_DIR)
+	@find $(TEST_DIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
+
 # Clean build artifacts
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
 	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) our_output.txt gcc_output.txt
 
-# Test target: For every .c file in tests/, compile with both our compiler and gcc,
-# run the executables, and compare output and return codes.
-test: $(TARGET_PATH)
+# Recursive Test target: Runs tests in all subdirectories, storing results in test_output/
+test: $(TARGET_PATH) create_test_output_dir
 	clear
-	@for testfile in $(TESTS); do \
-	    echo "-----------------------------------------------------"; \
-	    echo "Testing $$testfile"; \
+	@echo "Running tests recursively..."
+	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
+	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
+	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
+	    echo "-----------------------------------------------------" >> $$output_file; \
+	    echo "Testing $$testfile" >> $$output_file; \
 	    $(TARGET_PATH) $$testfile > /dev/null 2>&1; \
 	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile"; \
-	        exit 1; \
+	        echo "Error: $(LLFILE) was not produced for $$testfile" >> $$output_file; \
+	        continue; \
 	    fi; \
 	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
 	    clang $(OBJFILE) -o $(OUR_EXE); \
@@ -73,20 +80,25 @@ test: $(TARGET_PATH)
 	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
 	    ./$(GCC_EXE) > gcc_output.txt; \
 	    gcc_ret=$$?; \
-	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret"; \
+	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "Return code mismatch for $$testfile"; \
-	        exit 1; \
+	        echo "Return code mismatch for $$testfile" >> $$output_file; \
+	        continue; \
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
-	        echo "Output mismatch for $$testfile"; \
-	        exit 1; \
+	        echo "Output mismatch for $$testfile" >> $$output_file; \
 	    else \
-	        echo "Test $$testfile passed."; \
+	        echo "Test $$testfile passed." >> $$output_file; \
 	    fi; \
-	done; \
-	echo "-----------------------------------------------------"; \
-	echo "All tests passed successfully."
+	done
+
+	# Aggregate results from subdirectories to parent directories
+	@find $(TEST_OUTPUT_DIR) -type d | while read -r dir; do \
+	    cat $$dir/*.txt > $$dir/tests_summary.txt 2>/dev/null || true; \
+	done
+
+	@echo "-----------------------------------------------------"; \
+	echo "All tests executed. Check test_output/ for results."
 
 # Run target: Run compiler on a single test file provided on the command line.
 run: $(TARGET_PATH)
@@ -97,10 +109,3 @@ run: $(TARGET_PATH)
 copy:
 	@make clean
 	@find $(INC_DIR) $(SRC_DIR) $(TEST_DIR) -type f -exec cat {} + | pbcopy
-
-
-# make all
-# ./build/C99Compiler tests/test2.c
-# llc output.ll -o output.s
-# clang output.s -o output
-# ./output

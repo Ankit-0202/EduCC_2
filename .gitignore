@@ -28,3 +28,7 @@ our_executable
 *~
 *.swp
 *.bak
+
+# Test output directory and logs
+/test_output/
+test_output/
