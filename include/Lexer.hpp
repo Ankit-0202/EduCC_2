@@ -25,6 +25,10 @@ enum class TokenType {
     OP_MULTIPLY,
     OP_DIVIDE,
     OP_ASSIGN,
+    OP_PLUS_ASSIGN,      // +=
+    OP_MINUS_ASSIGN,     // -=
+    OP_MULTIPLY_ASSIGN,  // *=
+    OP_DIVIDE_ASSIGN,    // /=
     OP_EQUAL,
     OP_NOT_EQUAL,
     OP_LESS,

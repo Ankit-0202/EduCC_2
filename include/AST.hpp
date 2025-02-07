@@ -44,6 +44,14 @@ struct UnaryExpression : public Expression {
         : op(oper), operand(opd) {}
 };
 
+// NEW: PostfixExpression to represent expressions like i++ or i--
+struct PostfixExpression : public Expression {
+    ExpressionPtr operand;
+    std::string op; // "++" or "--"
+    PostfixExpression(ExpressionPtr operand, const std::string& op)
+        : operand(operand), op(op) {}
+};
+
 // Literal: The variant order is: char, bool, int, float, double.
 struct Literal : public Expression {
     std::variant<char, bool, int, float, double> value;
@@ -135,7 +143,14 @@ struct VariableDeclaration : public Declaration {
         : type(ty), name(nm), initializer(init) {}
 };
 
-// CHANGED: Now `body` can be `nullptr` to represent a prototype.
+// NEW: Multiple variable declaration at top–level
+struct MultiVariableDeclaration : public Declaration {
+    std::vector<std::shared_ptr<VariableDeclaration>> declarations;
+    MultiVariableDeclaration(const std::vector<std::shared_ptr<VariableDeclaration>>& decls)
+        : declarations(decls) {}
+};
+
+// CHANGED: FunctionDeclaration – body can be nullptr to represent a prototype.
 struct FunctionDeclaration : public Declaration {
     std::string returnType;
     std::string name;
@@ -164,6 +179,13 @@ struct VariableDeclarationStatement : public Statement {
     VariableDeclarationStatement(const std::string& ty, const std::string& nm,
                                  std::optional<ExpressionPtr> init = std::nullopt)
         : type(ty), name(nm), initializer(init) {}
+};
+
+// NEW: Multiple variable declaration statement (e.g., int a = 1, b = 2;)
+struct MultiVariableDeclarationStatement : public Statement {
+    std::vector<std::shared_ptr<VariableDeclarationStatement>> declarations;
+    MultiVariableDeclarationStatement(const std::vector<std::shared_ptr<VariableDeclarationStatement>>& decls)
+        : declarations(decls) {}
 };
 
 #endif // AST_HPP

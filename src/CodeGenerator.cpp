@@ -245,6 +245,12 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         generateVariableDeclarationStatement(varDeclStmt);
         return false;
     }
+    else if (auto multiVarDeclStmt = std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(stmt)) {
+        for (auto& singleDeclStmt : multiVarDeclStmt->declarations) {
+            generateVariableDeclarationStatement(singleDeclStmt);
+        }
+        return false;
+    }
     else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
         Value* retVal = generateExpression(retStmt->expression);
         builder.CreateRet(retVal);
@@ -494,6 +500,49 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         } else {
             throw runtime_error("CodeGenerator Error: '" + id->name + "' is not an alloca instruction.");
         }
+    }
+    else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
+        // Handle postfix operators (e.g., i++ or i--)
+        auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
+        if (!id) {
+            throw runtime_error("CodeGenerator Error: Postfix operator applied to non-identifier.");
+        }
+        auto it = localVariables.find(id->name);
+        if (it == localVariables.end()) {
+            throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "' in postfix expression.");
+        }
+        Value* varPtr = it->second;
+        AllocaInst* allocaInst = dyn_cast<AllocaInst>(varPtr);
+        if (!allocaInst) {
+            throw runtime_error("CodeGenerator Error: Postfix operator applied to non-alloca variable.");
+        }
+        // Load current value using the allocated type.
+        Value* oldVal = builder.CreateLoad(allocaInst->getAllocatedType(), varPtr, id->name.c_str());
+        // Create constant 1 of appropriate type
+        Value* one = nullptr;
+        if (oldVal->getType()->isIntegerTy()) {
+            one = ConstantInt::get(oldVal->getType(), 1);
+        } else if (oldVal->getType()->isFloatingPointTy()) {
+            one = ConstantFP::get(oldVal->getType(), 1.0);
+        } else {
+            throw runtime_error("CodeGenerator Error: Unsupported type for postfix operator.");
+        }
+        Value* newVal = nullptr;
+        if (post->op == "++") {
+            if (oldVal->getType()->isFloatingPointTy())
+                newVal = builder.CreateFAdd(oldVal, one, "postinc");
+            else
+                newVal = builder.CreateAdd(oldVal, one, "postinc");
+        } else if (post->op == "--") {
+            if (oldVal->getType()->isFloatingPointTy())
+                newVal = builder.CreateFSub(oldVal, one, "postdec");
+            else
+                newVal = builder.CreateSub(oldVal, one, "postdec");
+        } else {
+            throw runtime_error("CodeGenerator Error: Unknown postfix operator '" + post->op + "'.");
+        }
+        builder.CreateStore(newVal, varPtr);
+        return oldVal;
     }
     else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
         // Evaluate RHS

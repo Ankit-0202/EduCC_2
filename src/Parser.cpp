@@ -68,12 +68,10 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-    // If the next token is a type, this could be a variable or function decl
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
         check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || 
         check(TokenType::KW_BOOL)) {
         size_t save = current;
-        // We "peek ahead" to see if it's a function or variable:
         std::string type;
         if (match(TokenType::KW_INT)) {
             type = "int";
@@ -88,30 +86,24 @@ DeclarationPtr Parser::parseDeclaration() {
         } else {
             error("Expected type specifier");
         }
-
         if (check(TokenType::IDENTIFIER)) {
             Token identifier = advance();
-            // If next token is '(', likely a function
             if (check(TokenType::DELIM_LPAREN)) {
-                // It's a function declaration. Rewind to that point and parse fully
-                current = save;  // revert 
+                current = save;
                 return parseFunctionDeclaration();
             } else {
-                // Not a function -> must be variable
-                current = save;  // revert 
+                current = save;
                 return parseVariableDeclaration();
             }
         } else {
             error("Expected identifier after type");
         }
     }
-
     error("Expected declaration");
     return nullptr;
 }
 
 DeclarationPtr Parser::parseVariableDeclaration() {
-    // We expect <type> <identifier> [= ...] ;
     std::string type;
     if (match(TokenType::KW_INT)) {
         type = "int";
@@ -126,22 +118,27 @@ DeclarationPtr Parser::parseVariableDeclaration() {
     } else {
         error("Expected type specifier");
     }
-    if (!check(TokenType::IDENTIFIER)) {
-        error("Expected variable name");
-    }
-    Token varNameToken = advance();
-    std::string varName = varNameToken.lexeme;
-    std::optional<ExpressionPtr> initializer = std::nullopt;
-    if (match(TokenType::OP_ASSIGN)) {
-        initializer = parseExpression();
-    }
+    std::vector<std::shared_ptr<VariableDeclaration>> decls;
+    do {
+        if (!check(TokenType::IDENTIFIER)) {
+            error("Expected identifier after type");
+        }
+        Token varNameToken = advance();
+        std::string varName = varNameToken.lexeme;
+        std::optional<ExpressionPtr> initializer = std::nullopt;
+        if (match(TokenType::OP_ASSIGN)) {
+            initializer = parseExpression();
+        }
+        decls.push_back(std::make_shared<VariableDeclaration>(type, varName, initializer));
+    } while (match(TokenType::DELIM_COMMA));
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after variable declaration");
-    return std::make_shared<VariableDeclaration>(type, varName, initializer);
+    if (decls.size() == 1)
+        return decls[0];
+    else
+        return std::make_shared<MultiVariableDeclaration>(decls);
 }
 
-// CHANGED: Now can parse either a function definition or a prototype.
 DeclarationPtr Parser::parseFunctionDeclaration() {
-    // Parse return type
     std::string returnType;
     if (match(TokenType::KW_INT)) {
         returnType = "int";
@@ -156,27 +153,17 @@ DeclarationPtr Parser::parseFunctionDeclaration() {
     } else {
         error("Expected return type");
     }
-
-    // Parse function name
     if (!check(TokenType::IDENTIFIER)) {
         error("Expected function name");
     }
     Token funcNameToken = advance();
     std::string funcName = funcNameToken.lexeme;
-
-    // Parse parameter list
     consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
     std::vector<std::pair<std::string, std::string>> parameters = parseParameters();
     consume(TokenType::DELIM_RPAREN, "Expected ')' after parameters");
-
-    // **Check** if we have ';' -> function prototype
-    // or '{' -> full definition
     if (match(TokenType::DELIM_SEMICOLON)) {
-        // It's just a prototype (no body)
         return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters, nullptr);
     }
-
-    // Otherwise, parse the function body
     consume(TokenType::DELIM_LBRACE, "Expected '{' before function body");
     StatementPtr body = parseCompoundStatement();
     return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters, body);
@@ -235,7 +222,7 @@ StatementPtr Parser::parseStatement() {
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
     } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-               check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || 
+               check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
                check(TokenType::KW_BOOL)) {
         return parseVariableDeclarationStatement();
     } else {
@@ -266,7 +253,6 @@ StatementPtr Parser::parseWhileStatement() {
 StatementPtr Parser::parseForStatement() {
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'for'");
     StatementPtr initializer = nullptr;
-    // Could be a variable declaration or an expression statement
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
         check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
         check(TokenType::KW_BOOL)) {
@@ -317,34 +303,59 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     } else {
         error("Expected type specifier in variable declaration");
     }
-    if (!check(TokenType::IDENTIFIER)) {
-        error("Expected variable name in variable declaration");
-    }
-    Token varNameToken = advance();
-    std::string varName = varNameToken.lexeme;
-    std::optional<ExpressionPtr> initializer = std::nullopt;
-    if (match(TokenType::OP_ASSIGN)) {
-        initializer = parseExpression();
-    }
+    std::vector<std::shared_ptr<VariableDeclarationStatement>> decls;
+    do {
+        if (!check(TokenType::IDENTIFIER)) {
+            error("Expected variable name in variable declaration");
+        }
+        Token varNameToken = advance();
+        std::string varName = varNameToken.lexeme;
+        std::optional<ExpressionPtr> initializer = std::nullopt;
+        if (match(TokenType::OP_ASSIGN)) {
+            initializer = parseExpression();
+        }
+        decls.push_back(std::make_shared<VariableDeclarationStatement>(type, varName, initializer));
+    } while (match(TokenType::DELIM_COMMA));
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after variable declaration");
-    return std::make_shared<VariableDeclarationStatement>(type, varName, initializer);
+    if (decls.size() == 1)
+        return decls[0];
+    else
+        return std::make_shared<MultiVariableDeclarationStatement>(decls);
 }
 
-// Expression parsing below
+// Expression parsing
+
 ExpressionPtr Parser::parseExpression() {
     return parseAssignment();
 }
 
 ExpressionPtr Parser::parseAssignment() {
     ExpressionPtr expr = parseLogicalOr();
-    if (match(TokenType::OP_ASSIGN)) {
-        if (auto identifier = std::dynamic_pointer_cast<Identifier>(expr)) {
-            std::string varName = identifier->name;
-            ExpressionPtr value = parseAssignment();
-            return std::make_shared<Assignment>(varName, value);
-        } else {
-            error("Invalid assignment target");
-        }
+    // Check for compound assignment tokens.
+    if (!isAtEnd() &&
+        (peek().type == TokenType::OP_PLUS_ASSIGN ||
+         peek().type == TokenType::OP_MINUS_ASSIGN ||
+         peek().type == TokenType::OP_MULTIPLY_ASSIGN ||
+         peek().type == TokenType::OP_DIVIDE_ASSIGN)) {
+         Token opToken = advance(); // Consume the compound assignment token.
+         auto identifier = std::dynamic_pointer_cast<Identifier>(expr);
+         if (!identifier) {
+             error("Invalid compound assignment target");
+         }
+         ExpressionPtr rhs = parseAssignment();
+         // For compound assignment, rewrite "E op= F" as "E = E op F".
+         std::string op = opToken.lexeme.substr(0, 1); // extract the operator character.
+         ExpressionPtr binaryExpr = std::make_shared<BinaryExpression>(op, expr, rhs);
+         return std::make_shared<Assignment>(identifier->name, binaryExpr);
+    }
+    // Check for simple assignment.
+    else if (match(TokenType::OP_ASSIGN)) {
+         auto identifier = std::dynamic_pointer_cast<Identifier>(expr);
+         if (!identifier) {
+             error("Invalid assignment target");
+         }
+         ExpressionPtr value = parseAssignment();
+         return std::make_shared<Assignment>(identifier->name, value);
     }
     return expr;
 }
@@ -417,7 +428,30 @@ ExpressionPtr Parser::parseFactor() {
 }
 
 ExpressionPtr Parser::parseUnary() {
-    return parsePrimary();
+    return parsePostfix();
+}
+
+// NEW: parsePostfix() handles primary expressions and any following postfix "++" or "--"
+ExpressionPtr Parser::parsePostfix() {
+    ExpressionPtr expr = parsePrimary();
+    while (!isAtEnd()) {
+        if (current + 1 < tokens.size() &&
+            tokens[current].type == TokenType::OP_PLUS &&
+            tokens[current + 1].type == TokenType::OP_PLUS) {
+            advance(); // consume first OP_PLUS
+            advance(); // consume second OP_PLUS
+            expr = std::make_shared<PostfixExpression>(expr, "++");
+        } else if (current + 1 < tokens.size() &&
+                   tokens[current].type == TokenType::OP_MINUS &&
+                   tokens[current + 1].type == TokenType::OP_MINUS) {
+            advance(); // consume first OP_MINUS
+            advance(); // consume second OP_MINUS
+            expr = std::make_shared<PostfixExpression>(expr, "--");
+        } else {
+            break;
+        }
+    }
+    return expr;
 }
 
 ExpressionPtr Parser::parsePrimary() {
@@ -435,14 +469,12 @@ ExpressionPtr Parser::parsePrimary() {
     }
     if (match(TokenType::IDENTIFIER)) {
         std::string name = tokens[current - 1].lexeme;
-        // handle "true"/"false" as bools
         if (name == "true") {
             return std::make_shared<Literal>(true);
         }
         if (name == "false") {
             return std::make_shared<Literal>(false);
         }
-        // function call check
         if (match(TokenType::DELIM_LPAREN)) {
             std::vector<ExpressionPtr> args;
             if (!check(TokenType::DELIM_RPAREN)) {
@@ -453,7 +485,6 @@ ExpressionPtr Parser::parsePrimary() {
             consume(TokenType::DELIM_RPAREN, "Expected ')' after function arguments");
             return std::make_shared<FunctionCall>(name, args);
         } else {
-            // just an identifier
             return std::make_shared<Identifier>(name);
         }
     }

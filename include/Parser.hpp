@@ -5,7 +5,7 @@
 #include "Lexer.hpp"
 #include <vector>
 #include <memory>
-#include <stdexcept>
+#include <string>
 
 class Parser {
 public:
@@ -26,11 +26,10 @@ private:
 
     DeclarationPtr parseDeclaration();
     DeclarationPtr parseVariableDeclaration();
-
-    // Unify prototypes & definitions here.
     DeclarationPtr parseFunctionDeclaration();
-
     std::vector<std::pair<std::string, std::string>> parseParameters();
+
+    // Updated return type: now returns a shared pointer to CompoundStatement
     std::shared_ptr<CompoundStatement> parseCompoundStatement();
     StatementPtr parseStatement();
     StatementPtr parseIfStatement();
@@ -49,6 +48,8 @@ private:
     ExpressionPtr parseTerm();
     ExpressionPtr parseFactor();
     ExpressionPtr parseUnary();
+    // Declaration for parsePostfix() to handle postfix operators (e.g., i++ or i--)
+    ExpressionPtr parsePostfix();
     ExpressionPtr parsePrimary();
 };
 

@@ -1,28 +1,25 @@
 #include "Lexer.hpp"
+#include <stdexcept>
+#include <sstream>
 #include <algorithm>
-#include <string>
 
-// List of keywords (including "true" and "false" for booleans)
-const std::vector<std::string> keywords = {
+// List of keywords
+static const std::vector<std::string> keywords = {
     "int", "float", "char", "double", "bool", "return", "if", "else", "while", "for", "true", "false"
 };
 
-// Constructor
 Lexer::Lexer(const std::string& source)
     : sourceCode(source), currentPos(0), line(1), column(1) {}
 
-// Check if end of source is reached
 bool Lexer::isAtEnd() const {
     return currentPos >= sourceCode.length();
 }
 
-// Peek the current character without consuming it
 char Lexer::peek() const {
     if (isAtEnd()) return '\0';
     return sourceCode[currentPos];
 }
 
-// Consume and return the current character
 char Lexer::get() {
     if (isAtEnd()) return '\0';
     char c = sourceCode[currentPos++];
@@ -35,7 +32,6 @@ char Lexer::get() {
     return c;
 }
 
-// Skip whitespace characters
 void Lexer::skipWhitespace() {
     while (!isAtEnd()) {
         char c = peek();
@@ -54,16 +50,14 @@ void Lexer::skipWhitespace() {
     }
 }
 
-// Tokenize identifiers and keywords
 Token Lexer::identifier() {
     int startLine = line;
     int startColumn = column;
     std::string lexeme;
-    while (std::isalnum(peek()) || peek() == '_') {
-        lexeme += get();
+    while (!isAtEnd() && (std::isalnum(peek()) || peek() == '_')) {
+        lexeme.push_back(get());
     }
     Token token;
-    // Check if the lexeme is a keyword
     if (std::find(keywords.begin(), keywords.end(), lexeme) != keywords.end()) {
         if (lexeme == "int") token.type = TokenType::KW_INT;
         else if (lexeme == "float") token.type = TokenType::KW_FLOAT;
@@ -75,7 +69,7 @@ Token Lexer::identifier() {
         else if (lexeme == "else") token.type = TokenType::KW_ELSE;
         else if (lexeme == "while") token.type = TokenType::KW_WHILE;
         else if (lexeme == "for") token.type = TokenType::KW_FOR;
-        else token.type = TokenType::IDENTIFIER; // "true" and "false" will be handled in the parser.
+        else token.type = TokenType::IDENTIFIER; // For "true" and "false"
     } else {
         token.type = TokenType::IDENTIFIER;
     }
@@ -85,20 +79,19 @@ Token Lexer::identifier() {
     return token;
 }
 
-// Tokenize numbers (integers and floats)
 Token Lexer::number() {
     int startLine = line;
     int startColumn = column;
     std::string lexeme;
     bool isFloat = false;
-    while (std::isdigit(peek())) {
-        lexeme += get();
+    while (!isAtEnd() && std::isdigit(peek())) {
+        lexeme.push_back(get());
     }
-    if (peek() == '.') {
+    if (!isAtEnd() && peek() == '.') {
         isFloat = true;
-        lexeme += get();
-        while (std::isdigit(peek())) {
-            lexeme += get();
+        lexeme.push_back(get());
+        while (!isAtEnd() && std::isdigit(peek())) {
+            lexeme.push_back(get());
         }
     }
     Token token;
@@ -109,7 +102,6 @@ Token Lexer::number() {
     return token;
 }
 
-// Tokenize character literals
 Token Lexer::character() {
     int startLine = line;
     int startColumn = column;
@@ -117,7 +109,6 @@ Token Lexer::character() {
     char openingQuote = get(); // should be '
     if (openingQuote != '\'')
         throw std::runtime_error("Lexer Error: Expected opening single quote for char literal");
-    // For simplicity, assume a single character literal (no escape sequences)
     char ch = get();
     lexeme.push_back(ch);
     if (peek() != '\'')
@@ -131,7 +122,6 @@ Token Lexer::character() {
     return token;
 }
 
-// Tokenize operators and delimiters
 Token Lexer::opOrDelim() {
     int startLine = line;
     int startColumn = column;
@@ -139,73 +129,125 @@ Token Lexer::opOrDelim() {
     std::string lexeme(1, c);
     Token token;
     switch (c) {
-        // Single-character tokens
-        case '+': token.type = TokenType::OP_PLUS; break;
-        case '-': token.type = TokenType::OP_MINUS; break;
-        case '*': token.type = TokenType::OP_MULTIPLY; break;
-        case '/': token.type = TokenType::OP_DIVIDE; break;
-        case ';': token.type = TokenType::DELIM_SEMICOLON; break;
-        case ',': token.type = TokenType::DELIM_COMMA; break;
-        case '(': token.type = TokenType::DELIM_LPAREN; break;
-        case ')': token.type = TokenType::DELIM_RPAREN; break;
-        case '{': token.type = TokenType::DELIM_LBRACE; break;
-        case '}': token.type = TokenType::DELIM_RBRACE; break;
-        case '=':
-            if (peek() == '=') {
+        case '+': {
+            if (!isAtEnd() && peek() == '=') {
                 get();
-                lexeme += '=';
+                lexeme = "+=";
+                token.type = TokenType::OP_PLUS_ASSIGN;
+            } else {
+                token.type = TokenType::OP_PLUS;
+            }
+            break;
+        }
+        case '-': {
+            if (!isAtEnd() && peek() == '=') {
+                get();
+                lexeme = "-=";
+                token.type = TokenType::OP_MINUS_ASSIGN;
+            } else {
+                token.type = TokenType::OP_MINUS;
+            }
+            break;
+        }
+        case '*': {
+            if (!isAtEnd() && peek() == '=') {
+                get();
+                lexeme = "*=";
+                token.type = TokenType::OP_MULTIPLY_ASSIGN;
+            } else {
+                token.type = TokenType::OP_MULTIPLY;
+            }
+            break;
+        }
+        case '/': {
+            if (!isAtEnd() && peek() == '=') {
+                get();
+                lexeme = "/=";
+                token.type = TokenType::OP_DIVIDE_ASSIGN;
+            } else {
+                token.type = TokenType::OP_DIVIDE;
+            }
+            break;
+        }
+        case ';':
+            token.type = TokenType::DELIM_SEMICOLON;
+            break;
+        case ',':
+            token.type = TokenType::DELIM_COMMA;
+            break;
+        case '(':
+            token.type = TokenType::DELIM_LPAREN;
+            break;
+        case ')':
+            token.type = TokenType::DELIM_RPAREN;
+            break;
+        case '{':
+            token.type = TokenType::DELIM_LBRACE;
+            break;
+        case '}':
+            token.type = TokenType::DELIM_RBRACE;
+            break;
+        case '=': {
+            if (!isAtEnd() && peek() == '=') {
+                get();
+                lexeme += "=";
                 token.type = TokenType::OP_EQUAL;
             } else {
                 token.type = TokenType::OP_ASSIGN;
             }
             break;
-        case '!':
-            if (peek() == '=') {
+        }
+        case '!': {
+            if (!isAtEnd() && peek() == '=') {
                 get();
-                lexeme += '=';
+                lexeme += "=";
                 token.type = TokenType::OP_NOT_EQUAL;
             } else {
                 token.type = TokenType::UNKNOWN;
             }
             break;
-        case '<':
-            if (peek() == '=') {
+        }
+        case '<': {
+            if (!isAtEnd() && peek() == '=') {
                 get();
-                lexeme += '=';
+                lexeme += "=";
                 token.type = TokenType::OP_LESS_EQUAL;
             } else {
                 token.type = TokenType::OP_LESS;
             }
             break;
-        case '>':
-            if (peek() == '=') {
+        }
+        case '>': {
+            if (!isAtEnd() && peek() == '=') {
                 get();
-                lexeme += '=';
+                lexeme += "=";
                 token.type = TokenType::OP_GREATER_EQUAL;
             } else {
                 token.type = TokenType::OP_GREATER;
             }
             break;
-        case '&':
-            if (peek() == '&') {
+        }
+        case '&': {
+            if (!isAtEnd() && peek() == '&') {
                 get();
-                lexeme += '&';
+                lexeme += "&";
                 token.type = TokenType::OP_LOGICAL_AND;
             } else {
                 token.type = TokenType::UNKNOWN;
             }
             break;
-        case '|':
-            if (peek() == '|') {
+        }
+        case '|': {
+            if (!isAtEnd() && peek() == '|') {
                 get();
-                lexeme += '|';
+                lexeme += "|";
                 token.type = TokenType::OP_LOGICAL_OR;
             } else {
                 token.type = TokenType::UNKNOWN;
             }
             break;
+        }
         case '\'':
-            // Roll back and call character()
             currentPos--;
             column--;
             return character();
@@ -219,7 +261,6 @@ Token Lexer::opOrDelim() {
     return token;
 }
 
-// Tokenize the entire source code
 std::vector<Token> Lexer::tokenize() {
     std::vector<Token> tokens;
     while (!isAtEnd()) {
@@ -236,7 +277,6 @@ std::vector<Token> Lexer::tokenize() {
             tokens.push_back(opOrDelim());
         }
     }
-    // End of File token
     Token eofToken;
     eofToken.type = TokenType::EOF_TOKEN;
     eofToken.lexeme = "EOF";
