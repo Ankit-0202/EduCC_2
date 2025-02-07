@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
-#include <iostream> // optional for debug prints
+#include <iostream>
 
 using namespace llvm;
 using std::runtime_error;
@@ -30,10 +30,115 @@ CodeGenerator::CodeGenerator()
 
 //
 // generateCode: Walk through the Program AST and generate IR.
-// We only explicitly handle top-level function declarations here.
-// (If you want global variables, you can handle them similarly.)
+// First, process all top–level (global) variable declarations,
+// then process all function declarations.
 //
 std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& program) {
+    // Process global variable declarations.
+    for (const auto& decl : program->declarations) {
+        // If the declaration is a VariableDeclaration, generate a global variable.
+        if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
+            llvm::Type* varType = getLLVMType(varDecl->type);
+            // Create a new global variable. For simplicity, we use ExternalLinkage.
+            GlobalVariable* gVar = new GlobalVariable(
+                *module,
+                varType,
+                false, // mutable
+                GlobalValue::ExternalLinkage,
+                nullptr, // initializer to be set below
+                varDecl->name
+            );
+            // Set the initializer.
+            if (varDecl->initializer) {
+                // We assume that the initializer is a literal.
+                if (auto lit = std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
+                    Constant* initVal = nullptr;
+                    if (std::holds_alternative<int>(lit->value))
+                        initVal = ConstantInt::get(Type::getInt32Ty(context), std::get<int>(lit->value));
+                    else if (std::holds_alternative<float>(lit->value))
+                        initVal = ConstantFP::get(Type::getFloatTy(context), std::get<float>(lit->value));
+                    else if (std::holds_alternative<double>(lit->value))
+                        initVal = ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
+                    else if (std::holds_alternative<char>(lit->value))
+                        initVal = ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
+                    else if (std::holds_alternative<bool>(lit->value))
+                        initVal = ConstantInt::get(Type::getInt1Ty(context), std::get<bool>(lit->value));
+                    else
+                        throw runtime_error("CodeGenerator Error: Unsupported literal type in global initializer.");
+                    gVar->setInitializer(initVal);
+                } else {
+                    throw runtime_error("CodeGenerator Error: Global variable initializer must be a literal.");
+                }
+            } else {
+                // If no initializer is provided, use a default zero initializer.
+                Constant* defaultVal = nullptr;
+                if (varDecl->type == "int")
+                    defaultVal = ConstantInt::get(Type::getInt32Ty(context), 0);
+                else if (varDecl->type == "float")
+                    defaultVal = ConstantFP::get(Type::getFloatTy(context), 0.0f);
+                else if (varDecl->type == "char")
+                    defaultVal = ConstantInt::get(Type::getInt8Ty(context), 0);
+                else if (varDecl->type == "double")
+                    defaultVal = ConstantFP::get(Type::getDoubleTy(context), 0.0);
+                else if (varDecl->type == "bool")
+                    defaultVal = ConstantInt::get(Type::getInt1Ty(context), 0);
+                else
+                    throw runtime_error("CodeGenerator Error: Unsupported type in global variable declaration.");
+                gVar->setInitializer(defaultVal);
+            }
+        }
+        // Also handle multiple variable declarations (MultiVariableDeclaration)
+        else if (auto multiDecl = std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
+            for (const auto& singleDecl : multiDecl->declarations) {
+                llvm::Type* varType = getLLVMType(singleDecl->type);
+                GlobalVariable* gVar = new GlobalVariable(
+                    *module,
+                    varType,
+                    false,
+                    GlobalValue::ExternalLinkage,
+                    nullptr,
+                    singleDecl->name
+                );
+                if (singleDecl->initializer) {
+                    if (auto lit = std::dynamic_pointer_cast<Literal>(singleDecl->initializer.value())) {
+                        Constant* initVal = nullptr;
+                        if (std::holds_alternative<int>(lit->value))
+                            initVal = ConstantInt::get(Type::getInt32Ty(context), std::get<int>(lit->value));
+                        else if (std::holds_alternative<float>(lit->value))
+                            initVal = ConstantFP::get(Type::getFloatTy(context), std::get<float>(lit->value));
+                        else if (std::holds_alternative<double>(lit->value))
+                            initVal = ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
+                        else if (std::holds_alternative<char>(lit->value))
+                            initVal = ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
+                        else if (std::holds_alternative<bool>(lit->value))
+                            initVal = ConstantInt::get(Type::getInt1Ty(context), std::get<bool>(lit->value));
+                        else
+                            throw runtime_error("CodeGenerator Error: Unsupported literal type in global initializer.");
+                        gVar->setInitializer(initVal);
+                    } else {
+                        throw runtime_error("CodeGenerator Error: Global variable initializer must be a literal.");
+                    }
+                } else {
+                    Constant* defaultVal = nullptr;
+                    if (singleDecl->type == "int")
+                        defaultVal = ConstantInt::get(Type::getInt32Ty(context), 0);
+                    else if (singleDecl->type == "float")
+                        defaultVal = ConstantFP::get(Type::getFloatTy(context), 0.0f);
+                    else if (singleDecl->type == "char")
+                        defaultVal = ConstantInt::get(Type::getInt8Ty(context), 0);
+                    else if (singleDecl->type == "double")
+                        defaultVal = ConstantFP::get(Type::getDoubleTy(context), 0.0);
+                    else if (singleDecl->type == "bool")
+                        defaultVal = ConstantInt::get(Type::getInt1Ty(context), 0);
+                    else
+                        throw runtime_error("CodeGenerator Error: Unsupported type in global variable declaration.");
+                    gVar->setInitializer(defaultVal);
+                }
+            }
+        }
+    }
+
+    // Process function declarations.
     for (const auto& decl : program->declarations) {
         // We only generate IR for function declarations and/or prototypes
         if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
@@ -153,15 +258,10 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
         funcDecl->name,
         retTy,
         paramTys,
-        /*isDefinition=*/hasBody
+        hasBody
     );
-
-    // If there's no body => done (we have a "declare")
-    if (!hasBody) {
+    if (!hasBody)
         return;
-    }
-
-    // If we do have a body, define it now
     if (function->empty()) {
         // Create the entry block
         BasicBlock* entryBB = BasicBlock::Create(context, "entry", function);
@@ -175,7 +275,7 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
         size_t i = 0;
         for (auto& arg : function->args()) {
             const auto& paramName = funcDecl->parameters[i].second;
-            arg.setName(paramName); 
+            arg.setName(paramName);
             AllocaInst* alloc = builder.CreateAlloca(arg.getType(), nullptr, paramName);
             // store arg value into the alloca
             builder.CreateStore(&arg, alloc);
@@ -197,23 +297,17 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
         if (!builder.GetInsertBlock()->getTerminator()) {
             if (funcDecl->returnType == "void") {
                 builder.CreateRetVoid();
-            }
-            else if (funcDecl->returnType == "int") {
+            } else if (funcDecl->returnType == "int") {
                 builder.CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
-            }
-            else if (funcDecl->returnType == "float") {
+            } else if (funcDecl->returnType == "float") {
                 builder.CreateRet(ConstantFP::get(Type::getFloatTy(context), 0.0f));
-            }
-            else if (funcDecl->returnType == "double") {
+            } else if (funcDecl->returnType == "double") {
                 builder.CreateRet(ConstantFP::get(Type::getDoubleTy(context), 0.0));
-            }
-            else if (funcDecl->returnType == "char") {
+            } else if (funcDecl->returnType == "char") {
                 builder.CreateRet(ConstantInt::get(Type::getInt8Ty(context), 0));
-            }
-            else if (funcDecl->returnType == "bool") {
+            } else if (funcDecl->returnType == "bool") {
                 builder.CreateRet(ConstantInt::get(Type::getInt1Ty(context), 0));
-            }
-            else {
+            } else {
                 throw runtime_error("CodeGenerator Error: Unsupported return type '" + funcDecl->returnType + "'.");
             }
         }
@@ -261,12 +355,10 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         if (condVal->getType() != Type::getInt1Ty(context)) {
             condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
         }
-
         Function* theFunction = builder.GetInsertBlock()->getParent();
         BasicBlock* thenBB = BasicBlock::Create(context, "then", theFunction);
         BasicBlock* elseBB = BasicBlock::Create(context, "else", theFunction);
         BasicBlock* mergeBB = BasicBlock::Create(context, "ifcont", theFunction);
-
         builder.CreateCondBr(condVal, thenBB, elseBB);
 
         // then branch
@@ -279,9 +371,8 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         // else branch
         builder.SetInsertPoint(elseBB);
         bool elseTerminated = false;
-        if (ifStmt->elseBranch) {
+        if (ifStmt->elseBranch)
             elseTerminated = generateStatement(ifStmt->elseBranch.value());
-        }
         if (!elseTerminated) {
             builder.CreateBr(mergeBB);
         }
@@ -295,7 +386,6 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         BasicBlock* condBB = BasicBlock::Create(context, "while.cond", theFunction);
         BasicBlock* bodyBB = BasicBlock::Create(context, "while.body", theFunction);
         BasicBlock* afterBB = BasicBlock::Create(context, "while.after", theFunction);
-
         builder.CreateBr(condBB);
         builder.SetInsertPoint(condBB);
         Value* condVal = generateExpression(whileStmt->condition);
@@ -303,22 +393,17 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
             condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
         }
         builder.CreateCondBr(condVal, bodyBB, afterBB);
-
         builder.SetInsertPoint(bodyBB);
         bool bodyTerminated = generateStatement(whileStmt->body);
         if (!bodyTerminated) {
             builder.CreateBr(condBB);
         }
-
         builder.SetInsertPoint(afterBB);
         return false;
     }
     else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
-        // Initialize
-        if (forStmt->initializer) {
+        if (forStmt->initializer)
             generateStatement(forStmt->initializer);
-        }
-
         Function* theFunction = builder.GetInsertBlock()->getParent();
         BasicBlock* condBB = BasicBlock::Create(context, "for.cond", theFunction);
         BasicBlock* bodyBB = BasicBlock::Create(context, "for.body", theFunction);
@@ -383,123 +468,100 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
                 throw runtime_error("CodeGenerator Error: Incompatible types in binary expression.");
             }
         }
-
-        // Now do the actual op
         if (binExpr->op == "+") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFAdd(lhs, rhs, "faddtmp");
             else
                 return builder.CreateAdd(lhs, rhs, "addtmp");
-        }
-        else if (binExpr->op == "-") {
+        } else if (binExpr->op == "-") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFSub(lhs, rhs, "fsubtmp");
             else
                 return builder.CreateSub(lhs, rhs, "subtmp");
-        }
-        else if (binExpr->op == "*") {
+        } else if (binExpr->op == "*") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFMul(lhs, rhs, "fmultmp");
             else
                 return builder.CreateMul(lhs, rhs, "multmp");
-        }
-        else if (binExpr->op == "/") {
+        } else if (binExpr->op == "/") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFDiv(lhs, rhs, "fdivtmp");
             else
                 return builder.CreateSDiv(lhs, rhs, "divtmp");
-        }
-        // Comparisons
-        else if (binExpr->op == "<=") {
+        } else if (binExpr->op == "<=") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOLE(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpSLE(lhs, rhs, "cmptmp");
-        }
-        else if (binExpr->op == "<") {
+        } else if (binExpr->op == "<") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOLT(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpSLT(lhs, rhs, "cmptmp");
-        }
-        else if (binExpr->op == ">=") {
+        } else if (binExpr->op == ">=") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOGE(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpSGE(lhs, rhs, "cmptmp");
-        }
-        else if (binExpr->op == ">") {
+        } else if (binExpr->op == ">") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOGT(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpSGT(lhs, rhs, "cmptmp");
-        }
-        else if (binExpr->op == "==") {
+        } else if (binExpr->op == "==") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFCmpOEQ(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpEQ(lhs, rhs, "cmptmp");
-        }
-        else if (binExpr->op == "!=") {
+        } else if (binExpr->op == "!=") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFCmpONE(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpNE(lhs, rhs, "cmptmp");
-        }
-        else if (binExpr->op == "&&") {
-            // ensure both sides are i1
-            if (!lhs->getType()->isIntegerTy(1)) {
+        } else if (binExpr->op == "&&") {
+            if (!lhs->getType()->isIntegerTy(1))
                 lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0), "booltmp");
-            }
-            if (!rhs->getType()->isIntegerTy(1)) {
+            if (!rhs->getType()->isIntegerTy(1))
                 rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0), "booltmp");
-            }
             return builder.CreateAnd(lhs, rhs, "andtmp");
-        }
-        else if (binExpr->op == "||") {
-            if (!lhs->getType()->isIntegerTy(1)) {
+        } else if (binExpr->op == "||") {
+            if (!lhs->getType()->isIntegerTy(1))
                 lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0), "booltmp");
-            }
-            if (!rhs->getType()->isIntegerTy(1)) {
+            if (!rhs->getType()->isIntegerTy(1))
                 rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0), "booltmp");
-            }
             return builder.CreateOr(lhs, rhs, "ortmp");
-        }
-        else {
+        } else {
             throw runtime_error("CodeGenerator Error: Unsupported binary operator '" + binExpr->op + "'.");
         }
-    }
-    else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
-        // With our variant ordering: char, bool, int, float, double
-        if (std::holds_alternative<char>(lit->value)) {
+    } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+        if (std::holds_alternative<char>(lit->value))
             return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
-        }
-        else if (std::holds_alternative<bool>(lit->value)) {
+        else if (std::holds_alternative<bool>(lit->value))
             return ConstantInt::get(Type::getInt1Ty(context), std::get<bool>(lit->value));
-        }
-        else if (std::holds_alternative<int>(lit->value)) {
+        else if (std::holds_alternative<int>(lit->value))
             return ConstantInt::get(Type::getInt32Ty(context), std::get<int>(lit->value));
-        }
-        else if (std::holds_alternative<float>(lit->value)) {
+        else if (std::holds_alternative<float>(lit->value))
             return ConstantFP::get(Type::getFloatTy(context), std::get<float>(lit->value));
-        }
-        else if (std::holds_alternative<double>(lit->value)) {
+        else if (std::holds_alternative<double>(lit->value))
             return ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
-        }
-    }
-    else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-        // Load from local variable
+    } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+        // First try to resolve as a local variable.
         auto it = localVariables.find(id->name);
-        if (it == localVariables.end()) {
-            throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "'.");
+        if (it != localVariables.end()) {
+            Value* varPtr = it->second;
+            if (auto allocaInst = dyn_cast<AllocaInst>(varPtr)) {
+                Type* allocatedType = allocaInst->getAllocatedType();
+                return builder.CreateLoad(allocatedType, varPtr, id->name.c_str());
+            } else {
+                throw runtime_error("CodeGenerator Error: '" + id->name + "' is not an alloca instruction.");
+            }
         }
-        Value* varPtr = it->second;
-        if (auto allocaInst = dyn_cast<AllocaInst>(varPtr)) {
-            Type* allocatedType = allocaInst->getAllocatedType();
-            return builder.CreateLoad(allocatedType, varPtr, id->name.c_str());
-        } else {
-            throw runtime_error("CodeGenerator Error: '" + id->name + "' is not an alloca instruction.");
+        // Otherwise, try to find a global variable.
+        GlobalVariable* gVar = module->getGlobalVariable(id->name);
+        if (gVar) {
+            return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
         }
+        throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "'.");
     }
     else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
         // Handle postfix operators (e.g., i++ or i--)
@@ -543,11 +605,8 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         }
         builder.CreateStore(newVal, varPtr);
         return oldVal;
-    }
-    else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
-        // Evaluate RHS
+    } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
         Value* rhsVal = generateExpression(assign->rhs);
-        // Store in LHS
         auto it = localVariables.find(assign->lhs);
         if (it == localVariables.end()) {
             throw runtime_error("CodeGenerator Error: Undefined variable '" + assign->lhs + "'.");
@@ -555,9 +614,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         Value* varPtr = it->second;
         builder.CreateStore(rhsVal, varPtr);
         return rhsVal;
-    }
-    else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
-        // We expect the function to exist in the module
+    } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
         Function* callee = module->getFunction(funcCall->functionName);
         if (!callee) {
             throw runtime_error("CodeGenerator Error: Undefined function '" + funcCall->functionName + "' in IR.");
