@@ -32,7 +32,7 @@ ifneq ($(strip $(TEST_FILE)),)
   $(eval .DEFAULT_GOAL := run)
 endif
 
-.PHONY: all copy clean test run create_test_output_dir
+.PHONY: all copy clean test test-verbose run create_test_output_dir
 
 # Default target: build the compiler
 all: $(TARGET_PATH)
@@ -84,7 +84,7 @@ test: $(TARGET_PATH) create_test_output_dir
 	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
 	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
+	        echo "[FAILED] $$testfile - Return code mismatch" >&2 ------ Ours: $$our_ret, GCC: $$gcc_ret; \
 	        continue; \
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
@@ -102,6 +102,50 @@ test: $(TARGET_PATH) create_test_output_dir
 
 	@echo "-----------------------------------------------------"; \
 	echo "All tests executed. Check test_output/ for results."
+
+# Verbose test target: Runs tests and prints output to stdout
+test-verbose: $(TARGET_PATH) create_test_output_dir
+	clear
+	@echo "Running tests recursively in verbose mode..."
+	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
+	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
+	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
+	    echo "-----------------------------------------------------"; \
+	    echo "Testing $$testfile"; \
+	    echo "-----------------------------------------------------" >> $$output_file; \
+	    echo "Testing $$testfile" >> $$output_file; \
+	    $(TARGET_PATH) $$testfile; \
+	    if [ ! -f $(LLFILE) ]; then \
+	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
+	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
+	        continue; \
+	    fi; \
+	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
+	    clang $(OBJFILE) -o $(OUR_EXE); \
+	    echo "Running compiled executable..."; \
+	    ./$(OUR_EXE) | tee our_output.txt; \
+	    our_ret=$$?; \
+	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
+	    echo "Running GCC-compiled executable..."; \
+	    ./$(GCC_EXE) | tee gcc_output.txt; \
+	    gcc_ret=$$?; \
+	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" | tee -a $$output_file; \
+	    if [ $$our_ret -ne $$gcc_ret ]; then \
+	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
+			echo "[FAILED] $$testfile - Return code mismatch" >&2 ------ Ours: $$our_ret, GCC: $$gcc_ret; \
+	        continue; \
+	    fi; \
+	    if ! diff -u our_output.txt gcc_output.txt; then \
+	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
+	        echo "[FAILED] $$testfile - Output mismatch" >&2; \
+	    else \
+	        echo "Test $$testfile passed." | tee -a $$output_file; \
+	    fi; \
+	done
+
+	@echo "-----------------------------------------------------"; \
+	echo "All tests executed in verbose mode. Check test_output/ for results."
+
 
 # Run target: Run compiler on a single test file provided on the command line.
 run: $(TARGET_PATH)
