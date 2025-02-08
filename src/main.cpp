@@ -1,10 +1,3 @@
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <vector>
-#include <string>
-#include <system_error>
-
 #include "Lexer.hpp"
 #include "Parser.hpp"
 #include "AST.hpp"
@@ -14,6 +7,12 @@
 
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/FileSystem.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <system_error>
 
 static std::string tokenTypeToString(TokenType type) {
     switch (type) {
@@ -27,6 +26,9 @@ static std::string tokenTypeToString(TokenType type) {
         case TokenType::KW_ELSE: return "KW_ELSE";
         case TokenType::KW_WHILE: return "KW_WHILE";
         case TokenType::KW_FOR: return "KW_FOR";
+        case TokenType::KW_SWITCH: return "KW_SWITCH";
+        case TokenType::KW_CASE: return "KW_CASE";
+        case TokenType::KW_DEFAULT: return "KW_DEFAULT";
         case TokenType::OP_PLUS: return "OP_PLUS";
         case TokenType::OP_MINUS: return "OP_MINUS";
         case TokenType::OP_MULTIPLY: return "OP_MULTIPLY";
@@ -46,8 +48,10 @@ static std::string tokenTypeToString(TokenType type) {
         case TokenType::DELIM_RPAREN: return "DELIM_RPAREN";
         case TokenType::DELIM_LBRACE: return "DELIM_LBRACE";
         case TokenType::DELIM_RBRACE: return "DELIM_RBRACE";
+        case TokenType::DELIM_COLON: return "DELIM_COLON";
         case TokenType::LITERAL_INT: return "LITERAL_INT";
         case TokenType::LITERAL_FLOAT: return "LITERAL_FLOAT";
+        case TokenType::LITERAL_DOUBLE: return "LITERAL_DOUBLE";
         case TokenType::LITERAL_CHAR: return "LITERAL_CHAR";
         case TokenType::IDENTIFIER: return "IDENTIFIER";
         case TokenType::EOF_TOKEN: return "EOF_TOKEN";
@@ -76,7 +80,6 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> systemPaths = {
         "/usr/include",
         "/usr/local/include"
-        // Add more if needed
     };
     // For local includes, we can include the directory containing the source:
     // e.g., if the user calls: C99Compiler path/to/file.c, 

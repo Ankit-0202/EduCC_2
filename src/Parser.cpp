@@ -1,8 +1,6 @@
-#ifndef PARSER_CPP
-#define PARSER_CPP
-
 #include "Parser.hpp"
 #include "AST.hpp"
+#include "Lexer.hpp"
 #include <stdexcept>
 #include <iostream>
 
@@ -36,8 +34,7 @@ Token Parser::peek() const {
 }
 
 bool Parser::isAtEnd() const {
-    if (current >= tokens.size()) return true;
-    return tokens[current].type == TokenType::EOF_TOKEN;
+    return current >= tokens.size() || tokens[current].type == TokenType::EOF_TOKEN;
 }
 
 void Parser::consume(TokenType type, const std::string& errorMessage) {
@@ -69,7 +66,7 @@ std::shared_ptr<Program> Parser::parse() {
 
 DeclarationPtr Parser::parseDeclaration() {
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) || 
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
         check(TokenType::KW_BOOL)) {
         size_t save = current;
         std::string type;
@@ -219,6 +216,8 @@ StatementPtr Parser::parseStatement() {
         return parseWhileStatement();
     } else if (match(TokenType::KW_FOR)) {
         return parseForStatement();
+    } else if (match(TokenType::KW_SWITCH)) {
+        return parseSwitchStatement();
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
     } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
@@ -276,6 +275,31 @@ StatementPtr Parser::parseForStatement() {
     return std::make_shared<ForStatement>(initializer, condition, increment, body);
 }
 
+StatementPtr Parser::parseSwitchStatement() {
+    // Assumes 'switch' keyword has been consumed.
+    consume(TokenType::DELIM_LPAREN, "Expected '(' after 'switch'");
+    ExpressionPtr expr = parseExpression();
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after switch expression");
+    consume(TokenType::DELIM_LBRACE, "Expected '{' to begin switch block");
+    std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>> cases;
+    std::optional<StatementPtr> defaultCase = std::nullopt;
+    while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+        if (match(TokenType::KW_CASE)) {
+            ExpressionPtr caseExpr = parseExpression();
+            consume(TokenType::DELIM_COLON, "Expected ':' after case label");
+            StatementPtr caseStmt = parseStatement();
+            cases.push_back({caseExpr, caseStmt});
+        } else if (match(TokenType::KW_DEFAULT)) {
+            consume(TokenType::DELIM_COLON, "Expected ':' after 'default'");
+            defaultCase = parseStatement();
+        } else {
+            error("Expected 'case' or 'default' in switch statement");
+        }
+    }
+    consume(TokenType::DELIM_RBRACE, "Expected '}' after switch block");
+    return std::make_shared<SwitchStatement>(expr, cases, defaultCase);
+}
+
 StatementPtr Parser::parseReturnStatement() {
     ExpressionPtr expr = parseExpression();
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after return value");
@@ -322,8 +346,6 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     else
         return std::make_shared<MultiVariableDeclarationStatement>(decls);
 }
-
-// Expression parsing
 
 ExpressionPtr Parser::parseExpression() {
     return parseAssignment();
@@ -428,7 +450,6 @@ ExpressionPtr Parser::parseUnary() {
     return parsePostfix();
 }
 
-// NEW: parsePostfix() handles primary expressions and postfix "++"/"--"
 ExpressionPtr Parser::parsePostfix() {
     ExpressionPtr expr = parsePrimary();
     while (!isAtEnd()) {
@@ -451,7 +472,6 @@ ExpressionPtr Parser::parsePostfix() {
     return expr;
 }
 
-// ...
 ExpressionPtr Parser::parsePrimary() {
     if (match(TokenType::LITERAL_INT)) {
         int value = std::stoi(tokens[current - 1].lexeme);
@@ -498,5 +518,3 @@ ExpressionPtr Parser::parsePrimary() {
     error("Expected expression");
     return nullptr;
 }
-
-#endif

@@ -173,9 +173,6 @@ llvm::Type* CodeGenerator::getLLVMType(const string& type) {
         throw runtime_error("CodeGenerator Error: Unsupported type '" + type + "'.");
 }
 
-//
-// A helper to compare function signatures (parameter count, types, and return type).
-//
 static bool functionSignaturesMatch(FunctionType* existing, FunctionType* candidate) {
     if (existing->getReturnType() != candidate->getReturnType())
         return false;
@@ -188,13 +185,7 @@ static bool functionSignaturesMatch(FunctionType* existing, FunctionType* candid
     return true;
 }
 
-//
-// getOrCreateFunctionInModule:
-//   - If a function with the given name & signature already exists, return it.
-//   - If a function with the same name but different signature exists, throw an error.
-//   - Otherwise, create a new Function object in the module.
-//
-Function* CodeGenerator::getOrCreateFunctionInModule(
+llvm::Function* CodeGenerator::getOrCreateFunctionInModule(
     const std::string& name,
     Type* returnType,
     const vector<Type*>& paramTypes,
@@ -213,7 +204,7 @@ Function* CodeGenerator::getOrCreateFunctionInModule(
     }
     Function* newFn = Function::Create(
         fType,
-        Function::ExternalLinkage,  // or InternalLinkage if desired
+        Function::ExternalLinkage,
         name,
         module.get()
     );
@@ -442,6 +433,41 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
 
         // after
         builder.SetInsertPoint(afterBB);
+        return false;
+    }
+    else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
+        Value* condVal = generateExpression(switchStmt->condition);
+        if (!condVal->getType()->isIntegerTy()) {
+            throw runtime_error("CodeGenerator Error: Switch expression must be of integer type.");
+        }
+        Function* theFunction = builder.GetInsertBlock()->getParent();
+        BasicBlock* defaultBB = BasicBlock::Create(context, "switch.default", theFunction);
+        SwitchInst* switchInst = builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
+        for (auto &casePair : switchStmt->cases) {
+            if (!casePair.first.has_value()) {
+                throw runtime_error("CodeGenerator Error: Case label missing in case clause.");
+            }
+            Value* caseVal = generateExpression(casePair.first.value());
+            if (!isa<ConstantInt>(caseVal)) {
+                throw runtime_error("CodeGenerator Error: Case label must be a constant integer.");
+            }
+            BasicBlock* caseBB = BasicBlock::Create(context, "switch.case", theFunction);
+            switchInst->addCase(cast<ConstantInt>(caseVal), caseBB);
+            builder.SetInsertPoint(caseBB);
+            bool terminated = generateStatement(casePair.second);
+            if (!terminated) {
+                builder.CreateBr(defaultBB);
+            }
+        }
+        builder.SetInsertPoint(defaultBB);
+        if (switchStmt->defaultCase.has_value()) {
+            bool terminated = generateStatement(switchStmt->defaultCase.value());
+            if (!terminated) {
+                builder.CreateUnreachable();
+            }
+        } else {
+            builder.CreateUnreachable();
+        }
         return false;
     }
     else {

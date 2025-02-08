@@ -81,6 +81,14 @@ Token Lexer::identifier() {
         token.type = TokenType::KW_WHILE;
     else if (lexeme == "for")
         token.type = TokenType::KW_FOR;
+    else if (lexeme == "switch")
+        token.type = TokenType::KW_SWITCH;
+    else if (lexeme == "case")
+        token.type = TokenType::KW_CASE;
+    else if (lexeme == "default")
+        token.type = TokenType::KW_DEFAULT;
+    else
+        token.type = TokenType::IDENTIFIER;
     token.lexeme = lexeme;
     token.line = startLine;
     token.column = startColumn;
@@ -127,14 +135,14 @@ Token Lexer::character() {
     int startLine = line;
     int startColumn = column;
     std::string lexeme;
-    char openingQuote = get(); // should be '
+    char openingQuote = get();
     if (openingQuote != '\'')
         throw std::runtime_error("Lexer Error: Expected opening single quote for char literal");
     char ch = get();
     lexeme.push_back(ch);
     if (peek() != '\'')
         throw std::runtime_error("Lexer Error: Unterminated char literal");
-    get(); // consume closing '
+    get();
     Token token;
     token.type = TokenType::LITERAL_CHAR;
     token.lexeme = lexeme;
@@ -208,6 +216,9 @@ Token Lexer::opOrDelim() {
             break;
         case '}':
             token.type = TokenType::DELIM_RBRACE;
+            break;
+        case ':':
+            token.type = TokenType::DELIM_COLON;
             break;
         case '=': {
             if (!isAtEnd() && peek() == '=') {
@@ -289,7 +300,8 @@ std::vector<Token> Lexer::tokenize() {
     std::vector<Token> tokens;
     while (!isAtEnd()) {
         skipWhitespace();
-        if (isAtEnd()) break;
+        if (isAtEnd())
+            break;
         char c = peek();
         if (std::isalpha((unsigned char)c) || c == '_') {
             tokens.push_back(identifier());

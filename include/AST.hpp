@@ -44,7 +44,6 @@ struct UnaryExpression : public Expression {
         : op(oper), operand(opd) {}
 };
 
-// NEW: PostfixExpression to represent expressions like i++ or i--
 struct PostfixExpression : public Expression {
     ExpressionPtr operand;
     std::string op; // "++" or "--"
@@ -52,7 +51,7 @@ struct PostfixExpression : public Expression {
         : operand(operand), op(op) {}
 };
 
-// Literal: The variant order is: char, bool, int, float, double.
+// Literal: the variant order is: char, bool, int, float, double.
 struct Literal : public Expression {
     std::variant<char, bool, int, float, double> value;
     Literal(int val) : value(val) {}
@@ -129,6 +128,17 @@ struct ForStatement : public Statement {
         : initializer(init), condition(cond), increment(incr), body(body) {}
 };
 
+// NEW: SwitchStatement node
+struct SwitchStatement : public Statement {
+    ExpressionPtr condition;
+    std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>> cases;
+    std::optional<StatementPtr> defaultCase;
+    SwitchStatement(ExpressionPtr cond,
+                    const std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>>& cases,
+                    const std::optional<StatementPtr>& defaultCase = std::nullopt)
+        : condition(cond), cases(cases), defaultCase(defaultCase) {}
+};
+
 // Declaration Nodes
 struct Declaration : public ASTNode {
     virtual ~Declaration() = default;
@@ -143,20 +153,17 @@ struct VariableDeclaration : public Declaration {
         : type(ty), name(nm), initializer(init) {}
 };
 
-// NEW: Multiple variable declaration at top–level
 struct MultiVariableDeclaration : public Declaration {
     std::vector<std::shared_ptr<VariableDeclaration>> declarations;
     MultiVariableDeclaration(const std::vector<std::shared_ptr<VariableDeclaration>>& decls)
         : declarations(decls) {}
 };
 
-// CHANGED: FunctionDeclaration – body can be nullptr to represent a prototype.
 struct FunctionDeclaration : public Declaration {
     std::string returnType;
     std::string name;
     std::vector<std::pair<std::string, std::string>> parameters;
-    StatementPtr body;  // If this is nullptr, it's just a prototype.
-
+    StatementPtr body;  // If nullptr, it's just a prototype.
     FunctionDeclaration(const std::string& retType,
                         const std::string& nm,
                         const std::vector<std::pair<std::string, std::string>>& params,
@@ -164,7 +171,6 @@ struct FunctionDeclaration : public Declaration {
         : returnType(retType), name(nm), parameters(params), body(stmt) {}
 };
 
-// Program Node
 struct Program : public ASTNode {
     std::vector<DeclarationPtr> declarations;
     void addDeclaration(DeclarationPtr decl) {
@@ -181,7 +187,6 @@ struct VariableDeclarationStatement : public Statement {
         : type(ty), name(nm), initializer(init) {}
 };
 
-// NEW: Multiple variable declaration statement (e.g., int a = 1, b = 2;)
 struct MultiVariableDeclarationStatement : public Statement {
     std::vector<std::shared_ptr<VariableDeclarationStatement>> declarations;
     MultiVariableDeclarationStatement(const std::vector<std::shared_ptr<VariableDeclarationStatement>>& decls)

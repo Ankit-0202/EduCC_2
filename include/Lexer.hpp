@@ -19,6 +19,9 @@ enum class TokenType {
     KW_ELSE,
     KW_WHILE,
     KW_FOR,
+    KW_SWITCH,    // NEW
+    KW_CASE,      // NEW
+    KW_DEFAULT,   // NEW
     // Operators
     OP_PLUS,
     OP_MINUS,
@@ -44,6 +47,7 @@ enum class TokenType {
     DELIM_RPAREN,
     DELIM_LBRACE,
     DELIM_RBRACE,
+    DELIM_COLON, // for switch-case labels
     // Literals
     LITERAL_INT,
     LITERAL_FLOAT,    // with trailing f/F
@@ -65,6 +69,7 @@ struct Token {
     int column;
 };
 
+// Lexer class.
 class Lexer {
 public:
     Lexer(const std::string& source);

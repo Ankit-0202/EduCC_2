@@ -35,6 +35,7 @@ private:
     StatementPtr parseIfStatement();
     StatementPtr parseWhileStatement();
     StatementPtr parseForStatement();
+    StatementPtr parseSwitchStatement(); // NEW: switch statement
     StatementPtr parseReturnStatement();
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();
