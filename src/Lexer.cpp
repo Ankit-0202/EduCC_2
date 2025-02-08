@@ -1,25 +1,24 @@
 #include "Lexer.hpp"
-#include <stdexcept>
 #include <sstream>
 #include <algorithm>
+#include <stdexcept>
 
-// List of keywords
-static const std::vector<std::string> keywords = {
-    "int", "float", "char", "double", "bool", "return", "if", "else", "while", "for", "true", "false"
-};
-
+// Constructor
 Lexer::Lexer(const std::string& source)
     : sourceCode(source), currentPos(0), line(1), column(1) {}
 
+// Return true if at end of input.
 bool Lexer::isAtEnd() const {
     return currentPos >= sourceCode.length();
 }
 
+// Peek the current character without consuming it.
 char Lexer::peek() const {
     if (isAtEnd()) return '\0';
     return sourceCode[currentPos];
 }
 
+// Consume and return the current character.
 char Lexer::get() {
     if (isAtEnd()) return '\0';
     char c = sourceCode[currentPos++];
@@ -32,76 +31,98 @@ char Lexer::get() {
     return c;
 }
 
+// Skip whitespace (and comments).
 void Lexer::skipWhitespace() {
     while (!isAtEnd()) {
         char c = peek();
-        if (std::isspace(c)) {
+        if (std::isspace((unsigned char)c)) {
             get();
         } else if (c == '/' && currentPos + 1 < sourceCode.length() && sourceCode[currentPos + 1] == '/') {
-            // Single-line comment
+            // Single-line comment.
             get(); // consume '/'
             get(); // consume second '/'
-            while (peek() != '\n' && !isAtEnd()) {
+            while (peek() != '\n' && !isAtEnd())
                 get();
-            }
         } else {
             break;
         }
     }
 }
 
+// Produce an identifier or keyword token.
 Token Lexer::identifier() {
     int startLine = line;
     int startColumn = column;
     std::string lexeme;
-    while (!isAtEnd() && (std::isalnum(peek()) || peek() == '_')) {
+    while (!isAtEnd() && (std::isalnum((unsigned char)peek()) || peek() == '_')) {
         lexeme.push_back(get());
     }
     Token token;
-    if (std::find(keywords.begin(), keywords.end(), lexeme) != keywords.end()) {
-        if (lexeme == "int") token.type = TokenType::KW_INT;
-        else if (lexeme == "float") token.type = TokenType::KW_FLOAT;
-        else if (lexeme == "char") token.type = TokenType::KW_CHAR;
-        else if (lexeme == "double") token.type = TokenType::KW_DOUBLE;
-        else if (lexeme == "bool") token.type = TokenType::KW_BOOL;
-        else if (lexeme == "return") token.type = TokenType::KW_RETURN;
-        else if (lexeme == "if") token.type = TokenType::KW_IF;
-        else if (lexeme == "else") token.type = TokenType::KW_ELSE;
-        else if (lexeme == "while") token.type = TokenType::KW_WHILE;
-        else if (lexeme == "for") token.type = TokenType::KW_FOR;
-        else token.type = TokenType::IDENTIFIER; // For "true" and "false"
-    } else {
-        token.type = TokenType::IDENTIFIER;
-    }
+    // Explicitly default to IDENTIFIER.
+    token.type = TokenType::IDENTIFIER;
+    // Check for keywords.
+    if (lexeme == "int")
+        token.type = TokenType::KW_INT;
+    else if (lexeme == "float")
+        token.type = TokenType::KW_FLOAT;
+    else if (lexeme == "char")
+        token.type = TokenType::KW_CHAR;
+    else if (lexeme == "double")
+        token.type = TokenType::KW_DOUBLE;
+    else if (lexeme == "bool")
+        token.type = TokenType::KW_BOOL;
+    else if (lexeme == "return")
+        token.type = TokenType::KW_RETURN;
+    else if (lexeme == "if")
+        token.type = TokenType::KW_IF;
+    else if (lexeme == "else")
+        token.type = TokenType::KW_ELSE;
+    else if (lexeme == "while")
+        token.type = TokenType::KW_WHILE;
+    else if (lexeme == "for")
+        token.type = TokenType::KW_FOR;
     token.lexeme = lexeme;
     token.line = startLine;
     token.column = startColumn;
     return token;
 }
 
+// Produce a numeric literal token.
 Token Lexer::number() {
     int startLine = line;
     int startColumn = column;
     std::string lexeme;
-    bool isFloat = false;
-    while (!isAtEnd() && std::isdigit(peek())) {
+    bool sawDot = false;
+    while (!isAtEnd() && std::isdigit((unsigned char)peek())) {
         lexeme.push_back(get());
     }
     if (!isAtEnd() && peek() == '.') {
-        isFloat = true;
+        sawDot = true;
         lexeme.push_back(get());
-        while (!isAtEnd() && std::isdigit(peek())) {
+        while (!isAtEnd() && std::isdigit((unsigned char)peek())) {
             lexeme.push_back(get());
         }
     }
+    bool isFloatLiteral = false;
+    if (!isAtEnd() && (peek() == 'f' || peek() == 'F')) {
+        isFloatLiteral = true;
+        lexeme.push_back(get());
+    }
     Token token;
-    token.type = isFloat ? TokenType::LITERAL_FLOAT : TokenType::LITERAL_INT;
+    if (!sawDot) {
+        token.type = TokenType::LITERAL_INT;
+    } else if (isFloatLiteral) {
+        token.type = TokenType::LITERAL_FLOAT;
+    } else {
+        token.type = TokenType::LITERAL_DOUBLE;
+    }
     token.lexeme = lexeme;
     token.line = startLine;
     token.column = startColumn;
     return token;
 }
 
+// Produce a character literal token.
 Token Lexer::character() {
     int startLine = line;
     int startColumn = column;
@@ -122,6 +143,7 @@ Token Lexer::character() {
     return token;
 }
 
+// Produce an operator or delimiter token.
 Token Lexer::opOrDelim() {
     int startLine = line;
     int startColumn = column;
@@ -248,6 +270,7 @@ Token Lexer::opOrDelim() {
             break;
         }
         case '\'':
+            // Roll back and call character()
             currentPos--;
             column--;
             return character();
@@ -261,15 +284,16 @@ Token Lexer::opOrDelim() {
     return token;
 }
 
+// Tokenize the entire source code.
 std::vector<Token> Lexer::tokenize() {
     std::vector<Token> tokens;
     while (!isAtEnd()) {
         skipWhitespace();
         if (isAtEnd()) break;
         char c = peek();
-        if (std::isalpha(c) || c == '_') {
+        if (std::isalpha((unsigned char)c) || c == '_') {
             tokens.push_back(identifier());
-        } else if (std::isdigit(c)) {
+        } else if (std::isdigit((unsigned char)c)) {
             tokens.push_back(number());
         } else if (c == '\'') {
             tokens.push_back(character());

@@ -87,7 +87,7 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                 gVar->setInitializer(defaultVal);
             }
         }
-        // Also handle multiple variable declarations (MultiVariableDeclaration)
+        // Also handle multiple variable declarations.
         else if (auto multiDecl = std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
             for (const auto& singleDecl : multiDecl->declarations) {
                 llvm::Type* varType = getLLVMType(singleDecl->type);
@@ -143,11 +143,10 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
         // We only generate IR for function declarations and/or prototypes
         if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
             generateFunction(funcDecl);
-        } 
-        // If there's a top-level variable, you could handle it here, e.g. global variable code
+        }
     }
 
-    // Verify the generated module
+    // Verify the generated module.
     if (verifyModule(*module, &errs())) {
         throw runtime_error("CodeGenerator Error: Module verification failed.");
     }
@@ -155,7 +154,7 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
 }
 
 //
-// getLLVMType: Convert string type => LLVM Type
+// getLLVMType: Convert string type ("int", "float", etc.) to an LLVM Type*.
 //
 llvm::Type* CodeGenerator::getLLVMType(const string& type) {
     if (type == "int")
@@ -175,62 +174,46 @@ llvm::Type* CodeGenerator::getLLVMType(const string& type) {
 }
 
 //
-// A helper to compare function signatures
-// (param count, param types, return type) in IR
+// A helper to compare function signatures (parameter count, types, and return type).
 //
 static bool functionSignaturesMatch(FunctionType* existing, FunctionType* candidate) {
-    if (existing->getReturnType() != candidate->getReturnType()) {
+    if (existing->getReturnType() != candidate->getReturnType())
         return false;
-    }
-    if (existing->getNumParams() != candidate->getNumParams()) {
+    if (existing->getNumParams() != candidate->getNumParams())
         return false;
-    }
     for (unsigned i = 0; i < existing->getNumParams(); ++i) {
-        if (existing->getParamType(i) != candidate->getParamType(i)) {
+        if (existing->getParamType(i) != candidate->getParamType(i))
             return false;
-        }
     }
     return true;
 }
 
 //
-// getOrCreateFunctionInModule: 
-//   - If a function with this name & signature already exists, return it.
-//   - If a function with this name but different signature exists => error.
-//   - If it doesn't exist, create a new Function object in the module.
-//
-// 'isDefinition' indicates whether we intend to define a body now.
+// getOrCreateFunctionInModule:
+//   - If a function with the given name & signature already exists, return it.
+//   - If a function with the same name but different signature exists, throw an error.
+//   - Otherwise, create a new Function object in the module.
 //
 Function* CodeGenerator::getOrCreateFunctionInModule(
     const std::string& name,
     Type* returnType,
-    const std::vector<Type*>& paramTypes,
+    const vector<Type*>& paramTypes,
     bool isDefinition
 ) {
-    // Build the function type
     FunctionType* fType = FunctionType::get(returnType, paramTypes, false);
-
-    // Check if there's an existing function by that name
     if (Function* existingFn = module->getFunction(name)) {
-        // Ensure the signature is the same
         FunctionType* existingType = existingFn->getFunctionType();
         if (!functionSignaturesMatch(existingType, fType)) {
             throw runtime_error("CodeGenerator Error: Conflicting function signature for '" + name + "'.");
         }
-
-        // If we're about to define it, but it's already got a body => redefinition error
         if (isDefinition && !existingFn->empty()) {
             throw runtime_error("CodeGenerator Error: Function '" + name + "' is already defined.");
         }
-
-        // If it's just a prototype or re-using an existing prototype => return as is
         return existingFn;
     }
-
-    // If we reach here, no function with that name => create it
     Function* newFn = Function::Create(
         fType,
-        Function::ExternalLinkage,  // or InternalLinkage if you prefer
+        Function::ExternalLinkage,  // or InternalLinkage if desired
         name,
         module.get()
     );
@@ -347,6 +330,22 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
     }
     else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
         Value* retVal = generateExpression(retStmt->expression);
+        // NEW: Check that the return value type matches the function's return type.
+        Function* currentFunction = builder.GetInsertBlock()->getParent();
+        Type* expectedType = currentFunction->getReturnType();
+        if (retVal->getType() != expectedType) {
+            // If retVal is an i1 (boolean) and expected is i32 (int), extend it.
+            if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32)) {
+                retVal = builder.CreateZExt(retVal, expectedType, "zexttmp");
+            }
+            // Otherwise, if both are integer types but with different widths, cast.
+            else if (retVal->getType()->isIntegerTy() && expectedType->isIntegerTy()) {
+                retVal = builder.CreateIntCast(retVal, expectedType, false, "intcasttmp");
+            }
+            else {
+                throw runtime_error("CodeGenerator Error: Return value type does not match function return type.");
+            }
+        }
         builder.CreateRet(retVal);
         return true;
     }
@@ -451,7 +450,7 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
 }
 
 //
-// generateExpression: standard expression IR generation
+// generateExpression: Standard expression IR generation.
 //
 Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
@@ -556,7 +555,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
                 throw runtime_error("CodeGenerator Error: '" + id->name + "' is not an alloca instruction.");
             }
         }
-        // Otherwise, try to find a global variable.
+        // Otherwise, try to resolve as a global variable.
         GlobalVariable* gVar = module->getGlobalVariable(id->name);
         if (gVar) {
             return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());

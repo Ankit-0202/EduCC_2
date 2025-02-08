@@ -331,24 +331,21 @@ ExpressionPtr Parser::parseExpression() {
 
 ExpressionPtr Parser::parseAssignment() {
     ExpressionPtr expr = parseLogicalOr();
-    // Check for compound assignment tokens.
     if (!isAtEnd() &&
         (peek().type == TokenType::OP_PLUS_ASSIGN ||
          peek().type == TokenType::OP_MINUS_ASSIGN ||
          peek().type == TokenType::OP_MULTIPLY_ASSIGN ||
          peek().type == TokenType::OP_DIVIDE_ASSIGN)) {
-         Token opToken = advance(); // Consume the compound assignment token.
+         Token opToken = advance();
          auto identifier = std::dynamic_pointer_cast<Identifier>(expr);
          if (!identifier) {
-             error("Invalid compound assignment target");
+              error("Invalid compound assignment target");
          }
          ExpressionPtr rhs = parseAssignment();
-         // For compound assignment, rewrite "E op= F" as "E = E op F".
-         std::string op = opToken.lexeme.substr(0, 1); // extract the operator character.
+         std::string op = opToken.lexeme.substr(0, 1);
          ExpressionPtr binaryExpr = std::make_shared<BinaryExpression>(op, expr, rhs);
          return std::make_shared<Assignment>(identifier->name, binaryExpr);
     }
-    // Check for simple assignment.
     else if (match(TokenType::OP_ASSIGN)) {
          auto identifier = std::dynamic_pointer_cast<Identifier>(expr);
          if (!identifier) {
@@ -431,21 +428,21 @@ ExpressionPtr Parser::parseUnary() {
     return parsePostfix();
 }
 
-// NEW: parsePostfix() handles primary expressions and any following postfix "++" or "--"
+// NEW: parsePostfix() handles primary expressions and postfix "++"/"--"
 ExpressionPtr Parser::parsePostfix() {
     ExpressionPtr expr = parsePrimary();
     while (!isAtEnd()) {
         if (current + 1 < tokens.size() &&
             tokens[current].type == TokenType::OP_PLUS &&
             tokens[current + 1].type == TokenType::OP_PLUS) {
-            advance(); // consume first OP_PLUS
-            advance(); // consume second OP_PLUS
+            advance();
+            advance();
             expr = std::make_shared<PostfixExpression>(expr, "++");
         } else if (current + 1 < tokens.size() &&
                    tokens[current].type == TokenType::OP_MINUS &&
                    tokens[current + 1].type == TokenType::OP_MINUS) {
-            advance(); // consume first OP_MINUS
-            advance(); // consume second OP_MINUS
+            advance();
+            advance();
             expr = std::make_shared<PostfixExpression>(expr, "--");
         } else {
             break;
@@ -454,6 +451,7 @@ ExpressionPtr Parser::parsePostfix() {
     return expr;
 }
 
+// ...
 ExpressionPtr Parser::parsePrimary() {
     if (match(TokenType::LITERAL_INT)) {
         int value = std::stoi(tokens[current - 1].lexeme);
@@ -461,6 +459,10 @@ ExpressionPtr Parser::parsePrimary() {
     }
     if (match(TokenType::LITERAL_FLOAT)) {
         float value = std::stof(tokens[current - 1].lexeme);
+        return std::make_shared<Literal>(value);
+    }
+    if (match(TokenType::LITERAL_DOUBLE)) {
+        double value = std::stod(tokens[current - 1].lexeme);
         return std::make_shared<Literal>(value);
     }
     if (match(TokenType::LITERAL_CHAR)) {
@@ -494,7 +496,7 @@ ExpressionPtr Parser::parsePrimary() {
         return expr;
     }
     error("Expected expression");
-    return nullptr; // Unreachable
+    return nullptr;
 }
 
-#endif // PARSER_CPP
+#endif

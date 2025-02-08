@@ -6,7 +6,7 @@
 #include <cctype>
 #include <stdexcept>
 
-// Enumeration of possible token types
+// Enumeration of possible token types.
 enum class TokenType {
     // Keywords
     KW_INT,
@@ -25,18 +25,18 @@ enum class TokenType {
     OP_MULTIPLY,
     OP_DIVIDE,
     OP_ASSIGN,
-    OP_PLUS_ASSIGN,      // +=
-    OP_MINUS_ASSIGN,     // -=
-    OP_MULTIPLY_ASSIGN,  // *=
-    OP_DIVIDE_ASSIGN,    // /=
+    OP_PLUS_ASSIGN,
+    OP_MINUS_ASSIGN,
+    OP_MULTIPLY_ASSIGN,
+    OP_DIVIDE_ASSIGN,
     OP_EQUAL,
     OP_NOT_EQUAL,
     OP_LESS,
     OP_GREATER,
     OP_LESS_EQUAL,
     OP_GREATER_EQUAL,
-    OP_LOGICAL_AND,  // &&
-    OP_LOGICAL_OR,   // ||
+    OP_LOGICAL_AND,
+    OP_LOGICAL_OR,
     // Delimiters
     DELIM_SEMICOLON,
     DELIM_COMMA,
@@ -46,7 +46,8 @@ enum class TokenType {
     DELIM_RBRACE,
     // Literals
     LITERAL_INT,
-    LITERAL_FLOAT,
+    LITERAL_FLOAT,    // with trailing f/F
+    LITERAL_DOUBLE,   // without f suffix (default for decimals)
     LITERAL_CHAR,
     // Identifier
     IDENTIFIER,
@@ -56,7 +57,7 @@ enum class TokenType {
     UNKNOWN
 };
 
-// Structure to represent a token
+// Structure to represent a token.
 struct Token {
     TokenType type;
     std::string lexeme;
@@ -64,7 +65,6 @@ struct Token {
     int column;
 };
 
-// Lexer class
 class Lexer {
 public:
     Lexer(const std::string& source);
