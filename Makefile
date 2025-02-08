@@ -187,8 +187,13 @@ test-verbose: all create_test_output_dir
 ###############################################################################
 
 run: all
-	@echo "Running $(MAIN_TARGET) on $(firstword $(MAKECMDGOALS))..."
-	@$(MAIN_TARGET) $(firstword $(MAKECMDGOALS))
+	@clear
+	@ARGS=$(filter-out run,$(MAKECMDGOALS)); \
+	if [ -z "$$ARGS" ]; then \
+	  echo "Usage: make run <path/to/file.c>"; exit 1; \
+	else \
+	  echo "Running $(MAIN_TARGET) on $$ARGS..." && $(MAIN_TARGET) $$ARGS; \
+	fi
 
 ###############################################################################
 # Copy Source Code to Clipboard (macOS: pbcopy)
