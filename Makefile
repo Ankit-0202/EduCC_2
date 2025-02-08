@@ -1,74 +1,118 @@
+###############################################################################
 # Makefile for EduCC
+###############################################################################
 
-# Compiler and flags
-CXX := clang++
-CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -Iinclude -I/opt/homebrew/Cellar/llvm/19.1.7/include -I/opt/homebrew/opt/llvm/include -g
+# Compiler and Flags
+CXX      := clang++
+LLVM_CXXFLAGS := $(shell llvm-config --cxxflags)
+LLVM_LIBS     := $(shell llvm-config --libs)
+LLVM_LIBDIR   := $(shell llvm-config --libdir)
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -g $(LLVM_CXXFLAGS)
+
+# Archiver
+AR       := ar
 
 # Directories
-SRC_DIR := src
-INC_DIR := include
-BUILD_DIR := build
-TEST_DIR := tests
-TEST_OUTPUT_DIR := test_output
+ROOT_DIR           := $(shell pwd)
+PREPROCESSOR_DIR   := preprocessor
+COMPILER_DIR       := compiler
+TEST_DIR           := tests
+BUILD_DIR          := build
+PREPROC_BUILD      := $(BUILD_DIR)/preprocessor
+COMPILER_BUILD     := $(BUILD_DIR)/compiler
+TEST_OUTPUT_DIR    := test_output
 
-# Source and Object Files
-SRCS := $(wildcard $(SRC_DIR)/*.cpp)
-OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
+# Preprocessor Sources & Headers
+PREPROC_SRC     := $(wildcard $(PREPROCESSOR_DIR)/src/*.cpp)
+PREPROC_HEADERS := $(wildcard $(PREPROCESSOR_DIR)/include/*.h)
+PREPROC_FILES   := $(PREPROC_SRC) $(PREPROC_HEADERS)
+PREPROC_OBJ     := $(patsubst $(PREPROCESSOR_DIR)/src/%.cpp, $(PREPROC_BUILD)/%.o, $(PREPROC_SRC))
+PREPROC_INCLUDE := -I$(PREPROCESSOR_DIR)/include
+PREPROC_TARGET  := $(PREPROC_BUILD)/libpreprocessor.a
 
-# Target Executable
-TARGET := C99Compiler
-TARGET_PATH := $(BUILD_DIR)/$(TARGET)
+# Compiler Sources & Headers
+COMPILER_SRC     := $(wildcard $(COMPILER_DIR)/src/*.cpp)
+COMPILER_HEADERS := $(wildcard $(COMPILER_DIR)/include/*.h)
+COMPILER_FILES   := $(COMPILER_SRC) $(COMPILER_HEADERS)
+COMPILER_OBJ     := $(patsubst $(COMPILER_DIR)/src/%.cpp, $(COMPILER_BUILD)/%.o, $(COMPILER_SRC))
+COMPILER_INCLUDE := -I$(COMPILER_DIR)/include
+COMPILER_TARGET  := $(COMPILER_BUILD)/libcompiler.a
 
-# Test settings
-LLFILE := output.ll
-OBJFILE := output.o
-OUR_EXE := our_executable
-NATIVE_CC := gcc
-GCC_EXE := gcc_executable
+# Main executable (links main.cpp with preprocessor and compiler)
+MAIN_SRC    := main.cpp
+MAIN_TARGET := $(BUILD_DIR)/educc
 
-# Allow a test file to be passed as a parameter to the run target:
-TEST_FILE := $(firstword $(filter-out run,$(MAKECMDGOALS)))
-ifneq ($(strip $(TEST_FILE)),)
-  $(eval .DEFAULT_GOAL := run)
-endif
+# LLVM & GCC Settings for tests
+LLFILE     := output.ll
+OBJFILE    := output.o
+OUR_EXE    := our_executable
+NATIVE_CC  := gcc
+GCC_EXE    := gcc_executable
+OUR_OUTPUT := our_output.txt
+GCC_OUTPUT := gcc_output.txt
 
-.PHONY: all copy clean test test-verbose run create_test_output_dir
+.PHONY: all clean test test-verbose run create_test_output_dir copy
 
-# Default target: build the compiler
-all: $(TARGET_PATH)
+###############################################################################
+# Build Everything
+###############################################################################
 
-# Create build directory if needed
+all: $(MAIN_TARGET)  ## 'all' builds the final executable (educc)
+
+###############################################################################
+# Build Preprocessor Library
+###############################################################################
+
+$(PREPROC_BUILD):
+	mkdir -p $(PREPROC_BUILD)
+
+$(PREPROC_BUILD)/%.o: $(PREPROCESSOR_DIR)/src/%.cpp | $(PREPROC_BUILD)
+	$(CXX) $(CXXFLAGS) $(PREPROC_INCLUDE) -c $< -o $@
+
+$(PREPROC_TARGET): $(PREPROC_OBJ)
+	$(AR) rcs $@ $^
+
+###############################################################################
+# Build Compiler Library
+###############################################################################
+
+$(COMPILER_BUILD):
+	mkdir -p $(COMPILER_BUILD)
+
+$(COMPILER_BUILD)/%.o: $(COMPILER_DIR)/src/%.cpp | $(COMPILER_BUILD)
+	$(CXX) $(CXXFLAGS) $(COMPILER_INCLUDE) -c $< -o $@
+
+$(COMPILER_TARGET): $(COMPILER_OBJ)
+	$(AR) rcs $@ $^
+
+###############################################################################
+# Build Main Executable
+###############################################################################
+
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Link object files to create the compiler executable
-$(TARGET_PATH): $(BUILD_DIR) $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $(TARGET_PATH) $(OBJS) `llvm-config --cxxflags --ldflags --system-libs --libs all`
+$(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -Icompiler/include -Ipreprocessor/include -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
 
-# Compile each source file into an object file
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+###############################################################################
+# Testing Setup & Execution
+###############################################################################
 
-# Ensure test_output directory exists and matches the structure of tests/
 create_test_output_dir:
 	@mkdir -p $(TEST_OUTPUT_DIR)
 	@find $(TEST_DIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
 
-# Clean build artifacts
-clean:
-	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
-	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) our_output.txt gcc_output.txt
-
-# Recursive Test target: Runs tests in all subdirectories, storing results in test_output/
-test: $(TARGET_PATH) create_test_output_dir
-	clear
-	@echo "Running tests recursively..."
+# Standard Test Mode: Runs all .c tests (compares our output against gcc)
+test: all create_test_output_dir
+	@clear
+	@echo "Running tests..."
 	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
 	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
 	    echo "-----------------------------------------------------" >> $$output_file; \
 	    echo "Testing $$testfile" >> $$output_file; \
-	    $(TARGET_PATH) $$testfile > /dev/null 2>&1; \
+	    $(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
 	    if [ ! -f $(LLFILE) ]; then \
 	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
 	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
@@ -89,24 +133,17 @@ test: $(TARGET_PATH) create_test_output_dir
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
 	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - Output mismatch" >&2; \
 	    else \
 	        echo "Test $$testfile passed." >> $$output_file; \
 	    fi; \
 	done
-
-	# Aggregate results from subdirectories to parent directories
-	@find $(TEST_OUTPUT_DIR) -type d | while read -r dir; do \
-	    cat $$dir/*.txt > $$dir/tests_summary.txt 2>/dev/null || true; \
-	done
-
 	@echo "-----------------------------------------------------"; \
-	echo "All tests executed. Check test_output/ for results."
+	echo "All tests executed. Check $(TEST_OUTPUT_DIR) for results."
 
-# Verbose test target: Runs tests and prints output to stdout
-test-verbose: $(TARGET_PATH) create_test_output_dir
-	clear
-	@echo "Running tests recursively in verbose mode..."
+# Verbose Test Mode: Prints output to stdout as well as saving test logs
+test-verbose: all create_test_output_dir
+	@clear
+	@echo "Running tests in verbose mode..."
 	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
 	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
@@ -114,7 +151,7 @@ test-verbose: $(TARGET_PATH) create_test_output_dir
 	    echo "Testing $$testfile"; \
 	    echo "-----------------------------------------------------" >> $$output_file; \
 	    echo "Testing $$testfile" >> $$output_file; \
-	    $(TARGET_PATH) $$testfile; \
+	    $(MAIN_TARGET) $$testfile; \
 	    if [ ! -f $(LLFILE) ]; then \
 	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
 	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
@@ -123,11 +160,11 @@ test-verbose: $(TARGET_PATH) create_test_output_dir
 	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
 	    clang $(OBJFILE) -o $(OUR_EXE); \
 	    echo "Running compiled executable..."; \
-	    ./$(OUR_EXE) | tee our_output.txt; \
+	    ./$(OUR_EXE) | tee $(OUR_OUTPUT); \
 	    our_ret=$$?; \
 	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
 	    echo "Running GCC-compiled executable..."; \
-	    ./$(GCC_EXE) | tee gcc_output.txt; \
+	    ./$(GCC_EXE) | tee $(GCC_OUTPUT); \
 	    gcc_ret=$$?; \
 	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" | tee -a $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
@@ -142,17 +179,50 @@ test-verbose: $(TARGET_PATH) create_test_output_dir
 	        echo "Test $$testfile passed." | tee -a $$output_file; \
 	    fi; \
 	done
-
 	@echo "-----------------------------------------------------"; \
 	echo "All tests executed in verbose mode. Check test_output/ for results."
 
+###############################################################################
+# Run Compiler on a Single File
+###############################################################################
 
-# Run target: Run compiler on a single test file provided on the command line.
-run: $(TARGET_PATH)
-	@echo "Running $(TARGET_PATH) on $(TEST_FILE)..."
-	@$(TARGET_PATH) $(TEST_FILE)
+run: all
+	@echo "Running $(MAIN_TARGET) on $(firstword $(MAKECMDGOALS))..."
+	@$(MAIN_TARGET) $(firstword $(MAKECMDGOALS))
 
-# Copy source files to clipboard
+###############################################################################
+# Copy Source Code to Clipboard (macOS: pbcopy)
+#
+# For each file copied, its relative path from the project root is printed
+# above its contents.
+###############################################################################
+
 copy:
-	@make clean
-	@find $(INC_DIR) $(SRC_DIR) $(TEST_DIR) -type f -exec cat {} + | pbcopy
+	@echo "Copying source files to clipboard..."
+	@( \
+		echo "### Main Program ###"; \
+		echo "$(MAIN_SRC)"; \
+		cat $(MAIN_SRC); \
+		echo ""; \
+		echo "### Preprocessor ###"; \
+		for file in $(PREPROC_FILES); do \
+			echo "$$file"; \
+			cat "$$file"; \
+			echo ""; \
+		done; \
+		echo "### Compiler ###"; \
+		for file in $(COMPILER_FILES); do \
+			echo "$$file"; \
+			cat "$$file"; \
+			echo ""; \
+		done; \
+	) | pbcopy
+	@echo "✅ All source files copied to clipboard!"
+
+###############################################################################
+# Clean Build Artifacts & Temporary Files
+###############################################################################
+
+clean:
+	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
+	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) $(OUR_OUTPUT) $(GCC_OUTPUT)
