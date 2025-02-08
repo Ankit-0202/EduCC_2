@@ -40,6 +40,12 @@ enum class TokenType {
     OP_GREATER_EQUAL,
     OP_LOGICAL_AND,
     OP_LOGICAL_OR,
+    // New Bitwise and Shift operators
+    OP_BITWISE_AND,
+    OP_BITWISE_OR,
+    OP_BITWISE_XOR,
+    OP_LEFT_SHIFT,
+    OP_RIGHT_SHIFT,
     // Delimiters
     DELIM_SEMICOLON,
     DELIM_COMMA,

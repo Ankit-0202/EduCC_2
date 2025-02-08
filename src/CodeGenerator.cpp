@@ -483,7 +483,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         Value* lhs = generateExpression(binExpr->left);
         Value* rhs = generateExpression(binExpr->right);
 
-        // If types differ, do simple int->float promotions
+        // If types differ, do simple int->float promotions (unchanged code)
         if (lhs->getType() != rhs->getType()) {
             if (lhs->getType()->isIntegerTy() && rhs->getType()->isFloatingPointTy()) {
                 lhs = builder.CreateSIToFP(lhs, rhs->getType(), "sitofp");
@@ -493,6 +493,8 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
                 throw runtime_error("CodeGenerator Error: Incompatible types in binary expression.");
             }
         }
+
+        // Arithmetic and logical operators
         if (binExpr->op == "+") {
             if (lhs->getType()->isFloatingPointTy())
                 return builder.CreateFAdd(lhs, rhs, "faddtmp");
@@ -543,7 +545,9 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
                 return builder.CreateFCmpONE(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpNE(lhs, rhs, "cmptmp");
-        } else if (binExpr->op == "&&") {
+        }
+        // Logical AND and OR are already handled elsewhere...
+        else if (binExpr->op == "&&") {
             if (!lhs->getType()->isIntegerTy(1))
                 lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0), "booltmp");
             if (!rhs->getType()->isIntegerTy(1))
@@ -555,10 +559,34 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             if (!rhs->getType()->isIntegerTy(1))
                 rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0), "booltmp");
             return builder.CreateOr(lhs, rhs, "ortmp");
-        } else {
+        }
+        // NEW: Bitwise AND operator.
+        else if (binExpr->op == "&") {
+            return builder.CreateAnd(lhs, rhs, "bitandtmp");
+        }
+        // NEW: Bitwise XOR operator.
+        else if (binExpr->op == "^") {
+            return builder.CreateXor(lhs, rhs, "bitxortmp");
+        }
+        // NEW: Bitwise OR operator.
+        else if (binExpr->op == "|") {
+            return builder.CreateOr(lhs, rhs, "bitor_tmp");
+        }
+        // NEW: Left shift operator.
+        else if (binExpr->op == "<<") {
+            return builder.CreateShl(lhs, rhs, "shltmp");
+        }
+        // NEW: Right shift operator.
+        else if (binExpr->op == ">>") {
+            // For signed integers, you might want to use CreateAShr (arithmetic shift)
+            return builder.CreateAShr(lhs, rhs, "shrtmp");
+        }
+        else {
             throw runtime_error("CodeGenerator Error: Unsupported binary operator '" + binExpr->op + "'.");
         }
-    } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+    }
+    // (Handle literals, identifiers, etc. as before)
+    else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
         if (std::holds_alternative<char>(lit->value))
             return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
         else if (std::holds_alternative<bool>(lit->value))
@@ -569,8 +597,10 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             return ConstantFP::get(Type::getFloatTy(context), std::get<float>(lit->value));
         else if (std::holds_alternative<double>(lit->value))
             return ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
-    } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-        // First try to resolve as a local variable.
+    }
+    // (Handling of Identifier, PostfixExpression, Assignment, FunctionCall remains unchanged)
+    else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+        // Look up the identifier in the local and global symbol tables (unchanged)
         auto it = localVariables.find(id->name);
         if (it != localVariables.end()) {
             Value* varPtr = it->second;
@@ -652,6 +682,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     }
     throw runtime_error("CodeGenerator Error: Unsupported expression type in generateExpression().");
 }
+
 
 //
 // For local var declarations like "int x = 5;"

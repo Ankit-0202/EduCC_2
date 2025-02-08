@@ -347,6 +347,10 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
         return std::make_shared<MultiVariableDeclarationStatement>(decls);
 }
 
+// =====================================================
+// Expression parsing productions with new bitwise/shift support
+// =====================================================
+
 ExpressionPtr Parser::parseExpression() {
     return parseAssignment();
 }
@@ -379,6 +383,7 @@ ExpressionPtr Parser::parseAssignment() {
     return expr;
 }
 
+// Logical OR (||)
 ExpressionPtr Parser::parseLogicalOr() {
     ExpressionPtr expr = parseLogicalAnd();
     while (match(TokenType::OP_LOGICAL_OR)) {
@@ -390,9 +395,46 @@ ExpressionPtr Parser::parseLogicalOr() {
     return expr;
 }
 
+// Logical AND (&&)
 ExpressionPtr Parser::parseLogicalAnd() {
-    ExpressionPtr expr = parseEquality();
+    ExpressionPtr expr = parseBitwiseOr();
     while (match(TokenType::OP_LOGICAL_AND)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseBitwiseOr();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
+// Bitwise OR (|)
+ExpressionPtr Parser::parseBitwiseOr() {
+    ExpressionPtr expr = parseBitwiseXor();
+    while (match(TokenType::OP_BITWISE_OR)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseBitwiseXor();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
+// Bitwise XOR (^)
+ExpressionPtr Parser::parseBitwiseXor() {
+    ExpressionPtr expr = parseBitwiseAnd();
+    while (match(TokenType::OP_BITWISE_XOR)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseBitwiseAnd();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
+// Bitwise AND (&)
+ExpressionPtr Parser::parseBitwiseAnd() {
+    ExpressionPtr expr = parseEquality();
+    while (match(TokenType::OP_BITWISE_AND)) {
         Token oper = tokens[current - 1];
         std::string op = oper.lexeme;
         ExpressionPtr right = parseEquality();
@@ -401,21 +443,35 @@ ExpressionPtr Parser::parseLogicalAnd() {
     return expr;
 }
 
+// Equality (==, !=)
 ExpressionPtr Parser::parseEquality() {
-    ExpressionPtr expr = parseComparison();
+    ExpressionPtr expr = parseRelational();
     while (match(TokenType::OP_EQUAL) || match(TokenType::OP_NOT_EQUAL)) {
         Token oper = tokens[current - 1];
         std::string op = oper.lexeme;
-        ExpressionPtr right = parseComparison();
+        ExpressionPtr right = parseRelational();
         expr = std::make_shared<BinaryExpression>(op, expr, right);
     }
     return expr;
 }
 
-ExpressionPtr Parser::parseComparison() {
-    ExpressionPtr expr = parseTerm();
+// Relational (<, <=, >, >=)
+ExpressionPtr Parser::parseRelational() {
+    ExpressionPtr expr = parseShift();
     while (match(TokenType::OP_LESS) || match(TokenType::OP_LESS_EQUAL) ||
            match(TokenType::OP_GREATER) || match(TokenType::OP_GREATER_EQUAL)) {
+        Token oper = tokens[current - 1];
+        std::string op = oper.lexeme;
+        ExpressionPtr right = parseShift();
+        expr = std::make_shared<BinaryExpression>(op, expr, right);
+    }
+    return expr;
+}
+
+// Shift (<<, >>)
+ExpressionPtr Parser::parseShift() {
+    ExpressionPtr expr = parseTerm();
+    while (match(TokenType::OP_LEFT_SHIFT) || match(TokenType::OP_RIGHT_SHIFT)) {
         Token oper = tokens[current - 1];
         std::string op = oper.lexeme;
         ExpressionPtr right = parseTerm();
@@ -424,6 +480,7 @@ ExpressionPtr Parser::parseComparison() {
     return expr;
 }
 
+// Term (additive +, -)
 ExpressionPtr Parser::parseTerm() {
     ExpressionPtr expr = parseFactor();
     while (match(TokenType::OP_PLUS) || match(TokenType::OP_MINUS)) {
@@ -435,6 +492,7 @@ ExpressionPtr Parser::parseTerm() {
     return expr;
 }
 
+// Factor (multiplicative *, /)
 ExpressionPtr Parser::parseFactor() {
     ExpressionPtr expr = parseUnary();
     while (match(TokenType::OP_MULTIPLY) || match(TokenType::OP_DIVIDE)) {
@@ -446,10 +504,12 @@ ExpressionPtr Parser::parseFactor() {
     return expr;
 }
 
+// Unary (currently just defers to postfix)
 ExpressionPtr Parser::parseUnary() {
     return parsePostfix();
 }
 
+// Postfix (handles postfix ++/--)
 ExpressionPtr Parser::parsePostfix() {
     ExpressionPtr expr = parsePrimary();
     while (!isAtEnd()) {
@@ -472,6 +532,7 @@ ExpressionPtr Parser::parsePostfix() {
     return expr;
 }
 
+// Primary (literals, identifiers, grouping)
 ExpressionPtr Parser::parsePrimary() {
     if (match(TokenType::LITERAL_INT)) {
         int value = std::stoi(tokens[current - 1].lexeme);

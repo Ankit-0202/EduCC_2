@@ -40,16 +40,22 @@ private:
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();
 
+    // Expression parsing productions.
     ExpressionPtr parseExpression();
     ExpressionPtr parseAssignment();
+
+    // New productions for bitwise/shift operators.
     ExpressionPtr parseLogicalOr();
     ExpressionPtr parseLogicalAnd();
+    ExpressionPtr parseBitwiseOr();
+    ExpressionPtr parseBitwiseXor();
+    ExpressionPtr parseBitwiseAnd();
     ExpressionPtr parseEquality();
-    ExpressionPtr parseComparison();
+    ExpressionPtr parseRelational();
+    ExpressionPtr parseShift();
     ExpressionPtr parseTerm();
     ExpressionPtr parseFactor();
     ExpressionPtr parseUnary();
-    // Declaration for parsePostfix() to handle postfix operators (e.g., i++ or i--)
     ExpressionPtr parsePostfix();
     ExpressionPtr parsePrimary();
 };
