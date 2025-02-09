@@ -26,8 +26,6 @@ std::string Preprocessor::readFile(const std::string &path) {
 }
 
 std::string Preprocessor::processIncludes(const std::string &source, const std::string &currentFile) {
-    // Very basic implementation: scan each line; if it starts with "#include",
-    // locate the header and recursively process it.
     std::istringstream iss(source);
     std::ostringstream oss;
     std::string line;
@@ -42,11 +40,33 @@ std::string Preprocessor::processIncludes(const std::string &source, const std::
                 throw std::runtime_error("Preprocessor Error: Malformed #include directive: " + line);
             std::string headerName = trimmed.substr(start + 1, end - start - 1);
             bool isSystem = (trimmed[start] == '<');
-            // Use the IncludeProcessor to locate and read the header.
-            auto headerPathOpt = includeProcessor.locateHeader(headerName, isSystem);
-            if (!headerPathOpt.has_value())
+            
+            // Build a list of directories to search.
+            std::vector<std::string> searchDirs;
+            if (isSystem) {
+                searchDirs = {"/usr/include", "/usr/local/include"};
+            } else {
+                // For quoted includes, first search the directory of the current file…
+                fs::path currentDir = fs::path(currentFile).parent_path();
+                if (!currentDir.empty())
+                    searchDirs.push_back(currentDir.string());
+                // …then fall back to the current working directory.
+                searchDirs.push_back(".");
+            }
+            
+            // Look for the header in the search directories.
+            std::optional<std::string> headerPath;
+            for (const auto &dir : searchDirs) {
+                fs::path trial = fs::path(dir) / headerName;
+                if (fs::exists(trial) && fs::is_regular_file(trial)) {
+                    headerPath = fs::absolute(trial).string();
+                    break;
+                }
+            }
+            if (!headerPath.has_value())
                 throw std::runtime_error("Preprocessor Error: Cannot locate header: " + headerName);
-            std::string headerContents = processFile(headerPathOpt.value());
+            
+            std::string headerContents = processFile(headerPath.value());
             oss << headerContents << "\n";
         } else {
             oss << line << "\n";
@@ -54,6 +74,7 @@ std::string Preprocessor::processIncludes(const std::string &source, const std::
     }
     return oss.str();
 }
+
 
 std::string Preprocessor::processConditionals(const std::string &source) {
     ConditionalProcessor condProc;

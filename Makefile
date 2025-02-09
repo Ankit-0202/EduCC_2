@@ -14,13 +14,21 @@ AR       := ar
 
 # Directories
 ROOT_DIR           := $(shell pwd)
+COMMON_DIR         := common
 PREPROCESSOR_DIR   := preprocessor
 COMPILER_DIR       := compiler
 TEST_DIR           := tests
 BUILD_DIR          := build
+COMMON_BUILD       := $(BUILD_DIR)/common
 PREPROC_BUILD      := $(BUILD_DIR)/preprocessor
 COMPILER_BUILD     := $(BUILD_DIR)/compiler
 TEST_OUTPUT_DIR    := test_output
+
+# Common Sources & Headers
+COMMON_SRC     := $(wildcard $(COMMON_DIR)/src/*.cpp)
+COMMON_OBJ     := $(patsubst $(COMMON_DIR)/src/%.cpp, $(COMMON_BUILD)/%.o, $(COMMON_SRC))
+COMMON_INCLUDE := -I$(COMMON_DIR)/include
+COMMON_TARGET  := $(COMMON_BUILD)/libcommon.a
 
 # Preprocessor Sources & Headers
 PREPROC_SRC     := $(wildcard $(PREPROCESSOR_DIR)/src/*.cpp)
@@ -38,7 +46,7 @@ COMPILER_OBJ     := $(patsubst $(COMPILER_DIR)/src/%.cpp, $(COMPILER_BUILD)/%.o,
 COMPILER_INCLUDE := -I$(COMPILER_DIR)/include
 COMPILER_TARGET  := $(COMPILER_BUILD)/libcompiler.a
 
-# Main executable (links main.cpp with preprocessor and compiler)
+# Main executable (links main.cpp with preprocessor, compiler & common libraries)
 MAIN_SRC    := main.cpp
 MAIN_TARGET := $(BUILD_DIR)/educc
 
@@ -60,6 +68,19 @@ GCC_OUTPUT := gcc_output.txt
 all: $(MAIN_TARGET)  ## 'all' builds the final executable (educc)
 
 ###############################################################################
+# Build Common Library
+###############################################################################
+
+$(COMMON_BUILD):
+	mkdir -p $(COMMON_BUILD)
+
+$(COMMON_BUILD)/%.o: $(COMMON_DIR)/src/%.cpp | $(COMMON_BUILD)
+	$(CXX) $(CXXFLAGS) $(COMMON_INCLUDE) -c $< -o $@
+
+$(COMMON_TARGET): $(COMMON_OBJ)
+	$(AR) rcs $@ $^
+
+###############################################################################
 # Build Preprocessor Library
 ###############################################################################
 
@@ -67,7 +88,7 @@ $(PREPROC_BUILD):
 	mkdir -p $(PREPROC_BUILD)
 
 $(PREPROC_BUILD)/%.o: $(PREPROCESSOR_DIR)/src/%.cpp | $(PREPROC_BUILD)
-	$(CXX) $(CXXFLAGS) $(PREPROC_INCLUDE) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PREPROC_INCLUDE) $(COMMON_INCLUDE) -c $< -o $@
 
 $(PREPROC_TARGET): $(PREPROC_OBJ)
 	$(AR) rcs $@ $^
@@ -80,7 +101,7 @@ $(COMPILER_BUILD):
 	mkdir -p $(COMPILER_BUILD)
 
 $(COMPILER_BUILD)/%.o: $(COMPILER_DIR)/src/%.cpp | $(COMPILER_BUILD)
-	$(CXX) $(CXXFLAGS) $(COMPILER_INCLUDE) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(COMPILER_INCLUDE) $(COMMON_INCLUDE) -c $< -o $@
 
 $(COMPILER_TARGET): $(COMPILER_OBJ)
 	$(AR) rcs $@ $^
@@ -92,8 +113,8 @@ $(COMPILER_TARGET): $(COMPILER_OBJ)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -Icompiler/include -Ipreprocessor/include -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
+$(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -Icompiler/include -Ipreprocessor/include $(COMMON_INCLUDE) -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
 
 ###############################################################################
 # Testing Setup & Execution
@@ -197,9 +218,6 @@ run: all
 
 ###############################################################################
 # Copy Source Code to Clipboard (macOS: pbcopy)
-#
-# For each file copied, its relative path from the project root is printed
-# above its contents.
 ###############################################################################
 
 copy:

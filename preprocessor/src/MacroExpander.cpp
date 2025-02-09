@@ -1,4 +1,5 @@
 #include "MacroExpander.hpp"
+#include "Lexer.hpp"
 #include <sstream>
 #include <regex>
 #include <stdexcept>
@@ -11,6 +12,18 @@ static std::string trim(const std::string &s) {
     return (start == std::string::npos) ? "" : s.substr(start, end - start + 1);
 }
 
+// Helper: join a vector of tokens into a string (tokens separated by a space),
+// but skip tokens with type EOF_TOKEN.
+static std::string tokensToString(const std::vector<Token>& tokens) {
+    std::ostringstream oss;
+    for (const auto &tok : tokens) {
+        if (tok.type == TokenType::EOF_TOKEN)
+            continue;
+        oss << tok.lexeme << " ";
+    }
+    return oss.str();
+}
+
 MacroExpander::MacroExpander() {
     // Initially empty.
 }
@@ -19,13 +32,12 @@ void MacroExpander::processDirective(const std::string &line) {
     std::string trimmed = trim(line);
     if (trimmed.compare(0, 7, "#define") == 0) {
         std::string rest = trim(trimmed.substr(7));
-        // Extract the macro name.
+        // Extract macro name.
         size_t nameEnd = rest.find_first_of(" \t(");
         if (nameEnd == std::string::npos)
             throw std::runtime_error("Invalid macro definition: " + line);
         std::string macroName = rest.substr(0, nameEnd);
         rest = trim(rest.substr(nameEnd));
-
         Macro macro;
         if (!rest.empty() && rest[0] == '(') {
             // Function-like macro.
@@ -34,7 +46,7 @@ void MacroExpander::processDirective(const std::string &line) {
             if (closingParen == std::string::npos)
                 throw std::runtime_error("Missing ')' in macro definition: " + line);
             std::string paramsStr = rest.substr(1, closingParen - 1);
-            // Split parameters by comma.
+            // Split parameters by commas.
             std::istringstream iss(paramsStr);
             std::string param;
             while (std::getline(iss, param, ',')) {
@@ -50,69 +62,102 @@ void MacroExpander::processDirective(const std::string &line) {
         std::string macroName = trim(trimmed.substr(6));
         macros.erase(macroName);
     }
-    // (Additional directives such as #ifdef/#if etc. could be handled here.)
 }
 
-std::vector<std::string> MacroExpander::splitArguments(const std::string &argString) {
-    // Very naive splitting on commas; a full solution would need to handle nested parentheses.
-    std::vector<std::string> args;
-    std::istringstream iss(argString);
-    std::string arg;
-    while (std::getline(iss, arg, ',')) {
-        args.push_back(trim(arg));
-    }
-    return args;
-}
+//
+// expandTokens: Token–based recursive macro expansion.
+//
+std::string MacroExpander::expandTokens(const std::string &source) {
+    Lexer lexer(source);
+    std::vector<Token> tokens = lexer.tokenize();
+    // Remove the EOF token.
+    if (!tokens.empty() && tokens.back().type == TokenType::EOF_TOKEN)
+        tokens.pop_back();
+    std::vector<Token> output;
 
-std::string MacroExpander::expandLine(const std::string &line) {
-    std::string result = line;
-    // First, replace object-like macros.
-    for (const auto &kv : macros) {
-        const std::string &name = kv.first;
-        const Macro &macro = kv.second;
-        if (!macro.isFunctionLike) {
-            // Use word boundaries.
-            std::regex word("\\b" + name + "\\b");
-            result = std::regex_replace(result, word, macro.replacement);
-        }
-    }
-    // Now, handle function-like macros.
-    // (This implementation is naïve and does not handle nested calls or complex argument parsing.)
-    for (const auto &kv : macros) {
-        const std::string &name = kv.first;
-        const Macro &macro = kv.second;
-        if (macro.isFunctionLike) {
-            std::regex funcRegex("\\b" + name + "\\s*\\(([^)]*)\\)");
-            std::smatch match;
-            while (std::regex_search(result, match, funcRegex)) {
-                std::string argsStr = match[1].str();
-                std::vector<std::string> args = splitArguments(argsStr);
-                if (args.size() != macro.parameters.size()) {
-                    throw std::runtime_error("Macro " + name + " expects " +
-                                             std::to_string(macro.parameters.size()) +
-                                             " arguments, but got " +
-                                             std::to_string(args.size()));
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        Token token = tokens[i];
+        if (token.type == TokenType::IDENTIFIER && macros.find(token.lexeme) != macros.end()) {
+            const Macro &macro = macros[token.lexeme];
+            if (macro.isFunctionLike) {
+                // Function-like macro must be followed by '('.
+                if (i + 1 < tokens.size() && tokens[i+1].type == TokenType::DELIM_LPAREN) {
+                    size_t j = i + 1; // j points to '('
+                    int parenLevel = 0;
+                    std::vector<std::vector<Token>> argsTokens;
+                    std::vector<Token> currentArg;
+                    bool finished = false;
+                    for (; j < tokens.size(); ++j) {
+                        if (tokens[j].type == TokenType::DELIM_LPAREN) {
+                            parenLevel++;
+                            // Do not add the very first '(' to arguments.
+                            if (parenLevel > 1)
+                                currentArg.push_back(tokens[j]);
+                        } else if (tokens[j].type == TokenType::DELIM_RPAREN) {
+                            parenLevel--;
+                            if (parenLevel == 0) {
+                                if (!currentArg.empty())
+                                    argsTokens.push_back(currentArg);
+                                finished = true;
+                                break;
+                            } else {
+                                currentArg.push_back(tokens[j]);
+                            }
+                        } else if (tokens[j].type == TokenType::DELIM_COMMA && parenLevel == 1) {
+                            argsTokens.push_back(currentArg);
+                            currentArg.clear();
+                        } else {
+                            currentArg.push_back(tokens[j]);
+                        }
+                    }
+                    if (!finished)
+                        throw std::runtime_error("Unmatched '(' in macro invocation for macro " + token.lexeme);
+                    if (argsTokens.size() != macro.parameters.size())
+                        throw std::runtime_error("Macro " + token.lexeme + " expects " +
+                            std::to_string(macro.parameters.size()) + " arguments, but got " +
+                            std::to_string(argsTokens.size()));
+                    // Convert each argument token vector to a string.
+                    std::vector<std::string> argStrings;
+                    for (const auto &argVec : argsTokens)
+                        argStrings.push_back(tokensToString(argVec));
+                    // Perform parameter substitution.
+                    std::string expansion = macro.replacement;
+                    for (size_t k = 0; k < macro.parameters.size(); ++k) {
+                        std::regex paramRe("\\b" + macro.parameters[k] + "\\b", std::regex_constants::ECMAScript);
+                        expansion = std::regex_replace(expansion, paramRe, argStrings[k]);
+                    }
+                    // Recursively expand the result.
+                    std::string expandedText = expandTokens(expansion);
+                    // Tokenize the expanded text and append its tokens.
+                    Lexer newLexer(expandedText);
+                    std::vector<Token> newTokens = newLexer.tokenize();
+                    if (!newTokens.empty() && newTokens.back().type == TokenType::EOF_TOKEN)
+                        newTokens.pop_back();
+                    output.insert(output.end(), newTokens.begin(), newTokens.end());
+                    i = j; // Skip over macro invocation tokens.
+                    continue;
+                } else {
+                    // If not followed by '(', leave token unchanged.
+                    output.push_back(token);
                 }
-                std::string expanded = macro.replacement;
-                // For each parameter, substitute its occurrence.
-                for (size_t i = 0; i < macro.parameters.size(); ++i) {
-                    std::regex paramRegex("\\b" + macro.parameters[i] + "\\b");
-                    expanded = std::regex_replace(expanded, paramRegex, args[i]);
-                }
-                result.replace(match.position(0), match.length(0), expanded);
+            } else {
+                // Object-like macro: expand replacement text recursively.
+                std::string expansion = macro.replacement;
+                std::string expandedText = expandTokens(expansion);
+                Lexer newLexer(expandedText);
+                std::vector<Token> newTokens = newLexer.tokenize();
+                if (!newTokens.empty() && newTokens.back().type == TokenType::EOF_TOKEN)
+                    newTokens.pop_back();
+                output.insert(output.end(), newTokens.begin(), newTokens.end());
             }
+        } else {
+            // Not a macro invocation; copy token.
+            output.push_back(token);
         }
     }
-    return result;
+    return tokensToString(output);
 }
 
 std::string MacroExpander::expand(const std::string &source) {
-    std::istringstream iss(source);
-    std::ostringstream oss;
-    std::string line;
-    while (std::getline(iss, line)) {
-        // For now, assume that any macro directives (e.g. "#define") have been processed
-        oss << expandLine(line) << "\n";
-    }
-    return oss.str();
+    return expandTokens(source);
 }

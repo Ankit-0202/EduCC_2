@@ -5,10 +5,10 @@
 #include <unordered_map>
 #include <vector>
 
-// Represents a macro definition.
+// Structure to hold a macro’s information.
 struct Macro {
     bool isFunctionLike;
-    std::vector<std::string> parameters; // Only used if function-like.
+    std::vector<std::string> parameters;
     std::string replacement;
 };
 
@@ -16,20 +16,17 @@ class MacroExpander {
 public:
     MacroExpander();
 
-    // Process a directive line (e.g. "#define ..." or "#undef ...")
+    // Process a preprocessor directive (e.g. "#define SQUARE(x) ((x)*(x))" or "#undef ...")
     void processDirective(const std::string &line);
 
     // Expand macros in the given source text.
     std::string expand(const std::string &source);
 
 private:
+    // Token–based helper: recursively expand macros in source text.
+    std::string expandTokens(const std::string &source);
+
     std::unordered_map<std::string, Macro> macros;
-
-    // Expand macros in a single line.
-    std::string expandLine(const std::string &line);
-
-    // Helper functions for function‐like macro expansion.
-    std::vector<std::string> splitArguments(const std::string &argString);
 };
 
 #endif // MACRO_EXPANDER_HPP

@@ -1,12 +1,8 @@
-#ifndef LEXER_HPP
-#define LEXER_HPP
+#ifndef TOKEN_HPP
+#define TOKEN_HPP
 
 #include <string>
-#include <vector>
-#include <cctype>
-#include <stdexcept>
 
-// Enumeration of possible token types.
 enum class TokenType {
     // Keywords
     KW_INT,
@@ -19,9 +15,9 @@ enum class TokenType {
     KW_ELSE,
     KW_WHILE,
     KW_FOR,
-    KW_SWITCH,    // NEW
-    KW_CASE,      // NEW
-    KW_DEFAULT,   // NEW
+    KW_SWITCH,
+    KW_CASE,
+    KW_DEFAULT,
     // Operators
     OP_PLUS,
     OP_MINUS,
@@ -40,7 +36,6 @@ enum class TokenType {
     OP_GREATER_EQUAL,
     OP_LOGICAL_AND,
     OP_LOGICAL_OR,
-    // New Bitwise and Shift operators
     OP_BITWISE_AND,
     OP_BITWISE_OR,
     OP_BITWISE_XOR,
@@ -53,21 +48,18 @@ enum class TokenType {
     DELIM_RPAREN,
     DELIM_LBRACE,
     DELIM_RBRACE,
-    DELIM_COLON, // for switch-case labels
+    DELIM_COLON,
     // Literals
     LITERAL_INT,
-    LITERAL_FLOAT,    // with trailing f/F
-    LITERAL_DOUBLE,   // without f suffix (default for decimals)
+    LITERAL_FLOAT,
+    LITERAL_DOUBLE,
     LITERAL_CHAR,
-    // Identifier
+    // Identifiers, end-of-file, unknown.
     IDENTIFIER,
-    // End of File
     EOF_TOKEN,
-    // Unknown
     UNKNOWN
 };
 
-// Structure to represent a token.
 struct Token {
     TokenType type;
     std::string lexeme;
@@ -75,26 +67,4 @@ struct Token {
     int column;
 };
 
-// Lexer class.
-class Lexer {
-public:
-    Lexer(const std::string& source);
-    std::vector<Token> tokenize();
-
-private:
-    char peek() const;
-    char get();
-    void skipWhitespace();
-    Token identifier();
-    Token number();
-    Token character(); // For character literals.
-    Token opOrDelim();
-    bool isAtEnd() const;
-
-    std::string sourceCode;
-    size_t currentPos;
-    int line;
-    int column;
-};
-
-#endif // LEXER_HPP
+#endif // TOKEN_HPP

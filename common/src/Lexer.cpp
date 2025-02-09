@@ -2,6 +2,7 @@
 #include <sstream>
 #include <algorithm>
 #include <stdexcept>
+#include <cctype>
 
 // Constructor
 Lexer::Lexer(const std::string& source)
@@ -16,6 +17,12 @@ bool Lexer::isAtEnd() const {
 char Lexer::peek() const {
     if (isAtEnd()) return '\0';
     return sourceCode[currentPos];
+}
+
+// Peek the next character (after the current one) without consuming it.
+char Lexer::peekNext() const {
+    if (currentPos + 1 >= sourceCode.length()) return '\0';
+    return sourceCode[currentPos + 1];
 }
 
 // Consume and return the current character.
@@ -35,9 +42,9 @@ char Lexer::get() {
 void Lexer::skipWhitespace() {
     while (!isAtEnd()) {
         char c = peek();
-        if (std::isspace((unsigned char)c)) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
             get();
-        } else if (c == '/' && currentPos + 1 < sourceCode.length() && sourceCode[currentPos + 1] == '/') {
+        } else if (c == '/' && peekNext() == '/') {
             // Single-line comment.
             get(); // consume '/'
             get(); // consume second '/'
@@ -54,7 +61,7 @@ Token Lexer::identifier() {
     int startLine = line;
     int startColumn = column;
     std::string lexeme;
-    while (!isAtEnd() && (std::isalnum((unsigned char)peek()) || peek() == '_')) {
+    while (!isAtEnd() && (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
         lexeme.push_back(get());
     }
     Token token;
@@ -98,13 +105,13 @@ Token Lexer::number() {
     int startColumn = column;
     std::string lexeme;
     bool sawDot = false;
-    while (!isAtEnd() && std::isdigit((unsigned char)peek())) {
+    while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
         lexeme.push_back(get());
     }
     if (!isAtEnd() && peek() == '.') {
         sawDot = true;
         lexeme.push_back(get());
-        while (!isAtEnd() && std::isdigit((unsigned char)peek())) {
+        while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
             lexeme.push_back(get());
         }
     }
@@ -194,27 +201,6 @@ Token Lexer::opOrDelim() {
             }
             break;
         }
-        case ';':
-            token.type = TokenType::DELIM_SEMICOLON;
-            break;
-        case ',':
-            token.type = TokenType::DELIM_COMMA;
-            break;
-        case '(':
-            token.type = TokenType::DELIM_LPAREN;
-            break;
-        case ')':
-            token.type = TokenType::DELIM_RPAREN;
-            break;
-        case '{':
-            token.type = TokenType::DELIM_LBRACE;
-            break;
-        case '}':
-            token.type = TokenType::DELIM_RBRACE;
-            break;
-        case ':':
-            token.type = TokenType::DELIM_COLON;
-            break;
         case '=': {
             if (!isAtEnd() && peek() == '=') {
                 get();
@@ -287,6 +273,27 @@ Token Lexer::opOrDelim() {
             token.type = TokenType::OP_BITWISE_XOR;
             break;
         }
+        case ';':
+            token.type = TokenType::DELIM_SEMICOLON;
+            break;
+        case ',':
+            token.type = TokenType::DELIM_COMMA;
+            break;
+        case '(':
+            token.type = TokenType::DELIM_LPAREN;
+            break;
+        case ')':
+            token.type = TokenType::DELIM_RPAREN;
+            break;
+        case '{':
+            token.type = TokenType::DELIM_LBRACE;
+            break;
+        case '}':
+            token.type = TokenType::DELIM_RBRACE;
+            break;
+        case ':':
+            token.type = TokenType::DELIM_COLON;
+            break;
         case '\'':
             // Roll back and call character()
             currentPos--;
@@ -309,9 +316,9 @@ std::vector<Token> Lexer::tokenize() {
         if (isAtEnd())
             break;
         char c = peek();
-        if (std::isalpha((unsigned char)c) || c == '_') {
+        if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
             tokens.push_back(identifier());
-        } else if (std::isdigit((unsigned char)c)) {
+        } else if (std::isdigit(static_cast<unsigned char>(c))) {
             tokens.push_back(number());
         } else if (c == '\'') {
             tokens.push_back(character());
