@@ -150,7 +150,7 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr& stmt) {
             analyzeExpression(forStmt->increment);
         analyzeStatement(forStmt->body);
     } else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
-        analyzeExpression(switchStmt->condition);
+        analyzeExpression(switchStmt->expression);
         for (const auto &caseClause : switchStmt->cases) {
             if (caseClause.first.has_value()) {
                 analyzeExpression(caseClause.first.value());
@@ -186,6 +186,10 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
         analyzeExpression(unExpr->operand);
     } else if (auto postExpr = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
         analyzeExpression(postExpr->operand);
+    }
+    // NEW: Handle cast expressions.
+    else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
+        analyzeExpression(castExpr->operand);
     } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
         // No analysis needed.
     } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {

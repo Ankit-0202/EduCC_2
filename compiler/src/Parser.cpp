@@ -276,7 +276,6 @@ StatementPtr Parser::parseForStatement() {
 }
 
 StatementPtr Parser::parseSwitchStatement() {
-    // Assumes 'switch' keyword has been consumed.
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'switch'");
     ExpressionPtr expr = parseExpression();
     consume(TokenType::DELIM_RPAREN, "Expected ')' after switch expression");
@@ -504,8 +503,39 @@ ExpressionPtr Parser::parseFactor() {
     return expr;
 }
 
-// Unary (currently just defers to postfix)
+//
+// NEW: Modified parseUnary() to support cast expressions.
+// This function now checks for a left parenthesis and if the token following it
+// is a type keyword (KW_INT, KW_FLOAT, etc.), it parses a cast expression.
+// Otherwise it falls back to parsing a grouped expression.
+//
 ExpressionPtr Parser::parseUnary() {
+    if (match(TokenType::DELIM_LPAREN)) {
+        // Check if this is a cast expression: ( type ) cast-expression
+        if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+            check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+            check(TokenType::KW_BOOL)) {
+            std::string castType;
+            if (match(TokenType::KW_INT))
+                castType = "int";
+            else if (match(TokenType::KW_FLOAT))
+                castType = "float";
+            else if (match(TokenType::KW_CHAR))
+                castType = "char";
+            else if (match(TokenType::KW_DOUBLE))
+                castType = "double";
+            else if (match(TokenType::KW_BOOL))
+                castType = "bool";
+            consume(TokenType::DELIM_RPAREN, "Expected ')' after cast type");
+            ExpressionPtr operand = parseUnary(); // recursively parse the cast operand
+            return std::make_shared<CastExpression>(castType, operand);
+        } else {
+            // Not a cast; treat as a parenthesized (grouped) expression.
+            ExpressionPtr expr = parseExpression();
+            consume(TokenType::DELIM_RPAREN, "Expected ')' after expression");
+            return expr;
+        }
+    }
     return parsePostfix();
 }
 

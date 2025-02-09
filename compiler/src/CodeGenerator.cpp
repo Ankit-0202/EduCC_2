@@ -321,7 +321,7 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
     }
     else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
         Value* retVal = generateExpression(retStmt->expression);
-        // NEW: Check that the return value type matches the function's return type.
+        // Check that the return value type matches the function's return type.
         Function* currentFunction = builder.GetInsertBlock()->getParent();
         Type* expectedType = currentFunction->getReturnType();
         if (retVal->getType() != expectedType) {
@@ -436,7 +436,8 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         return false;
     }
     else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
-        Value* condVal = generateExpression(switchStmt->condition);
+        // FIXED: use 'expression' (as defined in our AST) instead of 'condition'
+        Value* condVal = generateExpression(switchStmt->expression);
         if (!condVal->getType()->isIntegerTy()) {
             throw runtime_error("CodeGenerator Error: Switch expression must be of integer type.");
         }
@@ -559,33 +560,40 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             if (!rhs->getType()->isIntegerTy(1))
                 rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0), "booltmp");
             return builder.CreateOr(lhs, rhs, "ortmp");
-        }
-        // NEW: Bitwise AND operator.
-        else if (binExpr->op == "&") {
+        } else if (binExpr->op == "&") {
             return builder.CreateAnd(lhs, rhs, "bitandtmp");
-        }
-        // NEW: Bitwise XOR operator.
-        else if (binExpr->op == "^") {
+        } else if (binExpr->op == "^") {
             return builder.CreateXor(lhs, rhs, "bitxortmp");
-        }
-        // NEW: Bitwise OR operator.
-        else if (binExpr->op == "|") {
+        } else if (binExpr->op == "|") {
             return builder.CreateOr(lhs, rhs, "bitor_tmp");
-        }
-        // NEW: Left shift operator.
-        else if (binExpr->op == "<<") {
+        } else if (binExpr->op == "<<") {
             return builder.CreateShl(lhs, rhs, "shltmp");
-        }
-        // NEW: Right shift operator.
-        else if (binExpr->op == ">>") {
-            // For signed integers, you might want to use CreateAShr (arithmetic shift)
+        } else if (binExpr->op == ">>") {
             return builder.CreateAShr(lhs, rhs, "shrtmp");
-        }
-        else {
+        } else {
             throw runtime_error("CodeGenerator Error: Unsupported binary operator '" + binExpr->op + "'.");
         }
     }
-    // (Handle literals, identifiers, etc. as before)
+    // NEW: Handle cast expressions
+    else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
+        Value* operandVal = generateExpression(castExpr->operand);
+        llvm::Type* targetType = getLLVMType(castExpr->castType);
+        llvm::Type* operandType = operandVal->getType();
+        if (operandType == targetType)
+            return operandVal;
+        if (operandType->isFloatingPointTy() && targetType->isIntegerTy()) {
+            return builder.CreateFPToSI(operandVal, targetType, "casttmp");
+        } else if (operandType->isIntegerTy() && targetType->isFloatingPointTy()) {
+            return builder.CreateSIToFP(operandVal, targetType, "casttmp");
+        } else if (operandType->isIntegerTy() && targetType->isIntegerTy()) {
+            return builder.CreateIntCast(operandVal, targetType, false, "casttmp");
+        } else if (operandType->isFloatingPointTy() && targetType->isFloatingPointTy()) {
+            return builder.CreateFPCast(operandVal, targetType, "casttmp");
+        } else {
+            throw runtime_error("CodeGenerator Error: Unsupported cast conversion.");
+        }
+    }
+    // Handle literal expressions
     else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
         if (std::holds_alternative<char>(lit->value))
             return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
@@ -598,9 +606,8 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         else if (std::holds_alternative<double>(lit->value))
             return ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
     }
-    // (Handling of Identifier, PostfixExpression, Assignment, FunctionCall remains unchanged)
+    // Handle identifier expressions
     else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-        // Look up the identifier in the local and global symbol tables (unchanged)
         auto it = localVariables.find(id->name);
         if (it != localVariables.end()) {
             Value* varPtr = it->second;
@@ -611,7 +618,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
                 throw runtime_error("CodeGenerator Error: '" + id->name + "' is not an alloca instruction.");
             }
         }
-        // Otherwise, try to resolve as a global variable.
         GlobalVariable* gVar = module->getGlobalVariable(id->name);
         if (gVar) {
             return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
@@ -619,7 +625,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "'.");
     }
     else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
-        // Handle postfix operators (e.g., i++ or i--)
         auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
         if (!id) {
             throw runtime_error("CodeGenerator Error: Postfix operator applied to non-identifier.");
@@ -633,9 +638,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         if (!allocaInst) {
             throw runtime_error("CodeGenerator Error: Postfix operator applied to non-alloca variable.");
         }
-        // Load current value using the allocated type.
         Value* oldVal = builder.CreateLoad(allocaInst->getAllocatedType(), varPtr, id->name.c_str());
-        // Create constant 1 of appropriate type
         Value* one = nullptr;
         if (oldVal->getType()->isIntegerTy()) {
             one = ConstantInt::get(oldVal->getType(), 1);
@@ -683,9 +686,8 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
     throw runtime_error("CodeGenerator Error: Unsupported expression type in generateExpression().");
 }
 
-
 //
-// For local var declarations like "int x = 5;"
+// For local variable declarations like "int x = 5;"
 // We create an alloca, optionally store the initializer
 //
 void CodeGenerator::generateVariableDeclarationStatement(
@@ -694,8 +696,6 @@ void CodeGenerator::generateVariableDeclarationStatement(
     Type* varTy = getLLVMType(varDeclStmt->type);
     AllocaInst* alloc = builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
     localVariables[varDeclStmt->name] = alloc;
-
-    // If there's an initializer
     if (varDeclStmt->initializer) {
         Value* initVal = generateExpression(varDeclStmt->initializer.value());
         builder.CreateStore(initVal, alloc);

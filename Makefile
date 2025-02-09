@@ -148,7 +148,6 @@ test: all create_test_output_dir
 	    gcc_ret=$$?; \
 	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
 	        echo "[FAILED] $$testfile - Return code mismatch" >&2 ------ Ours: $$our_ret, GCC: $$gcc_ret; \
 	        continue; \
 	    fi; \
