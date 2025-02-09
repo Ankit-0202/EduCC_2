@@ -39,7 +39,6 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
         // If the declaration is a VariableDeclaration, generate a global variable.
         if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
             llvm::Type* varType = getLLVMType(varDecl->type);
-            // Create a new global variable. For simplicity, we use ExternalLinkage.
             GlobalVariable* gVar = new GlobalVariable(
                 *module,
                 varType,
@@ -48,9 +47,7 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                 nullptr, // initializer to be set below
                 varDecl->name
             );
-            // Set the initializer.
             if (varDecl->initializer) {
-                // We assume that the initializer is a literal.
                 if (auto lit = std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
                     Constant* initVal = nullptr;
                     if (std::holds_alternative<int>(lit->value))
@@ -65,12 +62,24 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                         initVal = ConstantInt::get(Type::getInt1Ty(context), std::get<bool>(lit->value));
                     else
                         throw runtime_error("CodeGenerator Error: Unsupported literal type in global initializer.");
+
+                    // If the initializer type doesn't match the variable type, insert a conversion.
+                    if (initVal->getType() != varType) {
+                        if (initVal->getType()->isFloatingPointTy() && varType->isFloatingPointTy()) {
+                            // If converting from double to float, truncate.
+                            if (initVal->getType()->getFPMantissaWidth() > varType->getFPMantissaWidth())
+                                initVal = ConstantFP::get(varType, (float)std::get<double>(lit->value));
+                            else
+                                initVal = ConstantFP::get(varType, (double)std::get<float>(lit->value));
+                        } else {
+                            throw runtime_error("CodeGenerator Error: Incompatible initializer type in global variable declaration.");
+                        }
+                    }
                     gVar->setInitializer(initVal);
                 } else {
                     throw runtime_error("CodeGenerator Error: Global variable initializer must be a literal.");
                 }
             } else {
-                // If no initializer is provided, use a default zero initializer.
                 Constant* defaultVal = nullptr;
                 if (varDecl->type == "int")
                     defaultVal = ConstantInt::get(Type::getInt32Ty(context), 0);
@@ -87,7 +96,6 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                 gVar->setInitializer(defaultVal);
             }
         }
-        // Also handle multiple variable declarations.
         else if (auto multiDecl = std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
             for (const auto& singleDecl : multiDecl->declarations) {
                 llvm::Type* varType = getLLVMType(singleDecl->type);
@@ -114,6 +122,16 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                             initVal = ConstantInt::get(Type::getInt1Ty(context), std::get<bool>(lit->value));
                         else
                             throw runtime_error("CodeGenerator Error: Unsupported literal type in global initializer.");
+                        if (initVal->getType() != varType) {
+                            if (initVal->getType()->isFloatingPointTy() && varType->isFloatingPointTy()) {
+                                if (initVal->getType()->getFPMantissaWidth() > varType->getFPMantissaWidth())
+                                    initVal = ConstantFP::get(varType, (float)std::get<double>(lit->value));
+                                else
+                                    initVal = ConstantFP::get(varType, (double)std::get<float>(lit->value));
+                            } else {
+                                throw runtime_error("CodeGenerator Error: Incompatible initializer type in global variable declaration.");
+                            }
+                        }
                         gVar->setInitializer(initVal);
                     } else {
                         throw runtime_error("CodeGenerator Error: Global variable initializer must be a literal.");
@@ -140,22 +158,17 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
 
     // Process function declarations.
     for (const auto& decl : program->declarations) {
-        // We only generate IR for function declarations and/or prototypes
         if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
             generateFunction(funcDecl);
         }
     }
 
-    // Verify the generated module.
     if (verifyModule(*module, &errs())) {
         throw runtime_error("CodeGenerator Error: Module verification failed.");
     }
     return std::move(module);
 }
 
-//
-// getLLVMType: Convert string type ("int", "float", etc.) to an LLVM Type*.
-//
 llvm::Type* CodeGenerator::getLLVMType(const string& type) {
     if (type == "int")
         return Type::getInt32Ty(context);
@@ -546,9 +559,7 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
                 return builder.CreateFCmpONE(lhs, rhs, "cmptmp");
             else
                 return builder.CreateICmpNE(lhs, rhs, "cmptmp");
-        }
-        // Logical AND and OR are already handled elsewhere...
-        else if (binExpr->op == "&&") {
+        } else if (binExpr->op == "&&") {
             if (!lhs->getType()->isIntegerTy(1))
                 lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0), "booltmp");
             if (!rhs->getType()->isIntegerTy(1))
@@ -574,7 +585,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             throw runtime_error("CodeGenerator Error: Unsupported binary operator '" + binExpr->op + "'.");
         }
     }
-    // NEW: Handle cast expressions
     else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
         Value* operandVal = generateExpression(castExpr->operand);
         llvm::Type* targetType = getLLVMType(castExpr->castType);
@@ -593,7 +603,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
             throw runtime_error("CodeGenerator Error: Unsupported cast conversion.");
         }
     }
-    // Handle literal expressions
     else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
         if (std::holds_alternative<char>(lit->value))
             return ConstantInt::get(Type::getInt8Ty(context), std::get<char>(lit->value));
@@ -606,7 +615,6 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
         else if (std::holds_alternative<double>(lit->value))
             return ConstantFP::get(Type::getDoubleTy(context), std::get<double>(lit->value));
     }
-    // Handle identifier expressions
     else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
         auto it = localVariables.find(id->name);
         if (it != localVariables.end()) {
@@ -688,7 +696,8 @@ Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
 
 //
 // For local variable declarations like "int x = 5;"
-// We create an alloca, optionally store the initializer
+// We create an alloca and store the initializer—if the initializer’s type does not match,
+// we insert a conversion (e.g. from double to float).
 //
 void CodeGenerator::generateVariableDeclarationStatement(
     const shared_ptr<VariableDeclarationStatement>& varDeclStmt
@@ -696,8 +705,21 @@ void CodeGenerator::generateVariableDeclarationStatement(
     Type* varTy = getLLVMType(varDeclStmt->type);
     AllocaInst* alloc = builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
     localVariables[varDeclStmt->name] = alloc;
+
     if (varDeclStmt->initializer) {
         Value* initVal = generateExpression(varDeclStmt->initializer.value());
+        // If the initializer type does not match the variable type, perform conversion.
+        if (initVal->getType() != varTy) {
+            if (initVal->getType()->isFloatingPointTy() && varTy->isFloatingPointTy()) {
+                // If converting from a larger FP type to a smaller FP type, truncate.
+                if (initVal->getType()->getFPMantissaWidth() > varTy->getFPMantissaWidth())
+                    initVal = builder.CreateFPTrunc(initVal, varTy, "fptrunc");
+                else
+                    initVal = builder.CreateFPExt(initVal, varTy, "fpext");
+            } else {
+                throw runtime_error("CodeGenerator Error: Incompatible initializer type in local variable declaration.");
+            }
+        }
         builder.CreateStore(initVal, alloc);
     }
 }
