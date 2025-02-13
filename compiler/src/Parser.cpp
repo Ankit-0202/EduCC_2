@@ -65,17 +65,21 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-    // If the next token is KW_ENUM followed by DELIM_LBRACE then it's a top-level enum declaration.
+    // Handle enum declarations (both tagged and anonymous)
     if (check(TokenType::KW_ENUM)) {
-        // Look ahead: if after KW_ENUM there's an identifier and then a DELIM_LBRACE, treat as enum declaration.
         size_t save = current;
         advance(); // consume KW_ENUM
         if (check(TokenType::IDENTIFIER)) {
+            size_t save2 = current;
             advance(); // consume tag
             if (check(TokenType::DELIM_LBRACE)) {
                 current = save;
                 return parseEnumDeclaration();
             }
+            current = save; // Not followed by '{', so treat as part of a variable declaration.
+        } else if (check(TokenType::DELIM_LBRACE)) {
+            current = save;
+            return parseEnumDeclaration();
         }
         current = save;
     }
@@ -365,6 +369,7 @@ StatementPtr Parser::parseExpressionStatement() {
 
 StatementPtr Parser::parseVariableDeclarationStatement() {
     std::string type;
+    // Updated: allow "enum" as a type specifier.
     if (match(TokenType::KW_INT)) {
         type = "int";
     } else if (match(TokenType::KW_FLOAT)) {
@@ -376,8 +381,11 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     } else if (match(TokenType::KW_BOOL)) {
         type = "bool";
     } else if (match(TokenType::KW_ENUM)) {
-        if (!check(TokenType::IDENTIFIER))
+        if (!check(TokenType::IDENTIFIER)) {
+            // Anonymous enum declaration at global scope is handled in parseDeclaration().
+            // In a variable declaration, we expect a tag.
             error("Expected enum tag after 'enum'");
+        }
         std::string tag = advance().lexeme;
         type = "enum " + tag;
     } else {
