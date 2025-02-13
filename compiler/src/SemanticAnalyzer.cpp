@@ -29,7 +29,7 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr& decl) {
     } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
         analyzeUnionDeclaration(unionDecl);
     } else {
-        throw std::runtime_error("SemanticAnalyzer Error: Unknown declaration type.");
+        throw std::runtime_error("Semantic Analysis Error: Unknown declaration type encountered.");
     }
 }
 
@@ -37,7 +37,7 @@ void SemanticAnalyzer::analyzeVariableDeclaration(const std::shared_ptr<Variable
     // A variable is simpler: just ensure no conflicting declaration in the current scope.
     Symbol symbol(varDecl->name, varDecl->type);
     if (!symbolTable.declare(symbol)) {
-        throw std::runtime_error("SemanticAnalyzer Error: Variable '" + varDecl->name + "' already declared in this scope.");
+        throw std::runtime_error("Semantic Analysis Error: Variable '" + varDecl->name + "' is already declared in this scope.");
     }
     // If there is an initializer, analyze it.
     if (varDecl->initializer) {
@@ -56,26 +56,25 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(const std::shared_ptr<Function
     if (!existingOpt.has_value()) {
         Symbol newFunc(fnName, retType, true, paramTypes, hasBody);
         if (!symbolTable.declare(newFunc)) {
-            throw std::runtime_error("SemanticAnalyzer Error: Could not declare function '" + fnName + "'.");
+            throw std::runtime_error("Semantic Analysis Error: Could not declare function '" + fnName + "'.");
         }
     } else {
         Symbol existingSym = existingOpt.value();
         if (!existingSym.isFunction) {
-            throw std::runtime_error("SemanticAnalyzer Error: '" + fnName + "' already declared as a variable.");
+            throw std::runtime_error("Semantic Analysis Error: '" + fnName + "' is already declared as a variable.");
         }
         // Check signature match.
         if (!isFunctionSignatureCompatible(existingSym, retType, paramTypes)) {
-            throw std::runtime_error("SemanticAnalyzer Error: Conflicting declaration for function '" + fnName +
-                                     "'. Parameter list or return type does not match previous declaration.");
+            throw std::runtime_error("Semantic Analysis Error: Conflicting declaration for function '" + fnName + "'. The parameter list or return type does not match the previous declaration.");
         }
         if (existingSym.isDefined && hasBody) {
-            throw std::runtime_error("SemanticAnalyzer Error: Function '" + fnName + "' is already defined.");
+            throw std::runtime_error("Semantic Analysis Error: Function '" + fnName + "' is already defined.");
         } else if (!existingSym.isDefined && hasBody) {
             symbolTable.exitScope();
             symbolTable.enterScope();
             Symbol newSym(fnName, retType, true, paramTypes, true);
             if (!symbolTable.declare(newSym)) {
-                throw std::runtime_error("SemanticAnalyzer Error: Could not update definition of function '" + fnName + "'.");
+                throw std::runtime_error("Semantic Analysis Error: Could not update the definition of function '" + fnName + "'.");
             }
         }
     }
@@ -86,7 +85,7 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(const std::shared_ptr<Function
         for (const auto& param : funcDecl->parameters) {
             Symbol paramSymbol(param.second, param.first);
             if (!symbolTable.declare(paramSymbol)) {
-                throw std::runtime_error("SemanticAnalyzer Error: Parameter '" + param.second + "' already declared.");
+                throw std::runtime_error("Semantic Analysis Error: Parameter '" + param.second + "' is declared more than once.");
             }
         }
         if (auto compound = std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body)) {
@@ -108,10 +107,10 @@ void SemanticAnalyzer::analyzeEnumDeclaration(const std::shared_ptr<EnumDeclarat
             // For simplicity, assume the initializer is a literal int.
             auto lit = std::dynamic_pointer_cast<Literal>(enumerator.second.value());
             if (!lit) {
-                throw std::runtime_error("SemanticAnalyzer Error: Enum initializer for '" + enumerator.first + "' is not a literal.");
+                throw std::runtime_error("Semantic Analysis Error: Enum initializer for '" + enumerator.first + "' is not a literal.");
             }
             if (!std::holds_alternative<int>(lit->value)) {
-                throw std::runtime_error("SemanticAnalyzer Error: Enum initializer for '" + enumerator.first + "' must be an integer literal.");
+                throw std::runtime_error("Semantic Analysis Error: Enum initializer for '" + enumerator.first + "' must be an integer literal.");
             }
             value = std::get<int>(lit->value);
             currentValue = value + 1;
@@ -120,10 +119,9 @@ void SemanticAnalyzer::analyzeEnumDeclaration(const std::shared_ptr<EnumDeclarat
             currentValue++;
         }
         enumDecl->enumeratorValues.push_back(value);
-        // Declare each enumerator in the symbol table as a constant of type "int".
-        Symbol enumSymbol(enumerator.first, "int"); // Use the two-argument constructor.
+        Symbol enumSymbol(enumerator.first, "int");
         if (!symbolTable.declare(enumSymbol)) {
-            throw std::runtime_error("SemanticAnalyzer Error: Enumerator '" + enumerator.first + "' already declared.");
+            throw std::runtime_error("Semantic Analysis Error: Enumerator '" + enumerator.first + "' has already been declared.");
         }
     }
 }
@@ -219,7 +217,7 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr& stmt) {
             analyzeVariableDeclaration(tempVarDecl);
         }
     } else {
-        throw std::runtime_error("SemanticAnalyzer Error: Unsupported statement type.");
+        throw std::runtime_error("Semantic Analysis Error: Unsupported statement type encountered.");
     }
 }
 
@@ -235,7 +233,7 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
     } else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
         analyzeExpression(castExpr->operand);
     }
-    // NEW: Handle MemberAccess expressions.
+    // NEW: Handle member access.
     else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
         // Analyze the base expression first.
         analyzeExpression(mem->base);
@@ -243,17 +241,17 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
         if (auto baseId = std::dynamic_pointer_cast<Identifier>(mem->base)) {
             auto symbolOpt = symbolTable.lookup(baseId->name);
             if (!symbolOpt.has_value()) {
-                throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + baseId->name + "' in member access.");
+                throw std::runtime_error("Semantic Analysis Error: Undefined variable '" + baseId->name + "' used in member access.");
             }
             std::string type = symbolOpt.value().type;
             // The type should start with "union "
             if (type.rfind("union ", 0) != 0) {
-                throw std::runtime_error("SemanticAnalyzer Error: Variable '" + baseId->name + "' is not a union type.");
+                throw std::runtime_error("Semantic Analysis Error: Variable '" + baseId->name + "' is not of a union type.");
             }
             std::string tag = type.substr(6);
             auto unionIt = unionRegistry.find(tag);
             if (unionIt == unionRegistry.end()) {
-                throw std::runtime_error("SemanticAnalyzer Error: Unknown union type '" + type + "'.");
+                throw std::runtime_error("Semantic Analysis Error: Unknown union type '" + type + "'.");
             }
             bool found = false;
             for (auto &member : unionIt->second->members) {
@@ -263,49 +261,50 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
                 }
             }
             if (!found) {
-                throw std::runtime_error("SemanticAnalyzer Error: Union type '" + type + "' does not have member '" + mem->member + "'.");
+                throw std::runtime_error("Semantic Analysis Error: Union type '" + type + "' does not contain a member named '" + mem->member + "'.");
             }
         } else {
-            throw std::runtime_error("SemanticAnalyzer Error: Unsupported base expression in member access.");
+            throw std::runtime_error("Semantic Analysis Error: Unsupported base expression in member access.");
         }
-    } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
-        // No analysis needed.
+    }
+    else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+        // No analysis needed for literals.
     } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
         if (!symbolTable.lookup(id->name).has_value()) {
-            throw std::runtime_error("SemanticAnalyzer Error: Undefined variable or function '" + id->name + "'.");
+            throw std::runtime_error("Semantic Analysis Error: Undefined variable or function '" + id->name + "'.");
         }
     } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
         // For assignments, check the left-hand side.
         // (Our code generator will later obtain the lvalue pointer from the lhs.)
         if (auto id = std::dynamic_pointer_cast<Identifier>(assign->lhs)) {
             if (!symbolTable.lookup(id->name).has_value()) {
-                throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + id->name + "'.");
+                throw std::runtime_error("Semantic Analysis Error: Undefined variable '" + id->name + "' used as assignment target.");
             }
         } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(assign->lhs)) {
             if (auto baseId = std::dynamic_pointer_cast<Identifier>(mem->base)) {
                 if (!symbolTable.lookup(baseId->name).has_value()) {
-                    throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + baseId->name + "' in member access.");
+                    throw std::runtime_error("Semantic Analysis Error: Undefined variable '" + baseId->name + "' used in member access for assignment.");
                 }
             } else {
-                throw std::runtime_error("SemanticAnalyzer Error: Invalid lvalue in member access.");
+                throw std::runtime_error("Semantic Analysis Error: Invalid assignment target in member access.");
             }
         } else {
-            throw std::runtime_error("SemanticAnalyzer Error: Invalid assignment target.");
+            throw std::runtime_error("Semantic Analysis Error: Invalid assignment target.");
         }
         analyzeExpression(assign->rhs);
     } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
         auto sym = symbolTable.lookup(funcCall->functionName);
         if (!sym.has_value() || !sym->isFunction) {
-            throw std::runtime_error("SemanticAnalyzer Error: Undefined function '" + funcCall->functionName + "'.");
+            throw std::runtime_error("Semantic Analysis Error: Undefined function '" + funcCall->functionName + "'.");
         }
         if (sym->parameterTypes.size() != funcCall->arguments.size()) {
-            throw std::runtime_error("SemanticAnalyzer Error: Function '" + funcCall->functionName +
-                                     "' called with incorrect number of arguments.");
+            throw std::runtime_error("Semantic Analysis Error: Function '" + funcCall->functionName +
+                                     "' called with an incorrect number of arguments.");
         }
         for (const auto& arg : funcCall->arguments) {
             analyzeExpression(arg);
         }
     } else {
-        throw std::runtime_error("SemanticAnalyzer Error: Unsupported expression type.");
+        throw std::runtime_error("Semantic Analysis Error: Unsupported expression type encountered.");
     }
 }

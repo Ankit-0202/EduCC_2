@@ -49,9 +49,10 @@ void Parser::error(const std::string& message) const {
     if (current < tokens.size()) {
         const Token& tok = tokens[current];
         throw std::runtime_error("Parser Error at Line " + std::to_string(tok.line) +
-                                 ", Column " + std::to_string(tok.column) + ": " + message);
+                                 ", Column " + std::to_string(tok.column) +
+                                 " (token: '" + tok.lexeme + "'): " + message);
     } else {
-        throw std::runtime_error("Parser Error: " + message + " at end of input.");
+        throw std::runtime_error("Parser Error at end of input: " + message);
     }
 }
 
@@ -74,7 +75,6 @@ DeclarationPtr Parser::parseDeclaration() {
         size_t save = current;
         advance(); // consume KW_ENUM
         if (check(TokenType::IDENTIFIER)) {
-            // size_t save2 = current; // warning: unused, so removed.
             advance(); // consume tag
             if (check(TokenType::DELIM_LBRACE)) {
                 current = save;
@@ -123,7 +123,6 @@ DeclarationPtr Parser::parseDeclaration() {
 }
 
 DeclarationPtr Parser::parseVariableDeclaration() {
-    // Used for top-level variable declarations.
     std::string type;
     if (match(TokenType::KW_INT)) {
         type = "int";
@@ -171,20 +170,20 @@ DeclarationPtr Parser::parseFunctionDeclaration() {
     } else if (match(TokenType::KW_BOOL)) {
         returnType = "bool";
     } else {
-        error("Expected return type");
+        error("Expected return type for function declaration");
     }
     if (!check(TokenType::IDENTIFIER)) {
-        error("Expected function name");
+        error("Expected function name after return type");
     }
     Token funcNameToken = advance();
     std::string funcName = funcNameToken.lexeme;
     consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
     std::vector<std::pair<std::string, std::string>> parameters = parseParameters();
-    consume(TokenType::DELIM_RPAREN, "Expected ')' after parameters");
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after parameter list");
     if (match(TokenType::DELIM_SEMICOLON)) {
         return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters, nullptr);
     }
-    consume(TokenType::DELIM_LBRACE, "Expected '{' before function body");
+    consume(TokenType::DELIM_LBRACE, "Expected '{' to begin function body");
     StatementPtr body = parseCompoundStatement();
     return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters, body);
 }
@@ -210,7 +209,7 @@ std::vector<std::pair<std::string, std::string>> Parser::parseParameters() {
                 error("Expected parameter type");
             }
             if (!check(TokenType::IDENTIFIER)) {
-                error("Expected parameter name");
+                error("Expected parameter name after type");
             }
             Token paramNameToken = advance();
             std::string paramName = paramNameToken.lexeme;
@@ -221,7 +220,7 @@ std::vector<std::pair<std::string, std::string>> Parser::parseParameters() {
 }
 
 DeclarationPtr Parser::parseEnumDeclaration() {
-    consume(TokenType::KW_ENUM, "Expected 'enum'");
+    consume(TokenType::KW_ENUM, "Expected 'enum' keyword");
     std::optional<std::string> tag = std::nullopt;
     if (check(TokenType::IDENTIFIER)) {
         Token tagToken = advance();
@@ -233,12 +232,12 @@ DeclarationPtr Parser::parseEnumDeclaration() {
     while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
         if (!first) {
             if (!match(TokenType::DELIM_COMMA)) {
-                error("Expected ',' between enumerators");
+                error("Expected ',' between enumerators in enum declaration");
             }
         }
         first = false;
         if (!check(TokenType::IDENTIFIER)) {
-            error("Expected enumerator name");
+            error("Expected enumerator name in enum declaration");
         }
         Token enumToken = advance();
         std::string enumeratorName = enumToken.lexeme;
@@ -248,7 +247,7 @@ DeclarationPtr Parser::parseEnumDeclaration() {
         }
         enumerators.push_back({enumeratorName, initializer});
     }
-    consume(TokenType::DELIM_RBRACE, "Expected '}' to close enum body");
+    consume(TokenType::DELIM_RBRACE, "Expected '}' to close enum declaration");
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after enum declaration");
     return std::make_shared<EnumDeclaration>(tag, enumerators);
 }
@@ -287,19 +286,19 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
 }
 
 DeclarationPtr Parser::parseUnionDeclaration() {
-    consume(TokenType::KW_UNION, "Expected 'union'");
+    consume(TokenType::KW_UNION, "Expected 'union' keyword");
     std::optional<std::string> tag = std::nullopt;
     if (check(TokenType::IDENTIFIER)) {
         Token tagToken = advance();
         tag = tagToken.lexeme;
     }
-    consume(TokenType::DELIM_LBRACE, "Expected '{' to start union body");
+    consume(TokenType::DELIM_LBRACE, "Expected '{' to begin union declaration");
     std::vector<std::shared_ptr<VariableDeclaration>> members;
     while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
         auto memberDecl = parseUnionMemberDeclaration();
         members.push_back(memberDecl);
     }
-    consume(TokenType::DELIM_RBRACE, "Expected '}' to close union body");
+    consume(TokenType::DELIM_RBRACE, "Expected '}' to close union declaration");
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after union declaration");
     return std::make_shared<UnionDeclaration>(tag, members);
 }
@@ -339,7 +338,7 @@ StatementPtr Parser::parseStatement() {
 StatementPtr Parser::parseIfStatement() {
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'if'");
     ExpressionPtr condition = parseExpression();
-    consume(TokenType::DELIM_RPAREN, "Expected ')' after condition");
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after 'if' condition");
     StatementPtr thenBranch = parseStatement();
     std::optional<StatementPtr> elseBranch = std::nullopt;
     if (match(TokenType::KW_ELSE)) {
@@ -351,7 +350,7 @@ StatementPtr Parser::parseIfStatement() {
 StatementPtr Parser::parseWhileStatement() {
     consume(TokenType::DELIM_LPAREN, "Expected '(' after 'while'");
     ExpressionPtr condition = parseExpression();
-    consume(TokenType::DELIM_RPAREN, "Expected ')' after while condition");
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after 'while' condition");
     StatementPtr body = parseStatement();
     return std::make_shared<WhileStatement>(condition, body);
 }
@@ -408,7 +407,7 @@ StatementPtr Parser::parseSwitchStatement() {
 
 StatementPtr Parser::parseReturnStatement() {
     ExpressionPtr expr = parseExpression();
-    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after return value");
+    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after return statement");
     return std::make_shared<ReturnStatement>(expr);
 }
 
@@ -420,7 +419,7 @@ StatementPtr Parser::parseExpressionStatement() {
 
 StatementPtr Parser::parseVariableDeclarationStatement() {
     std::string type;
-    // Updated: allow "enum" and "union" as type specifiers.
+    // Allow "enum" and "union" as type specifiers.
     if (match(TokenType::KW_INT)) {
         type = "int";
     } else if (match(TokenType::KW_FLOAT)) {
@@ -433,15 +432,13 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
         type = "bool";
     } else if (match(TokenType::KW_ENUM)) {
         if (!check(TokenType::IDENTIFIER)) {
-            // Anonymous enum declaration at global scope is handled in parseDeclaration().
-            // In a variable declaration, we expect a tag.
-            error("Expected enum tag after 'enum'");
+            error("Expected enum tag after 'enum' in variable declaration");
         }
         std::string tag = advance().lexeme;
         type = "enum " + tag;
     } else if (match(TokenType::KW_UNION)) {
         if (!check(TokenType::IDENTIFIER)) {
-            error("Expected union tag after 'union'");
+            error("Expected union tag after 'union' in variable declaration");
         }
         std::string tag = advance().lexeme;
         type = "union " + tag;
@@ -656,7 +653,7 @@ ExpressionPtr Parser::parsePostfix() {
         if (match(TokenType::DOT)) {
             // Expect an identifier after the dot.
             if (!check(TokenType::IDENTIFIER))
-                error("Expected identifier after '.'");
+                error("Expected identifier after '.' for member access");
             Token memberToken = advance();
             std::string memberName = memberToken.lexeme;
             expr = std::make_shared<MemberAccess>(expr, memberName);
