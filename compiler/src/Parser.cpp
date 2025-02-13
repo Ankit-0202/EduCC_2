@@ -65,6 +65,20 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
+    // If the next token is KW_ENUM followed by DELIM_LBRACE then it's a top-level enum declaration.
+    if (check(TokenType::KW_ENUM)) {
+        // Look ahead: if after KW_ENUM there's an identifier and then a DELIM_LBRACE, treat as enum declaration.
+        size_t save = current;
+        advance(); // consume KW_ENUM
+        if (check(TokenType::IDENTIFIER)) {
+            advance(); // consume tag
+            if (check(TokenType::DELIM_LBRACE)) {
+                current = save;
+                return parseEnumDeclaration();
+            }
+        }
+        current = save;
+    }
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
         check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
         check(TokenType::KW_BOOL)) {
@@ -101,6 +115,7 @@ DeclarationPtr Parser::parseDeclaration() {
 }
 
 DeclarationPtr Parser::parseVariableDeclaration() {
+    // Used for top-level variable declarations.
     std::string type;
     if (match(TokenType::KW_INT)) {
         type = "int";
@@ -197,6 +212,41 @@ std::vector<std::pair<std::string, std::string>> Parser::parseParameters() {
     return params;
 }
 
+DeclarationPtr Parser::parseEnumDeclaration() {
+    // Assumes current token is KW_ENUM.
+    consume(TokenType::KW_ENUM, "Expected 'enum'");
+    std::optional<std::string> enumName = std::nullopt;
+    if (check(TokenType::IDENTIFIER)) {
+        // Optional enum tag.
+        Token tagToken = advance();
+        enumName = tagToken.lexeme;
+    }
+    consume(TokenType::DELIM_LBRACE, "Expected '{' to start enum body");
+    std::vector<std::pair<std::string, std::optional<ExpressionPtr>>> enumerators;
+    bool first = true;
+    while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+        if (!first) {
+            if (!match(TokenType::DELIM_COMMA)) {
+                error("Expected ',' between enumerators");
+            }
+        }
+        first = false;
+        if (!check(TokenType::IDENTIFIER)) {
+            error("Expected enumerator name");
+        }
+        Token enumToken = advance();
+        std::string enumeratorName = enumToken.lexeme;
+        std::optional<ExpressionPtr> initializer = std::nullopt;
+        if (match(TokenType::OP_ASSIGN)) {
+            initializer = parseExpression();
+        }
+        enumerators.push_back({enumeratorName, initializer});
+    }
+    consume(TokenType::DELIM_RBRACE, "Expected '}' to close enum body");
+    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after enum declaration");
+    return std::make_shared<EnumDeclaration>(enumName, enumerators);
+}
+
 std::shared_ptr<CompoundStatement> Parser::parseCompoundStatement() {
     auto compound = std::make_shared<CompoundStatement>();
     while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
@@ -220,9 +270,11 @@ StatementPtr Parser::parseStatement() {
         return parseSwitchStatement();
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
-    } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-               check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-               check(TokenType::KW_BOOL)) {
+    }
+    // Updated: Include KW_ENUM as a possible start for a variable declaration.
+    else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+             check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+             check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM)) {
         return parseVariableDeclarationStatement();
     } else {
         return parseExpressionStatement();
@@ -254,7 +306,7 @@ StatementPtr Parser::parseForStatement() {
     StatementPtr initializer = nullptr;
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
         check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-        check(TokenType::KW_BOOL)) {
+        check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM)) {
         initializer = parseVariableDeclarationStatement();
     } else {
         initializer = parseExpressionStatement();
@@ -323,6 +375,11 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
         type = "double";
     } else if (match(TokenType::KW_BOOL)) {
         type = "bool";
+    } else if (match(TokenType::KW_ENUM)) {
+        if (!check(TokenType::IDENTIFIER))
+            error("Expected enum tag after 'enum'");
+        std::string tag = advance().lexeme;
+        type = "enum " + tag;
     } else {
         error("Expected type specifier in variable declaration");
     }
@@ -504,10 +561,7 @@ ExpressionPtr Parser::parseFactor() {
 }
 
 //
-// NEW: Modified parseUnary() to support cast expressions.
-// This function now checks for a left parenthesis and if the token following it
-// is a type keyword (KW_INT, KW_FLOAT, etc.), it parses a cast expression.
-// Otherwise it falls back to parsing a grouped expression.
+// Modified parseUnary() to support cast expressions.
 //
 ExpressionPtr Parser::parseUnary() {
     if (match(TokenType::DELIM_LPAREN)) {
@@ -527,7 +581,7 @@ ExpressionPtr Parser::parseUnary() {
             else if (match(TokenType::KW_BOOL))
                 castType = "bool";
             consume(TokenType::DELIM_RPAREN, "Expected ')' after cast type");
-            ExpressionPtr operand = parseUnary(); // recursively parse the cast operand
+            ExpressionPtr operand = parseUnary();
             return std::make_shared<CastExpression>(castType, operand);
         } else {
             // Not a cast; treat as a parenthesized (grouped) expression.

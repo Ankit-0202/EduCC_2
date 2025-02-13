@@ -30,13 +30,12 @@ CodeGenerator::CodeGenerator()
 
 //
 // generateCode: Walk through the Program AST and generate IR.
-// First, process all top–level (global) variable declarations,
-// then process all function declarations.
+// Global declarations are processed first (including enum declarations),
+// then function declarations.
 //
 std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& program) {
-    // Process global variable declarations.
+    // Process global declarations.
     for (const auto& decl : program->declarations) {
-        // If the declaration is a VariableDeclaration, generate a global variable.
         if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
             llvm::Type* varType = getLLVMType(varDecl->type);
             GlobalVariable* gVar = new GlobalVariable(
@@ -44,7 +43,7 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                 varType,
                 false, // mutable
                 GlobalValue::ExternalLinkage,
-                nullptr, // initializer to be set below
+                nullptr,
                 varDecl->name
             );
             if (varDecl->initializer) {
@@ -154,6 +153,23 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                 }
             }
         }
+        // Process enum declarations.
+        else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(decl)) {
+            // For each enumerator, create a global constant variable of type i32.
+            for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
+                std::string enumName = enumDecl->enumerators[i].first;
+                int value = enumDecl->enumeratorValues[i];
+                Constant* initVal = ConstantInt::get(Type::getInt32Ty(context), value);
+                GlobalVariable* gEnum = new GlobalVariable(
+                    *module,
+                    Type::getInt32Ty(context),
+                    true, // constant
+                    GlobalValue::ExternalLinkage, // CHANGED: external linkage so that getGlobalVariable() finds it
+                    initVal,
+                    enumName
+                );
+            }
+        }
     }
 
     // Process function declarations.
@@ -182,6 +198,9 @@ llvm::Type* CodeGenerator::getLLVMType(const string& type) {
         return Type::getInt1Ty(context);
     else if (type == "void")
         return Type::getVoidTy(context);
+    // Support enum types (treated as int)
+    else if (type.rfind("enum ", 0) == 0)
+        return Type::getInt32Ty(context);
     else
         throw runtime_error("CodeGenerator Error: Unsupported type '" + type + "'.");
 }
@@ -489,10 +508,7 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
     }
 }
 
-//
-// generateExpression: Standard expression IR generation.
-//
-Value* CodeGenerator::generateExpression(const shared_ptr<Expression>& expr) {
+Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
     if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
         Value* lhs = generateExpression(binExpr->left);
         Value* rhs = generateExpression(binExpr->right);

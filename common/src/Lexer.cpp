@@ -92,6 +92,8 @@ Token Lexer::identifier() {
         token.type = TokenType::KW_CASE;
     else if (lexeme == "default")
         token.type = TokenType::KW_DEFAULT;
+    else if (lexeme == "enum")
+        token.type = TokenType::KW_ENUM;  // NEW: recognize enum keyword
     else
         token.type = TokenType::IDENTIFIER;
     token.lexeme = lexeme;

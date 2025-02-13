@@ -23,6 +23,8 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr& decl) {
         for (const auto& singleDecl : multiVarDecl->declarations) {
             analyzeVariableDeclaration(singleDecl);
         }
+    } else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(decl)) {
+        analyzeEnumDeclaration(enumDecl);
     } else {
         throw std::runtime_error("SemanticAnalyzer Error: Unknown declaration type.");
     }
@@ -90,6 +92,36 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(const std::shared_ptr<Function
             }
         }
         symbolTable.exitScope();
+    }
+}
+
+void SemanticAnalyzer::analyzeEnumDeclaration(const std::shared_ptr<EnumDeclaration>& enumDecl) {
+    // For an enum, we compute integer values for each enumerator.
+    int currentValue = 0;
+    enumDecl->enumeratorValues.clear();
+    for (const auto& enumerator : enumDecl->enumerators) {
+        int value = 0;
+        if (enumerator.second.has_value()) {
+            // For simplicity, assume the initializer is a literal int.
+            auto lit = std::dynamic_pointer_cast<Literal>(enumerator.second.value());
+            if (!lit) {
+                throw std::runtime_error("SemanticAnalyzer Error: Enum initializer for '" + enumerator.first + "' is not a literal.");
+            }
+            if (!std::holds_alternative<int>(lit->value)) {
+                throw std::runtime_error("SemanticAnalyzer Error: Enum initializer for '" + enumerator.first + "' must be an integer literal.");
+            }
+            value = std::get<int>(lit->value);
+            currentValue = value + 1;
+        } else {
+            value = currentValue;
+            currentValue++;
+        }
+        enumDecl->enumeratorValues.push_back(value);
+        // Declare each enumerator in the symbol table as a constant of type "int".
+        Symbol enumSymbol(enumerator.first, "int"); // Use the two-argument constructor.
+        if (!symbolTable.declare(enumSymbol)) {
+            throw std::runtime_error("SemanticAnalyzer Error: Enumerator '" + enumerator.first + "' already declared.");
+        }
     }
 }
 
@@ -187,7 +219,6 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
     } else if (auto postExpr = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
         analyzeExpression(postExpr->operand);
     }
-    // NEW: Handle cast expressions.
     else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
         analyzeExpression(castExpr->operand);
     } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {

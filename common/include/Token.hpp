@@ -18,6 +18,7 @@ enum class TokenType {
     KW_SWITCH,
     KW_CASE,
     KW_DEFAULT,
+    KW_ENUM,
     // Operators
     OP_PLUS,
     OP_MINUS,

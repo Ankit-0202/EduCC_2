@@ -29,6 +29,7 @@ static std::string tokenTypeToString(TokenType type) {
         case TokenType::KW_SWITCH: return "KW_SWITCH";
         case TokenType::KW_CASE: return "KW_CASE";
         case TokenType::KW_DEFAULT: return "KW_DEFAULT";
+        case TokenType::KW_ENUM: return "KW_ENUM";  // NEW: enum keyword
         case TokenType::OP_PLUS: return "OP_PLUS";
         case TokenType::OP_MINUS: return "OP_MINUS";
         case TokenType::OP_MULTIPLY: return "OP_MULTIPLY";
@@ -74,18 +75,13 @@ int main(int argc, char* argv[]) {
 
     /*
      * Step 1: Preprocessing
-     * Provide system include paths and user include paths as appropriate.
-     * For demonstration, we might just use a few typical paths.
      */
     std::vector<std::string> systemPaths = {
         "/usr/include",
         "/usr/local/include"
     };
-    // For local includes, we can include the directory containing the source:
-    // e.g., if the user calls: C99Compiler path/to/file.c, 
-    // we can put "path/to" in userPaths, or just "."
     std::vector<std::string> userPaths = {
-        ".", // current directory
+        ".",
     };
 
     Preprocessor preprocessor(systemPaths, userPaths);

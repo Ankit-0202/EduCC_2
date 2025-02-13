@@ -11,12 +11,15 @@
 class Parser {
 public:
     Parser(const std::vector<Token>& tokens);
+
+    // Returns the root AST node (the Program)
     std::shared_ptr<Program> parse();
 
 private:
     std::vector<Token> tokens;
     size_t current;
 
+    // Basic helper functions
     bool match(TokenType type);
     bool check(TokenType type) const;
     Token advance();
@@ -25,27 +28,28 @@ private:
     void consume(TokenType type, const std::string& errorMessage);
     void error(const std::string& message) const;
 
+    // Declaration parsing
     DeclarationPtr parseDeclaration();
     DeclarationPtr parseVariableDeclaration();
     DeclarationPtr parseFunctionDeclaration();
+    DeclarationPtr parseEnumDeclaration();
+
     std::vector<std::pair<std::string, std::string>> parseParameters();
 
-    // Updated return type: now returns a shared pointer to CompoundStatement
+    // Statement parsing
     std::shared_ptr<CompoundStatement> parseCompoundStatement();
     StatementPtr parseStatement();
     StatementPtr parseIfStatement();
     StatementPtr parseWhileStatement();
     StatementPtr parseForStatement();
-    StatementPtr parseSwitchStatement(); // NEW: switch statement
+    StatementPtr parseSwitchStatement();
     StatementPtr parseReturnStatement();
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();
 
-    // Expression parsing productions.
+    // Expression parsing
     ExpressionPtr parseExpression();
     ExpressionPtr parseAssignment();
-
-    // New productions for bitwise/shift operators.
     ExpressionPtr parseLogicalOr();
     ExpressionPtr parseLogicalAnd();
     ExpressionPtr parseBitwiseOr();
