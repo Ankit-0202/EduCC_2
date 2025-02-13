@@ -266,6 +266,11 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
         type = "double";
     } else if (match(TokenType::KW_BOOL)) {
         type = "bool";
+    } else if (match(TokenType::KW_ENUM)) {
+        if (!check(TokenType::IDENTIFIER))
+            error("Expected enum tag after 'enum' in union member declaration");
+        std::string tag = advance().lexeme;
+        type = "enum " + tag;
     } else {
         error("Expected type specifier in union member declaration");
     }
