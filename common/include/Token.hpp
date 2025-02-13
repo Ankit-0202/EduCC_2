@@ -19,6 +19,7 @@ enum class TokenType {
     KW_CASE,
     KW_DEFAULT,
     KW_ENUM,
+    KW_UNION,
     // Operators
     OP_PLUS,
     OP_MINUS,
@@ -50,6 +51,7 @@ enum class TokenType {
     DELIM_LBRACE,
     DELIM_RBRACE,
     DELIM_COLON,
+    DOT,
     // Literals
     LITERAL_INT,
     LITERAL_FLOAT,

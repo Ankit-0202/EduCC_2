@@ -1,12 +1,11 @@
 #ifndef PARSER_HPP
 #define PARSER_HPP
 
+#include <memory>
+#include <vector>
+#include <string>
 #include "AST.hpp"
 #include "Lexer.hpp"
-#include "Token.hpp"
-#include <vector>
-#include <memory>
-#include <string>
 
 class Parser {
 public:
@@ -20,11 +19,11 @@ private:
     size_t current;
 
     // Basic helper functions
+    bool isAtEnd() const;
+    Token peek() const;
+    Token advance();
     bool match(TokenType type);
     bool check(TokenType type) const;
-    Token advance();
-    Token peek() const;
-    bool isAtEnd() const;
     void consume(TokenType type, const std::string& errorMessage);
     void error(const std::string& message) const;
 
@@ -33,6 +32,8 @@ private:
     DeclarationPtr parseVariableDeclaration();
     DeclarationPtr parseFunctionDeclaration();
     DeclarationPtr parseEnumDeclaration();
+    DeclarationPtr parseUnionDeclaration();  // NEW: union declaration
+    std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration(); // NEW: union member parsing
 
     std::vector<std::pair<std::string, std::string>> parseParameters();
 
@@ -44,6 +45,7 @@ private:
     StatementPtr parseForStatement();
     StatementPtr parseSwitchStatement();
     StatementPtr parseReturnStatement();
+    // (Break support removed)
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();
 

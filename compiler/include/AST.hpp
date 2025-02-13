@@ -1,12 +1,12 @@
 #ifndef AST_HPP
 #define AST_HPP
 
-#include <memory>
 #include <string>
 #include <vector>
+#include <memory>
 #include <optional>
-#include <variant>
 #include <utility>
+#include <variant>
 
 // Forward declarations for expressions and statements.
 struct Expression;
@@ -60,23 +60,32 @@ struct FunctionDeclaration : public Declaration {
 
 // Enum Declaration
 struct EnumDeclaration : public Declaration {
-    // Optional tag for the enum.
-    std::optional<std::string> name;
-    // Vector of enumerators: each is a pair of enumerator name and an optional initializer expression.
+    std::optional<std::string> tag;
+    // Each enumerator is a pair: (name, optional initializer)
     std::vector<std::pair<std::string, std::optional<ExpressionPtr>>> enumerators;
-    // NEW: Computed integer values for each enumerator (filled during semantic analysis)
+    // Computed integer values for each enumerator (filled during semantic analysis)
     std::vector<int> enumeratorValues;
-    EnumDeclaration(const std::optional<std::string>& name,
+    EnumDeclaration(const std::optional<std::string>& tag,
                     const std::vector<std::pair<std::string, std::optional<ExpressionPtr>>>& enumerators)
-        : name(name), enumerators(enumerators) {}
+        : tag(tag), enumerators(enumerators) {}
 };
 
-// Base class for statements.
+// Union Declaration
+struct UnionDeclaration : public Declaration {
+    std::optional<std::string> tag;
+    // Each union member is a variable declaration (without initializer restrictions)
+    std::vector<std::shared_ptr<VariableDeclaration>> members;
+    UnionDeclaration(const std::optional<std::string>& tag,
+                     const std::vector<std::shared_ptr<VariableDeclaration>>& members)
+        : tag(tag), members(members) {}
+};
+
+// ----- Statements -----
+
 struct Statement {
     virtual ~Statement() = default;
 };
 
-// Compound Statement
 struct CompoundStatement : public Statement {
     std::vector<StatementPtr> statements;
     void addStatement(const StatementPtr& stmt) {
@@ -84,13 +93,11 @@ struct CompoundStatement : public Statement {
     }
 };
 
-// Expression Statement
 struct ExpressionStatement : public Statement {
     ExpressionPtr expression;
     ExpressionStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
-// Variable Declaration Statement (for local variables)
 struct VariableDeclarationStatement : public Statement {
     std::string type;
     std::string name;
@@ -99,14 +106,12 @@ struct VariableDeclarationStatement : public Statement {
         : type(type), name(name), initializer(initializer) {}
 };
 
-// Multiple Variable Declaration Statement
 struct MultiVariableDeclarationStatement : public Statement {
     std::vector<std::shared_ptr<VariableDeclarationStatement>> declarations;
     MultiVariableDeclarationStatement(const std::vector<std::shared_ptr<VariableDeclarationStatement>>& decls)
         : declarations(decls) {}
 };
 
-// If Statement
 struct IfStatement : public Statement {
     ExpressionPtr condition;
     StatementPtr thenBranch;
@@ -115,7 +120,6 @@ struct IfStatement : public Statement {
         : condition(condition), thenBranch(thenBranch), elseBranch(elseBranch) {}
 };
 
-// While Statement
 struct WhileStatement : public Statement {
     ExpressionPtr condition;
     StatementPtr body;
@@ -123,7 +127,6 @@ struct WhileStatement : public Statement {
         : condition(condition), body(body) {}
 };
 
-// For Statement
 struct ForStatement : public Statement {
     StatementPtr initializer;
     ExpressionPtr condition;
@@ -133,10 +136,9 @@ struct ForStatement : public Statement {
         : initializer(initializer), condition(condition), increment(increment), body(body) {}
 };
 
-// Switch Statement
 struct SwitchStatement : public Statement {
     ExpressionPtr expression;
-    // Each case: a pair of an optional case expression and the associated statement.
+    // Each case is a pair: (optional case expression, associated statement)
     std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>> cases;
     std::optional<StatementPtr> defaultCase;
     SwitchStatement(ExpressionPtr expr,
@@ -145,18 +147,17 @@ struct SwitchStatement : public Statement {
         : expression(expr), cases(cases), defaultCase(defaultCase) {}
 };
 
-// Return Statement
 struct ReturnStatement : public Statement {
     ExpressionPtr expression;
     ReturnStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
-// Base class for expressions.
+// ----- Expressions -----
+
 struct Expression {
     virtual ~Expression() = default;
 };
 
-// Binary Expression
 struct BinaryExpression : public Expression {
     std::string op;
     ExpressionPtr left;
@@ -165,7 +166,6 @@ struct BinaryExpression : public Expression {
         : op(op), left(left), right(right) {}
 };
 
-// Unary Expression
 struct UnaryExpression : public Expression {
     std::string op;
     ExpressionPtr operand;
@@ -173,7 +173,6 @@ struct UnaryExpression : public Expression {
         : op(op), operand(operand) {}
 };
 
-// Postfix Expression
 struct PostfixExpression : public Expression {
     ExpressionPtr operand;
     std::string op;
@@ -181,7 +180,6 @@ struct PostfixExpression : public Expression {
         : operand(operand), op(op) {}
 };
 
-// Cast Expression
 struct CastExpression : public Expression {
     std::string castType;
     ExpressionPtr operand;
@@ -189,7 +187,6 @@ struct CastExpression : public Expression {
         : castType(castType), operand(operand) {}
 };
 
-// Literal Expression (supports int, float, double, char, bool)
 struct Literal : public Expression {
     std::variant<int, float, double, char, bool> value;
     Literal(int v) : value(v) {}
@@ -199,26 +196,32 @@ struct Literal : public Expression {
     Literal(bool v) : value(v) {}
 };
 
-// Identifier Expression
 struct Identifier : public Expression {
     std::string name;
     Identifier(const std::string& name) : name(name) {}
 };
 
-// Assignment Expression
+// Updated Assignment: lhs is now any assignable expression.
 struct Assignment : public Expression {
-    std::string lhs;
+    ExpressionPtr lhs;
     ExpressionPtr rhs;
-    Assignment(const std::string& lhs, ExpressionPtr rhs)
+    Assignment(ExpressionPtr lhs, ExpressionPtr rhs)
         : lhs(lhs), rhs(rhs) {}
 };
 
-// Function Call Expression
 struct FunctionCall : public Expression {
     std::string functionName;
     std::vector<ExpressionPtr> arguments;
     FunctionCall(const std::string& functionName, const std::vector<ExpressionPtr>& arguments)
         : functionName(functionName), arguments(arguments) {}
+};
+
+// NEW: Member Access Expression (for accessing union (or struct) members)
+struct MemberAccess : public Expression {
+    ExpressionPtr base;
+    std::string member;
+    MemberAccess(ExpressionPtr base, const std::string& member)
+        : base(base), member(member) {}
 };
 
 #endif // AST_HPP

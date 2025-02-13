@@ -65,12 +65,16 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
+    // Handle union declarations (both tagged and anonymous)
+    if (check(TokenType::KW_UNION)) {
+        return parseUnionDeclaration();
+    }
     // Handle enum declarations (both tagged and anonymous)
     if (check(TokenType::KW_ENUM)) {
         size_t save = current;
         advance(); // consume KW_ENUM
         if (check(TokenType::IDENTIFIER)) {
-            size_t save2 = current;
+            // size_t save2 = current; // warning: unused, so removed.
             advance(); // consume tag
             if (check(TokenType::DELIM_LBRACE)) {
                 current = save;
@@ -217,13 +221,11 @@ std::vector<std::pair<std::string, std::string>> Parser::parseParameters() {
 }
 
 DeclarationPtr Parser::parseEnumDeclaration() {
-    // Assumes current token is KW_ENUM.
     consume(TokenType::KW_ENUM, "Expected 'enum'");
-    std::optional<std::string> enumName = std::nullopt;
+    std::optional<std::string> tag = std::nullopt;
     if (check(TokenType::IDENTIFIER)) {
-        // Optional enum tag.
         Token tagToken = advance();
-        enumName = tagToken.lexeme;
+        tag = tagToken.lexeme;
     }
     consume(TokenType::DELIM_LBRACE, "Expected '{' to start enum body");
     std::vector<std::pair<std::string, std::optional<ExpressionPtr>>> enumerators;
@@ -248,7 +250,53 @@ DeclarationPtr Parser::parseEnumDeclaration() {
     }
     consume(TokenType::DELIM_RBRACE, "Expected '}' to close enum body");
     consume(TokenType::DELIM_SEMICOLON, "Expected ';' after enum declaration");
-    return std::make_shared<EnumDeclaration>(enumName, enumerators);
+    return std::make_shared<EnumDeclaration>(tag, enumerators);
+}
+
+std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
+    // Parse a union member declaration.
+    std::string type;
+    if (match(TokenType::KW_INT)) {
+        type = "int";
+    } else if (match(TokenType::KW_FLOAT)) {
+        type = "float";
+    } else if (match(TokenType::KW_CHAR)) {
+        type = "char";
+    } else if (match(TokenType::KW_DOUBLE)) {
+        type = "double";
+    } else if (match(TokenType::KW_BOOL)) {
+        type = "bool";
+    } else {
+        error("Expected type specifier in union member declaration");
+    }
+    std::string name;
+    if (check(TokenType::IDENTIFIER)) {
+        Token nameToken = advance();
+        name = nameToken.lexeme;
+    } else {
+        static int anonCounter = 0;
+        name = "anon_" + type + "_" + std::to_string(anonCounter++);
+    }
+    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after union member declaration");
+    return std::make_shared<VariableDeclaration>(type, name, std::nullopt);
+}
+
+DeclarationPtr Parser::parseUnionDeclaration() {
+    consume(TokenType::KW_UNION, "Expected 'union'");
+    std::optional<std::string> tag = std::nullopt;
+    if (check(TokenType::IDENTIFIER)) {
+        Token tagToken = advance();
+        tag = tagToken.lexeme;
+    }
+    consume(TokenType::DELIM_LBRACE, "Expected '{' to start union body");
+    std::vector<std::shared_ptr<VariableDeclaration>> members;
+    while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+        auto memberDecl = parseUnionMemberDeclaration();
+        members.push_back(memberDecl);
+    }
+    consume(TokenType::DELIM_RBRACE, "Expected '}' to close union body");
+    consume(TokenType::DELIM_SEMICOLON, "Expected ';' after union declaration");
+    return std::make_shared<UnionDeclaration>(tag, members);
 }
 
 std::shared_ptr<CompoundStatement> Parser::parseCompoundStatement() {
@@ -274,11 +322,9 @@ StatementPtr Parser::parseStatement() {
         return parseSwitchStatement();
     } else if (match(TokenType::DELIM_LBRACE)) {
         return parseCompoundStatement();
-    }
-    // Updated: Include KW_ENUM as a possible start for a variable declaration.
-    else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+    } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
              check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-             check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM)) {
+             check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) || check(TokenType::KW_UNION)) {
         return parseVariableDeclarationStatement();
     } else {
         return parseExpressionStatement();
@@ -310,7 +356,7 @@ StatementPtr Parser::parseForStatement() {
     StatementPtr initializer = nullptr;
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
         check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-        check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM)) {
+        check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) || check(TokenType::KW_UNION)) {
         initializer = parseVariableDeclarationStatement();
     } else {
         initializer = parseExpressionStatement();
@@ -369,7 +415,7 @@ StatementPtr Parser::parseExpressionStatement() {
 
 StatementPtr Parser::parseVariableDeclarationStatement() {
     std::string type;
-    // Updated: allow "enum" as a type specifier.
+    // Updated: allow "enum" and "union" as type specifiers.
     if (match(TokenType::KW_INT)) {
         type = "int";
     } else if (match(TokenType::KW_FLOAT)) {
@@ -388,6 +434,12 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
         }
         std::string tag = advance().lexeme;
         type = "enum " + tag;
+    } else if (match(TokenType::KW_UNION)) {
+        if (!check(TokenType::IDENTIFIER)) {
+            error("Expected union tag after 'union'");
+        }
+        std::string tag = advance().lexeme;
+        type = "union " + tag;
     } else {
         error("Expected type specifier in variable declaration");
     }
@@ -411,10 +463,9 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
         return std::make_shared<MultiVariableDeclarationStatement>(decls);
 }
 
-// =====================================================
-// Expression parsing productions with new bitwise/shift support
-// =====================================================
-
+//
+// Expression parsing productions
+//
 ExpressionPtr Parser::parseExpression() {
     return parseAssignment();
 }
@@ -427,22 +478,14 @@ ExpressionPtr Parser::parseAssignment() {
          peek().type == TokenType::OP_MULTIPLY_ASSIGN ||
          peek().type == TokenType::OP_DIVIDE_ASSIGN)) {
          Token opToken = advance();
-         auto identifier = std::dynamic_pointer_cast<Identifier>(expr);
-         if (!identifier) {
-              error("Invalid compound assignment target");
-         }
          ExpressionPtr rhs = parseAssignment();
          std::string op = opToken.lexeme.substr(0, 1);
          ExpressionPtr binaryExpr = std::make_shared<BinaryExpression>(op, expr, rhs);
-         return std::make_shared<Assignment>(identifier->name, binaryExpr);
+         return std::make_shared<Assignment>(expr, binaryExpr);
     }
     else if (match(TokenType::OP_ASSIGN)) {
-         auto identifier = std::dynamic_pointer_cast<Identifier>(expr);
-         if (!identifier) {
-             error("Invalid assignment target");
-         }
          ExpressionPtr value = parseAssignment();
-         return std::make_shared<Assignment>(identifier->name, value);
+         return std::make_shared<Assignment>(expr, value);
     }
     return expr;
 }
@@ -605,7 +648,15 @@ ExpressionPtr Parser::parseUnary() {
 ExpressionPtr Parser::parsePostfix() {
     ExpressionPtr expr = parsePrimary();
     while (!isAtEnd()) {
-        if (current + 1 < tokens.size() &&
+        if (match(TokenType::DOT)) {
+            // Expect an identifier after the dot.
+            if (!check(TokenType::IDENTIFIER))
+                error("Expected identifier after '.'");
+            Token memberToken = advance();
+            std::string memberName = memberToken.lexeme;
+            expr = std::make_shared<MemberAccess>(expr, memberName);
+        }
+        else if (current + 1 < tokens.size() &&
             tokens[current].type == TokenType::OP_PLUS &&
             tokens[current + 1].type == TokenType::OP_PLUS) {
             advance();

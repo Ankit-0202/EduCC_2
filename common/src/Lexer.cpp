@@ -45,7 +45,6 @@ void Lexer::skipWhitespace() {
         if (std::isspace(static_cast<unsigned char>(c))) {
             get();
         } else if (c == '/' && peekNext() == '/') {
-            // Single-line comment.
             get(); // consume '/'
             get(); // consume second '/'
             while (peek() != '\n' && !isAtEnd())
@@ -65,7 +64,6 @@ Token Lexer::identifier() {
         lexeme.push_back(get());
     }
     Token token;
-    // Check for keywords.
     if (lexeme == "int")
         token.type = TokenType::KW_INT;
     else if (lexeme == "float")
@@ -93,7 +91,9 @@ Token Lexer::identifier() {
     else if (lexeme == "default")
         token.type = TokenType::KW_DEFAULT;
     else if (lexeme == "enum")
-        token.type = TokenType::KW_ENUM;  // NEW: recognize enum keyword
+        token.type = TokenType::KW_ENUM;
+    else if (lexeme == "union")
+        token.type = TokenType::KW_UNION;
     else
         token.type = TokenType::IDENTIFIER;
     token.lexeme = lexeme;
@@ -296,8 +296,11 @@ Token Lexer::opOrDelim() {
         case ':':
             token.type = TokenType::DELIM_COLON;
             break;
+        case '.': {
+            token.type = TokenType::DOT; // NEW: dot operator
+            break;
+        }
         case '\'':
-            // Roll back and call character()
             currentPos--;
             column--;
             return character();

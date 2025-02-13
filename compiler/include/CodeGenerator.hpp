@@ -1,5 +1,5 @@
-#ifndef CODE_GENERATOR_HPP
-#define CODE_GENERATOR_HPP
+#ifndef CODEGENERATOR_HPP
+#define CODEGENERATOR_HPP
 
 #include "AST.hpp"
 #include "SymbolTable.hpp"
@@ -26,6 +26,8 @@ private:
     llvm::LLVMContext context;
     llvm::IRBuilder<> builder;
     std::unique_ptr<llvm::Module> module;
+
+    // Map for local variables.
     std::unordered_map<std::string, llvm::Value*> localVariables;
 
     // Create or fetch a function in the module, ensuring
@@ -33,8 +35,8 @@ private:
     // 'isDefinition = false' => we produce (or unify) a 'declare'
     // 'isDefinition = true'  => we produce (or unify) a 'define'
     llvm::Function* getOrCreateFunctionInModule(
-        const std::string& name,
-        llvm::Type* returnType,
+        const std::string& name, 
+        llvm::Type* returnType,                     
         const std::vector<llvm::Type*>& paramTypes,
         bool isDefinition
     );
@@ -55,6 +57,8 @@ private:
     void generateVariableDeclarationStatement(
         const std::shared_ptr<VariableDeclarationStatement>& varDeclStmt
     );
+
+    llvm::Value* generateLValue(const std::shared_ptr<Expression>& expr);
 };
 
-#endif // CODE_GENERATOR_HPP
+#endif // CODEGENERATOR_HPP

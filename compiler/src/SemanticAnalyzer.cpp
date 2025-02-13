@@ -1,6 +1,7 @@
 #include "SemanticAnalyzer.hpp"
 #include "AST.hpp"
 #include "SymbolTable.hpp"
+#include "TypeRegistry.hpp"
 #include <stdexcept>
 #include <iostream>
 
@@ -25,6 +26,8 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr& decl) {
         }
     } else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(decl)) {
         analyzeEnumDeclaration(enumDecl);
+    } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
+        analyzeUnionDeclaration(unionDecl);
     } else {
         throw std::runtime_error("SemanticAnalyzer Error: Unknown declaration type.");
     }
@@ -125,6 +128,17 @@ void SemanticAnalyzer::analyzeEnumDeclaration(const std::shared_ptr<EnumDeclarat
     }
 }
 
+void SemanticAnalyzer::analyzeUnionDeclaration(const std::shared_ptr<UnionDeclaration>& unionDecl) {
+    // Analyze each member.
+    for (auto &member : unionDecl->members) {
+        analyzeVariableDeclaration(member);
+    }
+    // Register the union declaration in the global union registry if it has a tag.
+    if (unionDecl->tag.has_value()) {
+        unionRegistry[unionDecl->tag.value()] = unionDecl;
+    }
+}
+
 std::vector<std::string> SemanticAnalyzer::getParameterTypes(const std::vector<std::pair<std::string, std::string>>& parameters) {
     std::vector<std::string> types;
     for (const auto& param : parameters) {
@@ -218,9 +232,42 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
         analyzeExpression(unExpr->operand);
     } else if (auto postExpr = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
         analyzeExpression(postExpr->operand);
-    }
-    else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
+    } else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
         analyzeExpression(castExpr->operand);
+    }
+    // NEW: Handle MemberAccess expressions.
+    else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+        // Analyze the base expression first.
+        analyzeExpression(mem->base);
+        // Expect the base to be an identifier.
+        if (auto baseId = std::dynamic_pointer_cast<Identifier>(mem->base)) {
+            auto symbolOpt = symbolTable.lookup(baseId->name);
+            if (!symbolOpt.has_value()) {
+                throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + baseId->name + "' in member access.");
+            }
+            std::string type = symbolOpt.value().type;
+            // The type should start with "union "
+            if (type.rfind("union ", 0) != 0) {
+                throw std::runtime_error("SemanticAnalyzer Error: Variable '" + baseId->name + "' is not a union type.");
+            }
+            std::string tag = type.substr(6);
+            auto unionIt = unionRegistry.find(tag);
+            if (unionIt == unionRegistry.end()) {
+                throw std::runtime_error("SemanticAnalyzer Error: Unknown union type '" + type + "'.");
+            }
+            bool found = false;
+            for (auto &member : unionIt->second->members) {
+                if (member->name == mem->member) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                throw std::runtime_error("SemanticAnalyzer Error: Union type '" + type + "' does not have member '" + mem->member + "'.");
+            }
+        } else {
+            throw std::runtime_error("SemanticAnalyzer Error: Unsupported base expression in member access.");
+        }
     } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
         // No analysis needed.
     } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
@@ -228,8 +275,22 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
             throw std::runtime_error("SemanticAnalyzer Error: Undefined variable or function '" + id->name + "'.");
         }
     } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
-        if (!symbolTable.lookup(assign->lhs).has_value()) {
-            throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + assign->lhs + "'.");
+        // For assignments, check the left-hand side.
+        // (Our code generator will later obtain the lvalue pointer from the lhs.)
+        if (auto id = std::dynamic_pointer_cast<Identifier>(assign->lhs)) {
+            if (!symbolTable.lookup(id->name).has_value()) {
+                throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + id->name + "'.");
+            }
+        } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(assign->lhs)) {
+            if (auto baseId = std::dynamic_pointer_cast<Identifier>(mem->base)) {
+                if (!symbolTable.lookup(baseId->name).has_value()) {
+                    throw std::runtime_error("SemanticAnalyzer Error: Undefined variable '" + baseId->name + "' in member access.");
+                }
+            } else {
+                throw std::runtime_error("SemanticAnalyzer Error: Invalid lvalue in member access.");
+            }
+        } else {
+            throw std::runtime_error("SemanticAnalyzer Error: Invalid assignment target.");
         }
         analyzeExpression(assign->rhs);
     } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {

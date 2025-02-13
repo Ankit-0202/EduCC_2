@@ -1,6 +1,7 @@
 #include "CodeGenerator.hpp"
 #include "AST.hpp"
 #include "SymbolTable.hpp"
+#include "TypeRegistry.hpp"
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -20,6 +21,30 @@ using std::string;
 using std::shared_ptr;
 using std::vector;
 
+// Helper: generate an lvalue pointer for assignable expressions.
+llvm::Value* CodeGenerator::generateLValue(const ExpressionPtr &expr) {
+    // If it's an Identifier, return its pointer.
+    if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+         auto it = localVariables.find(id->name);
+         if (it != localVariables.end()) {
+              return it->second;
+         }
+         GlobalVariable* gVar = module->getGlobalVariable(id->name);
+         if (gVar)
+              return gVar;
+         throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "' in lvalue generation.");
+    }
+    // If it's a MemberAccess, assume the base is a union and the member is at offset 0.
+    else if (auto memberAccess = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+         llvm::Value* basePtr = generateLValue(memberAccess->base);
+         // For demonstration, assume that union member accesses return int.
+         return builder.CreateBitCast(basePtr, llvm::PointerType::getUnqual(Type::getInt32Ty(context)));
+    }
+    else {
+         throw runtime_error("CodeGenerator Error: Expression is not a valid lvalue.");
+    }
+}
+
 //
 // Constructor: initializes the IRBuilder and creates a new module.
 //
@@ -30,7 +55,7 @@ CodeGenerator::CodeGenerator()
 
 //
 // generateCode: Walk through the Program AST and generate IR.
-// Global declarations are processed first (including enum declarations),
+// Global declarations are processed first (including enum and union declarations),
 // then function declarations.
 //
 std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& program) {
@@ -41,7 +66,7 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
             GlobalVariable* gVar = new GlobalVariable(
                 *module,
                 varType,
-                false, // mutable
+                false,
                 GlobalValue::ExternalLinkage,
                 nullptr,
                 varDecl->name
@@ -157,22 +182,22 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
         else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(decl)) {
             // For each enumerator, create a global constant variable of type i32.
             for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
-                std::string enumName = enumDecl->enumerators[i].first;
+                string enumName = enumDecl->enumerators[i].first;
                 int value = enumDecl->enumeratorValues[i];
                 Constant* initVal = ConstantInt::get(Type::getInt32Ty(context), value);
                 GlobalVariable* gEnum = new GlobalVariable(
                     *module,
                     Type::getInt32Ty(context),
-                    true, // constant
-                    GlobalValue::ExternalLinkage, // CHANGED: external linkage so that getGlobalVariable() finds it
+                    true,
+                    GlobalValue::ExternalLinkage,
                     initVal,
                     enumName
                 );
             }
         }
+        // For union declarations, we do not create a global variable.
     }
 
-    // Process function declarations.
     for (const auto& decl : program->declarations) {
         if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
             generateFunction(funcDecl);
@@ -201,6 +226,33 @@ llvm::Type* CodeGenerator::getLLVMType(const string& type) {
     // Support enum types (treated as int)
     else if (type.rfind("enum ", 0) == 0)
         return Type::getInt32Ty(context);
+    // Support union types: look up the union definition by tag and determine maximum member size.
+    else if (type.rfind("union ", 0) == 0) {
+        std::string tag = type.substr(6);
+        auto it = unionRegistry.find(tag);
+        if (it == unionRegistry.end()) {
+            throw runtime_error("CodeGenerator Error: Unknown union type '" + type + "'");
+        }
+        int maxSize = 0;
+        for (auto &member : it->second->members) {
+            int memberSize = 0;
+            if (member->type == "int") memberSize = 4;
+            else if (member->type == "float") memberSize = 4;
+            else if (member->type == "char") memberSize = 1;
+            else if (member->type == "double") memberSize = 8;
+            else if (member->type == "bool") memberSize = 1;
+            else if (member->type.rfind("enum ", 0) == 0) memberSize = 4;
+            else if (member->type.rfind("union ", 0) == 0) {
+                throw runtime_error("CodeGenerator Error: Nested unions not supported.");
+            } else {
+                throw runtime_error("CodeGenerator Error: Unsupported union member type '" + member->type + "'.");
+            }
+            if (memberSize > maxSize) {
+                maxSize = memberSize;
+            }
+        }
+        return ArrayType::get(Type::getInt8Ty(context), maxSize);
+    }
     else
         throw runtime_error("CodeGenerator Error: Unsupported type '" + type + "'.");
 }
@@ -249,17 +301,12 @@ llvm::Function* CodeGenerator::getOrCreateFunctionInModule(
 //   - If body!=nullptr => define the function IR (entry block, etc.)
 //
 void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& funcDecl) {
-    // 1. Gather param types
-    Type* retTy = getLLVMType(funcDecl->returnType);
+    llvm::Type* retTy = getLLVMType(funcDecl->returnType);
     vector<Type*> paramTys;
     for (auto& param : funcDecl->parameters) {
         paramTys.push_back(getLLVMType(param.first));
     }
-
-    // 2. Distinguish prototype (no body) vs. definition
     bool hasBody = (funcDecl->body != nullptr);
-
-    // 3. Create or find the IR Function
     Function* function = getOrCreateFunctionInModule(
         funcDecl->name,
         retTy,
@@ -352,10 +399,9 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         return false;
     }
     else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
-        Value* retVal = generateExpression(retStmt->expression);
-        // Check that the return value type matches the function's return type.
-        Function* currentFunction = builder.GetInsertBlock()->getParent();
-        Type* expectedType = currentFunction->getReturnType();
+        llvm::Value* retVal = generateExpression(retStmt->expression);
+        llvm::Function* currentFunction = builder.GetInsertBlock()->getParent();
+        llvm::Type* expectedType = currentFunction->getReturnType();
         if (retVal->getType() != expectedType) {
             // If retVal is an i1 (boolean) and expected is i32 (int), extend it.
             if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32)) {
@@ -373,14 +419,14 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         return true;
     }
     else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
-        Value* condVal = generateExpression(ifStmt->condition);
-        if (condVal->getType() != Type::getInt1Ty(context)) {
+        llvm::Value* condVal = generateExpression(ifStmt->condition);
+        if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
             condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
         }
-        Function* theFunction = builder.GetInsertBlock()->getParent();
-        BasicBlock* thenBB = BasicBlock::Create(context, "then", theFunction);
-        BasicBlock* elseBB = BasicBlock::Create(context, "else", theFunction);
-        BasicBlock* mergeBB = BasicBlock::Create(context, "ifcont", theFunction);
+        llvm::Function* theFunction = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* thenBB = llvm::BasicBlock::Create(context, "then", theFunction);
+        llvm::BasicBlock* elseBB = llvm::BasicBlock::Create(context, "else", theFunction);
+        llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(context, "ifcont", theFunction);
         builder.CreateCondBr(condVal, thenBB, elseBB);
 
         // then branch
@@ -404,14 +450,14 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         return false;
     }
     else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
-        Function* theFunction = builder.GetInsertBlock()->getParent();
-        BasicBlock* condBB = BasicBlock::Create(context, "while.cond", theFunction);
-        BasicBlock* bodyBB = BasicBlock::Create(context, "while.body", theFunction);
-        BasicBlock* afterBB = BasicBlock::Create(context, "while.after", theFunction);
+        llvm::Function* theFunction = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "while.cond", theFunction);
+        llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(context, "while.body", theFunction);
+        llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "while.after", theFunction);
         builder.CreateBr(condBB);
         builder.SetInsertPoint(condBB);
-        Value* condVal = generateExpression(whileStmt->condition);
-        if (condVal->getType() != Type::getInt1Ty(context)) {
+        llvm::Value* condVal = generateExpression(whileStmt->condition);
+        if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
             condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
         }
         builder.CreateCondBr(condVal, bodyBB, afterBB);
@@ -426,26 +472,23 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
     else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
         if (forStmt->initializer)
             generateStatement(forStmt->initializer);
-        Function* theFunction = builder.GetInsertBlock()->getParent();
-        BasicBlock* condBB = BasicBlock::Create(context, "for.cond", theFunction);
-        BasicBlock* bodyBB = BasicBlock::Create(context, "for.body", theFunction);
-        BasicBlock* incrBB = BasicBlock::Create(context, "for.incr", theFunction);
-        BasicBlock* afterBB = BasicBlock::Create(context, "for.after", theFunction);
-
-        // jump to cond
+        llvm::Function* theFunction = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* condBB = llvm::BasicBlock::Create(context, "for.cond", theFunction);
+        llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(context, "for.body", theFunction);
+        llvm::BasicBlock* incrBB = llvm::BasicBlock::Create(context, "for.incr", theFunction);
+        llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(context, "for.after", theFunction);
         builder.CreateBr(condBB);
 
         // cond
         builder.SetInsertPoint(condBB);
-        Value* condVal = nullptr;
+        llvm::Value* condVal = nullptr;
         if (forStmt->condition) {
             condVal = generateExpression(forStmt->condition);
-            if (condVal->getType() != Type::getInt1Ty(context)) {
+            if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
                 condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "forcond");
             }
         } else {
-            // if no condition, treat as 'true'
-            condVal = ConstantInt::get(Type::getInt1Ty(context), 1);
+            condVal = ConstantInt::get(llvm::Type::getInt1Ty(context), 1);
         }
         builder.CreateCondBr(condVal, bodyBB, afterBB);
 
@@ -468,23 +511,23 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         return false;
     }
     else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
-        // FIXED: use 'expression' (as defined in our AST) instead of 'condition'
-        Value* condVal = generateExpression(switchStmt->expression);
+        llvm::Value* condVal = generateExpression(switchStmt->expression);
         if (!condVal->getType()->isIntegerTy()) {
             throw runtime_error("CodeGenerator Error: Switch expression must be of integer type.");
         }
-        Function* theFunction = builder.GetInsertBlock()->getParent();
-        BasicBlock* defaultBB = BasicBlock::Create(context, "switch.default", theFunction);
+        llvm::Function* theFunction = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* defaultBB = llvm::BasicBlock::Create(context, "switch.default", theFunction);
+        
         SwitchInst* switchInst = builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
         for (auto &casePair : switchStmt->cases) {
             if (!casePair.first.has_value()) {
                 throw runtime_error("CodeGenerator Error: Case label missing in case clause.");
             }
-            Value* caseVal = generateExpression(casePair.first.value());
+            llvm::Value* caseVal = generateExpression(casePair.first.value());
             if (!isa<ConstantInt>(caseVal)) {
                 throw runtime_error("CodeGenerator Error: Case label must be a constant integer.");
             }
-            BasicBlock* caseBB = BasicBlock::Create(context, "switch.case", theFunction);
+            llvm::BasicBlock* caseBB = llvm::BasicBlock::Create(context, "switch.case", theFunction);
             switchInst->addCase(cast<ConstantInt>(caseVal), caseBB);
             builder.SetInsertPoint(caseBB);
             bool terminated = generateStatement(casePair.second);
@@ -508,10 +551,10 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
     }
 }
 
-Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
+llvm::Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
     if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
-        Value* lhs = generateExpression(binExpr->left);
-        Value* rhs = generateExpression(binExpr->right);
+        llvm::Value* lhs = generateExpression(binExpr->left);
+        llvm::Value* rhs = generateExpression(binExpr->right);
 
         // If types differ, do simple int->float promotions (unchanged code)
         if (lhs->getType() != rhs->getType()) {
@@ -602,7 +645,7 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
         }
     }
     else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
-        Value* operandVal = generateExpression(castExpr->operand);
+        llvm::Value* operandVal = generateExpression(castExpr->operand);
         llvm::Type* targetType = getLLVMType(castExpr->castType);
         llvm::Type* operandType = operandVal->getType();
         if (operandType == targetType)
@@ -634,9 +677,9 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
     else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
         auto it = localVariables.find(id->name);
         if (it != localVariables.end()) {
-            Value* varPtr = it->second;
+            llvm::Value* varPtr = it->second;
             if (auto allocaInst = dyn_cast<AllocaInst>(varPtr)) {
-                Type* allocatedType = allocaInst->getAllocatedType();
+                llvm::Type* allocatedType = allocaInst->getAllocatedType();
                 return builder.CreateLoad(allocatedType, varPtr, id->name.c_str());
             } else {
                 throw runtime_error("CodeGenerator Error: '" + id->name + "' is not an alloca instruction.");
@@ -648,6 +691,13 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
         }
         throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "'.");
     }
+    else if (auto memberAccess = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+        // For member access, generate a load from the union variable.
+        // Use generateLValue to get the pointer, then load.
+        llvm::Value* ptr = generateLValue(expr);
+        // Here, we assume the member type is int for demonstration.
+        return builder.CreateLoad(Type::getInt32Ty(context), ptr, "memberload");
+    }
     else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
         auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
         if (!id) {
@@ -657,13 +707,13 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
         if (it == localVariables.end()) {
             throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "' in postfix expression.");
         }
-        Value* varPtr = it->second;
+        llvm::Value* varPtr = it->second;
         AllocaInst* allocaInst = dyn_cast<AllocaInst>(varPtr);
         if (!allocaInst) {
             throw runtime_error("CodeGenerator Error: Postfix operator applied to non-alloca variable.");
         }
-        Value* oldVal = builder.CreateLoad(allocaInst->getAllocatedType(), varPtr, id->name.c_str());
-        Value* one = nullptr;
+        llvm::Value* oldVal = builder.CreateLoad(allocaInst->getAllocatedType(), varPtr, id->name.c_str());
+        llvm::Value* one = nullptr;
         if (oldVal->getType()->isIntegerTy()) {
             one = ConstantInt::get(oldVal->getType(), 1);
         } else if (oldVal->getType()->isFloatingPointTy()) {
@@ -671,7 +721,7 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
         } else {
             throw runtime_error("CodeGenerator Error: Unsupported type for postfix operator.");
         }
-        Value* newVal = nullptr;
+        llvm::Value* newVal = nullptr;
         if (post->op == "++") {
             if (oldVal->getType()->isFloatingPointTy())
                 newVal = builder.CreateFAdd(oldVal, one, "postinc");
@@ -688,20 +738,16 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
         builder.CreateStore(newVal, varPtr);
         return oldVal;
     } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
-        Value* rhsVal = generateExpression(assign->rhs);
-        auto it = localVariables.find(assign->lhs);
-        if (it == localVariables.end()) {
-            throw runtime_error("CodeGenerator Error: Undefined variable '" + assign->lhs + "'.");
-        }
-        Value* varPtr = it->second;
-        builder.CreateStore(rhsVal, varPtr);
+        llvm::Value* ptr = generateLValue(assign->lhs);
+        llvm::Value* rhsVal = generateExpression(assign->rhs);
+        builder.CreateStore(rhsVal, ptr);
         return rhsVal;
     } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
-        Function* callee = module->getFunction(funcCall->functionName);
+        llvm::Function* callee = module->getFunction(funcCall->functionName);
         if (!callee) {
             throw runtime_error("CodeGenerator Error: Undefined function '" + funcCall->functionName + "' in IR.");
         }
-        vector<Value*> args;
+        vector<llvm::Value*> args;
         for (auto& argExpr : funcCall->arguments) {
             args.push_back(generateExpression(argExpr));
         }
@@ -718,13 +764,12 @@ Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
 void CodeGenerator::generateVariableDeclarationStatement(
     const shared_ptr<VariableDeclarationStatement>& varDeclStmt
 ) {
-    Type* varTy = getLLVMType(varDeclStmt->type);
+    llvm::Type* varTy = getLLVMType(varDeclStmt->type);
     AllocaInst* alloc = builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
     localVariables[varDeclStmt->name] = alloc;
 
     if (varDeclStmt->initializer) {
-        Value* initVal = generateExpression(varDeclStmt->initializer.value());
-        // If the initializer type does not match the variable type, perform conversion.
+        llvm::Value* initVal = generateExpression(varDeclStmt->initializer.value());
         if (initVal->getType() != varTy) {
             if (initVal->getType()->isFloatingPointTy() && varTy->isFloatingPointTy()) {
                 // If converting from a larger FP type to a smaller FP type, truncate.

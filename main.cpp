@@ -29,7 +29,8 @@ static std::string tokenTypeToString(TokenType type) {
         case TokenType::KW_SWITCH: return "KW_SWITCH";
         case TokenType::KW_CASE: return "KW_CASE";
         case TokenType::KW_DEFAULT: return "KW_DEFAULT";
-        case TokenType::KW_ENUM: return "KW_ENUM";  // NEW: enum keyword
+        case TokenType::KW_ENUM: return "KW_ENUM";
+        case TokenType::KW_UNION: return "KW_UNION";
         case TokenType::OP_PLUS: return "OP_PLUS";
         case TokenType::OP_MINUS: return "OP_MINUS";
         case TokenType::OP_MULTIPLY: return "OP_MULTIPLY";
@@ -50,6 +51,7 @@ static std::string tokenTypeToString(TokenType type) {
         case TokenType::DELIM_LBRACE: return "DELIM_LBRACE";
         case TokenType::DELIM_RBRACE: return "DELIM_RBRACE";
         case TokenType::DELIM_COLON: return "DELIM_COLON";
+        case TokenType::DOT: return "DOT";
         case TokenType::LITERAL_INT: return "LITERAL_INT";
         case TokenType::LITERAL_FLOAT: return "LITERAL_FLOAT";
         case TokenType::LITERAL_DOUBLE: return "LITERAL_DOUBLE";
