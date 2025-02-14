@@ -28,6 +28,8 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr& decl) {
         analyzeEnumDeclaration(enumDecl);
     } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
         analyzeUnionDeclaration(unionDecl);
+    } else if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(decl)) {
+        analyzeStructDeclaration(structDecl); // NEW: analyze struct declarations
     } else {
         throw std::runtime_error("Semantic Analysis Error: Unknown declaration type encountered.");
     }
@@ -137,6 +139,17 @@ void SemanticAnalyzer::analyzeUnionDeclaration(const std::shared_ptr<UnionDeclar
     }
 }
 
+void SemanticAnalyzer::analyzeStructDeclaration(const std::shared_ptr<StructDeclaration>& structDecl) {
+    // Analyze each member.
+    for (auto &member : structDecl->members) {
+        analyzeVariableDeclaration(member);
+    }
+    // Register the struct declaration in the global struct registry if it has a tag.
+    if (structDecl->tag.has_value()) {
+        structRegistry[structDecl->tag.value()] = structDecl;
+    }
+}
+
 std::vector<std::string> SemanticAnalyzer::getParameterTypes(const std::vector<std::pair<std::string, std::string>>& parameters) {
     std::vector<std::string> types;
     for (const auto& param : parameters) {
@@ -235,33 +248,50 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
     }
     // NEW: Handle member access.
     else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-        // Analyze the base expression first.
         analyzeExpression(mem->base);
-        // Expect the base to be an identifier.
         if (auto baseId = std::dynamic_pointer_cast<Identifier>(mem->base)) {
             auto symbolOpt = symbolTable.lookup(baseId->name);
             if (!symbolOpt.has_value()) {
                 throw std::runtime_error("Semantic Analysis Error: Undefined variable '" + baseId->name + "' used in member access.");
             }
             std::string type = symbolOpt.value().type;
-            // The type should start with "union "
-            if (type.rfind("union ", 0) != 0) {
-                throw std::runtime_error("Semantic Analysis Error: Variable '" + baseId->name + "' is not of a union type.");
+            // The type should start with "union " or "struct "
+            if (type.rfind("union ", 0) != 0 && type.rfind("struct ", 0) != 0) {
+                throw std::runtime_error("Semantic Analysis Error: Variable '" + baseId->name + "' is not of a union or struct type.");
             }
-            std::string tag = type.substr(6);
-            auto unionIt = unionRegistry.find(tag);
-            if (unionIt == unionRegistry.end()) {
-                throw std::runtime_error("Semantic Analysis Error: Unknown union type '" + type + "'.");
-            }
-            bool found = false;
-            for (auto &member : unionIt->second->members) {
-                if (member->name == mem->member) {
-                    found = true;
-                    break;
+            std::string tag;
+            if (type.rfind("union ", 0) == 0) {
+                tag = type.substr(6);
+                auto unionIt = unionRegistry.find(tag);
+                if (unionIt == unionRegistry.end()) {
+                    throw std::runtime_error("Semantic Analysis Error: Unknown union type '" + type + "'.");
                 }
-            }
-            if (!found) {
-                throw std::runtime_error("Semantic Analysis Error: Union type '" + type + "' does not contain a member named '" + mem->member + "'.");
+                bool found = false;
+                for (auto &member : unionIt->second->members) {
+                    if (member->name == mem->member) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    throw std::runtime_error("Semantic Analysis Error: Union type '" + type + "' does not contain a member named '" + mem->member + "'.");
+                }
+            } else if (type.rfind("struct ", 0) == 0) {
+                tag = type.substr(7);
+                auto structIt = structRegistry.find(tag);
+                if (structIt == structRegistry.end()) {
+                    throw std::runtime_error("Semantic Analysis Error: Unknown struct type '" + type + "'.");
+                }
+                bool found = false;
+                for (auto &member : structIt->second->members) {
+                    if (member->name == mem->member) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    throw std::runtime_error("Semantic Analysis Error: Struct type '" + type + "' does not contain a member named '" + mem->member + "'.");
+                }
             }
         } else {
             throw std::runtime_error("Semantic Analysis Error: Unsupported base expression in member access.");
@@ -274,8 +304,6 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr& expr) {
             throw std::runtime_error("Semantic Analysis Error: Undefined variable or function '" + id->name + "'.");
         }
     } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
-        // For assignments, check the left-hand side.
-        // (Our code generator will later obtain the lvalue pointer from the lhs.)
         if (auto id = std::dynamic_pointer_cast<Identifier>(assign->lhs)) {
             if (!symbolTable.lookup(id->name).has_value()) {
                 throw std::runtime_error("Semantic Analysis Error: Undefined variable '" + id->name + "' used as assignment target.");

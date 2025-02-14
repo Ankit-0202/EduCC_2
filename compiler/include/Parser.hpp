@@ -1,11 +1,11 @@
 #ifndef PARSER_HPP
 #define PARSER_HPP
 
+#include "Token.hpp"
 #include <memory>
 #include <vector>
 #include <string>
 #include "AST.hpp"
-#include "Lexer.hpp"
 
 class Parser {
 public:
@@ -31,9 +31,10 @@ private:
     DeclarationPtr parseDeclaration();
     DeclarationPtr parseVariableDeclaration();
     DeclarationPtr parseFunctionDeclaration();
+    std::shared_ptr<StructDeclaration> parseStructDeclaration(); // New: struct declaration parser
     DeclarationPtr parseEnumDeclaration();
-    DeclarationPtr parseUnionDeclaration();  // NEW: union declaration
-    std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration(); // NEW: union member parsing
+    DeclarationPtr parseUnionDeclaration();
+    std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
 
     std::vector<std::pair<std::string, std::string>> parseParameters();
 
@@ -45,7 +46,6 @@ private:
     StatementPtr parseForStatement();
     StatementPtr parseSwitchStatement();
     StatementPtr parseReturnStatement();
-    // (Break support removed)
     StatementPtr parseExpressionStatement();
     StatementPtr parseVariableDeclarationStatement();
 

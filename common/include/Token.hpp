@@ -4,7 +4,6 @@
 #include <string>
 
 enum class TokenType {
-    // Keywords
     KW_INT,
     KW_FLOAT,
     KW_CHAR,
@@ -21,6 +20,7 @@ enum class TokenType {
     KW_ENUM,
     KW_UNION,
     // Operators
+    KW_STRUCT, // <-- New token type for "struct"
     OP_PLUS,
     OP_MINUS,
     OP_MULTIPLY,

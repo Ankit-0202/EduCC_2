@@ -23,7 +23,6 @@ using std::vector;
 
 // Helper: generate an lvalue pointer for assignable expressions.
 llvm::Value* CodeGenerator::generateLValue(const ExpressionPtr &expr) {
-    // If it's an Identifier, return its pointer.
     if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
          auto it = localVariables.find(id->name);
          if (it != localVariables.end()) {
@@ -34,11 +33,47 @@ llvm::Value* CodeGenerator::generateLValue(const ExpressionPtr &expr) {
               return gVar;
          throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "' in lvalue generation.");
     }
-    // If it's a MemberAccess, assume the base is a union and the member is at offset 0.
     else if (auto memberAccess = std::dynamic_pointer_cast<MemberAccess>(expr)) {
          llvm::Value* basePtr = generateLValue(memberAccess->base);
-         // For demonstration, assume that union member accesses return int.
-         return builder.CreateBitCast(basePtr, llvm::PointerType::getUnqual(Type::getInt32Ty(context)));
+         llvm::Type* varType = nullptr;
+         if (auto allocaInst = dyn_cast<AllocaInst>(basePtr))
+             varType = allocaInst->getAllocatedType();
+         else if (auto globalVar = dyn_cast<GlobalVariable>(basePtr))
+             varType = globalVar->getValueType();
+         else
+             throw runtime_error("CodeGenerator Error: Unexpected variable pointer type in member access.");
+
+         if (varType->isStructTy()) {
+             StructType* stTy = cast<StructType>(varType);
+             string typeName = stTy->getName().str();
+             // Handle union types (named as "union.<tag>").
+             if (typeName.rfind("union.", 0) == 0) {
+                 Value* ptrToArray = builder.CreateStructGEP(stTy, basePtr, 0, "union_array");
+                 // For demonstration, assume union member accesses yield an int.
+                 return builder.CreateBitCast(ptrToArray, PointerType::getUnqual(Type::getInt32Ty(context)));
+             }
+             // Otherwise, treat as a struct.
+             else if (typeName.rfind("struct.", 0) == 0) {
+                 string tag = typeName.substr(7);
+                 auto it = structRegistry.find(tag);
+                 if (it == structRegistry.end())
+                     throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag + "'");
+             auto structDecl = it->second;
+             int index = -1;
+                 // Find the member index by name.
+             for (size_t i = 0; i < structDecl->members.size(); i++) {
+                if (structDecl->members[i]->name == memberAccess->member) {
+                    index = i;
+                    break;
+                }
+             }
+             if (index < 0)
+                     throw runtime_error("CodeGenerator Error: Struct '" + tag + "' has no member named '" + memberAccess->member + "'");
+                 return builder.CreateStructGEP(stTy, basePtr, index, "memberptr");
+         }
+         }
+         // If not a struct type, we do not support member access.
+         throw runtime_error("CodeGenerator Error: Member access on unsupported type.");
     }
     else {
          throw runtime_error("CodeGenerator Error: Expression is not a valid lvalue.");
@@ -55,7 +90,7 @@ CodeGenerator::CodeGenerator()
 
 //
 // generateCode: Walk through the Program AST and generate IR.
-// Global declarations are processed first (including enum and union declarations),
+// Global declarations are processed first (including enum, union, and struct declarations),
 // then function declarations.
 //
 std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& program) {
@@ -71,6 +106,9 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                 nullptr,
                 varDecl->name
             );
+            // For unions, set a minimum alignment (e.g. 4 bytes).
+            if (varDecl->type.rfind("union ", 0) == 0)
+                gVar->setAlignment(Align(4));
             if (varDecl->initializer) {
                 if (auto lit = std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
                     Constant* initVal = nullptr;
@@ -131,6 +169,8 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                     nullptr,
                     singleDecl->name
                 );
+                if (singleDecl->type.rfind("union ", 0) == 0)
+                    gVar->setAlignment(Align(4));
                 if (singleDecl->initializer) {
                     if (auto lit = std::dynamic_pointer_cast<Literal>(singleDecl->initializer.value())) {
                         Constant* initVal = nullptr;
@@ -193,20 +233,19 @@ std::unique_ptr<Module> CodeGenerator::generateCode(const shared_ptr<Program>& p
                     initVal,
                     enumName
                 );
+                (void)gEnum; // Silence unused variable warning.
             }
         }
-        // For union declarations, we do not create a global variable.
+        // For union and struct declarations, no global variable is created.
     }
 
     for (const auto& decl : program->declarations) {
-        if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
+        if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl))
             generateFunction(funcDecl);
-        }
     }
 
-    if (verifyModule(*module, &errs())) {
+    if (verifyModule(*module, &errs()))
         throw runtime_error("CodeGenerator Error: Module verification failed.");
-    }
     return std::move(module);
 }
 
@@ -226,13 +265,23 @@ llvm::Type* CodeGenerator::getLLVMType(const string& type) {
     // Support enum types (treated as int)
     else if (type.rfind("enum ", 0) == 0)
         return Type::getInt32Ty(context);
-    // Support union types: look up the union definition by tag and determine maximum member size.
+    // Support union types.
     else if (type.rfind("union ", 0) == 0) {
         std::string tag = type.substr(6);
-        auto it = unionRegistry.find(tag);
-        if (it == unionRegistry.end()) {
-            throw runtime_error("CodeGenerator Error: Unknown union type '" + type + "'");
+        std::string unionName = "union." + tag;
+        // Instead of getTypeByName, iterate over identified struct types.
+        llvm::StructType* unionStruct = nullptr;
+        for (auto* ST : module->getIdentifiedStructTypes()) {
+            if (ST->getName() == unionName) {
+                unionStruct = ST;
+                break;
+            }
         }
+        if (unionStruct)
+            return unionStruct;
+        auto it = unionRegistry.find(tag);
+        if (it == unionRegistry.end())
+            throw runtime_error("CodeGenerator Error: Unknown union type '" + type + "'");
         int maxSize = 0;
         for (auto &member : it->second->members) {
             int memberSize = 0;
@@ -242,16 +291,30 @@ llvm::Type* CodeGenerator::getLLVMType(const string& type) {
             else if (member->type == "double") memberSize = 8;
             else if (member->type == "bool") memberSize = 1;
             else if (member->type.rfind("enum ", 0) == 0) memberSize = 4;
-            else if (member->type.rfind("union ", 0) == 0) {
+            else if (member->type.rfind("union ", 0) == 0)
                 throw runtime_error("CodeGenerator Error: Nested unions not supported.");
-            } else {
+            else
                 throw runtime_error("CodeGenerator Error: Unsupported union member type '" + member->type + "'.");
-            }
-            if (memberSize > maxSize) {
+            if (memberSize > maxSize)
                 maxSize = memberSize;
-            }
         }
-        return ArrayType::get(Type::getInt8Ty(context), maxSize);
+        vector<Type*> elements;
+        elements.push_back(ArrayType::get(Type::getInt8Ty(context), maxSize));
+        unionStruct = StructType::create(context, elements, unionName, false);
+        return unionStruct;
+    }
+    // Support struct types.
+    else if (type.rfind("struct ", 0) == 0) {
+        std::string tag = type.substr(7);
+        auto it = structRegistry.find(tag);
+        if (it == structRegistry.end())
+            throw runtime_error("CodeGenerator Error: Unknown struct type '" + type + "'");
+        auto structDecl = it->second;
+        vector<Type*> memberTypes;
+        for (auto &member : structDecl->members)
+            memberTypes.push_back(getLLVMType(member->type));
+        std::string llvmStructName = "struct." + tag;
+        return StructType::create(context, memberTypes, llvmStructName, false);
     }
     else
         throw runtime_error("CodeGenerator Error: Unsupported type '" + type + "'.");
@@ -278,20 +341,13 @@ llvm::Function* CodeGenerator::getOrCreateFunctionInModule(
     FunctionType* fType = FunctionType::get(returnType, paramTypes, false);
     if (Function* existingFn = module->getFunction(name)) {
         FunctionType* existingType = existingFn->getFunctionType();
-        if (!functionSignaturesMatch(existingType, fType)) {
+        if (!functionSignaturesMatch(existingType, fType))
             throw runtime_error("CodeGenerator Error: Conflicting function signature for '" + name + "'.");
-        }
-        if (isDefinition && !existingFn->empty()) {
+        if (isDefinition && !existingFn->empty())
             throw runtime_error("CodeGenerator Error: Function '" + name + "' is already defined.");
-        }
         return existingFn;
     }
-    Function* newFn = Function::Create(
-        fType,
-        Function::ExternalLinkage,
-        name,
-        module.get()
-    );
+    Function* newFn = Function::Create(fType, Function::ExternalLinkage, name, module.get());
     return newFn;
 }
 
@@ -303,16 +359,10 @@ llvm::Function* CodeGenerator::getOrCreateFunctionInModule(
 void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& funcDecl) {
     llvm::Type* retTy = getLLVMType(funcDecl->returnType);
     vector<Type*> paramTys;
-    for (auto& param : funcDecl->parameters) {
+    for (auto& param : funcDecl->parameters)
         paramTys.push_back(getLLVMType(param.first));
-    }
     bool hasBody = (funcDecl->body != nullptr);
-    Function* function = getOrCreateFunctionInModule(
-        funcDecl->name,
-        retTy,
-        paramTys,
-        hasBody
-    );
+    Function* function = getOrCreateFunctionInModule(funcDecl->name, retTy, paramTys, hasBody);
     if (!hasBody)
         return;
     if (function->empty()) {
@@ -330,7 +380,9 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
             const auto& paramName = funcDecl->parameters[i].second;
             arg.setName(paramName);
             AllocaInst* alloc = builder.CreateAlloca(arg.getType(), nullptr, paramName);
-            // store arg value into the alloca
+            // For union parameters, set alignment to 4.
+            if (funcDecl->parameters[i].first.rfind("union ", 0) == 0)
+                alloc->setAlignment(Align(4));
             builder.CreateStore(&arg, alloc);
             // keep track in localVariables
             localVariables[paramName] = alloc;
@@ -339,34 +391,28 @@ void CodeGenerator::generateFunction(const shared_ptr<FunctionDeclaration>& func
 
         // Must be a CompoundStatement
         auto compound = std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body);
-        if (!compound) {
+        if (!compound)
             throw runtime_error("CodeGenerator Error: Function body is not a CompoundStatement.");
-        }
-
-        // Emit IR for the function body statements
         generateStatement(compound);
 
         // If no terminator, create a default 'return' (e.g. return 0 for int)
         if (!builder.GetInsertBlock()->getTerminator()) {
-            if (funcDecl->returnType == "void") {
+            if (funcDecl->returnType == "void")
                 builder.CreateRetVoid();
-            } else if (funcDecl->returnType == "int") {
+            else if (funcDecl->returnType == "int")
                 builder.CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
-            } else if (funcDecl->returnType == "float") {
+            else if (funcDecl->returnType == "float")
                 builder.CreateRet(ConstantFP::get(Type::getFloatTy(context), 0.0f));
-            } else if (funcDecl->returnType == "double") {
+            else if (funcDecl->returnType == "double")
                 builder.CreateRet(ConstantFP::get(Type::getDoubleTy(context), 0.0));
-            } else if (funcDecl->returnType == "char") {
+            else if (funcDecl->returnType == "char")
                 builder.CreateRet(ConstantInt::get(Type::getInt8Ty(context), 0));
-            } else if (funcDecl->returnType == "bool") {
+            else if (funcDecl->returnType == "bool")
                 builder.CreateRet(ConstantInt::get(Type::getInt1Ty(context), 0));
-            } else {
+            else
                 throw runtime_error("CodeGenerator Error: Unsupported return type '" + funcDecl->returnType + "'.");
-            }
         }
-    }
-    else {
-        // The function was already defined => we should have thrown above, but just in case:
+    } else {
         throw runtime_error("CodeGenerator Error: Unexpected redefinition encountered for '" + funcDecl->name + "'.");
     }
 }
@@ -393,9 +439,8 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         return false;
     }
     else if (auto multiVarDeclStmt = std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(stmt)) {
-        for (auto& singleDeclStmt : multiVarDeclStmt->declarations) {
+        for (auto& singleDeclStmt : multiVarDeclStmt->declarations)
             generateVariableDeclarationStatement(singleDeclStmt);
-        }
         return false;
     }
     else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
@@ -403,49 +448,35 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         llvm::Function* currentFunction = builder.GetInsertBlock()->getParent();
         llvm::Type* expectedType = currentFunction->getReturnType();
         if (retVal->getType() != expectedType) {
-            // If retVal is an i1 (boolean) and expected is i32 (int), extend it.
-            if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32)) {
+            if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32))
                 retVal = builder.CreateZExt(retVal, expectedType, "zexttmp");
-            }
-            // Otherwise, if both are integer types but with different widths, cast.
-            else if (retVal->getType()->isIntegerTy() && expectedType->isIntegerTy()) {
+            else if (retVal->getType()->isIntegerTy() && expectedType->isIntegerTy())
                 retVal = builder.CreateIntCast(retVal, expectedType, false, "intcasttmp");
-            }
-            else {
+            else
                 throw runtime_error("CodeGenerator Error: Return value type does not match function return type.");
-            }
         }
         builder.CreateRet(retVal);
         return true;
     }
     else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
         llvm::Value* condVal = generateExpression(ifStmt->condition);
-        if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
+        if (condVal->getType() != llvm::Type::getInt1Ty(context))
             condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
-        }
         llvm::Function* theFunction = builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* thenBB = llvm::BasicBlock::Create(context, "then", theFunction);
         llvm::BasicBlock* elseBB = llvm::BasicBlock::Create(context, "else", theFunction);
         llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(context, "ifcont", theFunction);
         builder.CreateCondBr(condVal, thenBB, elseBB);
-
-        // then branch
         builder.SetInsertPoint(thenBB);
         bool thenTerminated = generateStatement(ifStmt->thenBranch);
-        if (!thenTerminated) {
+        if (!thenTerminated)
             builder.CreateBr(mergeBB);
-        }
-
-        // else branch
         builder.SetInsertPoint(elseBB);
         bool elseTerminated = false;
         if (ifStmt->elseBranch)
             elseTerminated = generateStatement(ifStmt->elseBranch.value());
-        if (!elseTerminated) {
+        if (!elseTerminated)
             builder.CreateBr(mergeBB);
-        }
-
-        // merge
         builder.SetInsertPoint(mergeBB);
         return false;
     }
@@ -457,15 +488,13 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         builder.CreateBr(condBB);
         builder.SetInsertPoint(condBB);
         llvm::Value* condVal = generateExpression(whileStmt->condition);
-        if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
+        if (condVal->getType() != llvm::Type::getInt1Ty(context))
             condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
-        }
         builder.CreateCondBr(condVal, bodyBB, afterBB);
         builder.SetInsertPoint(bodyBB);
         bool bodyTerminated = generateStatement(whileStmt->body);
-        if (!bodyTerminated) {
+        if (!bodyTerminated)
             builder.CreateBr(condBB);
-        }
         builder.SetInsertPoint(afterBB);
         return false;
     }
@@ -484,9 +513,8 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         llvm::Value* condVal = nullptr;
         if (forStmt->condition) {
             condVal = generateExpression(forStmt->condition);
-            if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
+            if (condVal->getType() != llvm::Type::getInt1Ty(context))
                 condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "forcond");
-            }
         } else {
             condVal = ConstantInt::get(llvm::Type::getInt1Ty(context), 1);
         }
@@ -495,15 +523,11 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
         // body
         builder.SetInsertPoint(bodyBB);
         bool bodyTerminated = generateStatement(forStmt->body);
-        if (!bodyTerminated) {
+        if (!bodyTerminated)
             builder.CreateBr(incrBB);
-        }
-
-        // incr
         builder.SetInsertPoint(incrBB);
-        if (forStmt->increment) {
+        if (forStmt->increment)
             generateExpression(forStmt->increment);
-        }
         builder.CreateBr(condBB);
 
         // after
@@ -512,35 +536,30 @@ bool CodeGenerator::generateStatement(const shared_ptr<Statement>& stmt) {
     }
     else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
         llvm::Value* condVal = generateExpression(switchStmt->expression);
-        if (!condVal->getType()->isIntegerTy()) {
+        if (!condVal->getType()->isIntegerTy())
             throw runtime_error("CodeGenerator Error: Switch expression must be of integer type.");
-        }
         llvm::Function* theFunction = builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* defaultBB = llvm::BasicBlock::Create(context, "switch.default", theFunction);
         
         SwitchInst* switchInst = builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
         for (auto &casePair : switchStmt->cases) {
-            if (!casePair.first.has_value()) {
+            if (!casePair.first.has_value())
                 throw runtime_error("CodeGenerator Error: Case label missing in case clause.");
-            }
             llvm::Value* caseVal = generateExpression(casePair.first.value());
-            if (!isa<ConstantInt>(caseVal)) {
+            if (!isa<ConstantInt>(caseVal))
                 throw runtime_error("CodeGenerator Error: Case label must be a constant integer.");
-            }
             llvm::BasicBlock* caseBB = llvm::BasicBlock::Create(context, "switch.case", theFunction);
             switchInst->addCase(cast<ConstantInt>(caseVal), caseBB);
             builder.SetInsertPoint(caseBB);
             bool terminated = generateStatement(casePair.second);
-            if (!terminated) {
+            if (!terminated)
                 builder.CreateBr(defaultBB);
-            }
         }
         builder.SetInsertPoint(defaultBB);
         if (switchStmt->defaultCase.has_value()) {
             bool terminated = generateStatement(switchStmt->defaultCase.value());
-            if (!terminated) {
+            if (!terminated)
                 builder.CreateUnreachable();
-            }
         } else {
             builder.CreateUnreachable();
         }
@@ -558,13 +577,12 @@ llvm::Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
 
         // If types differ, do simple int->float promotions (unchanged code)
         if (lhs->getType() != rhs->getType()) {
-            if (lhs->getType()->isIntegerTy() && rhs->getType()->isFloatingPointTy()) {
+            if (lhs->getType()->isIntegerTy() && rhs->getType()->isFloatingPointTy())
                 lhs = builder.CreateSIToFP(lhs, rhs->getType(), "sitofp");
-            } else if (lhs->getType()->isFloatingPointTy() && rhs->getType()->isIntegerTy()) {
+            else if (lhs->getType()->isFloatingPointTy() && rhs->getType()->isIntegerTy())
                 rhs = builder.CreateSIToFP(rhs, lhs->getType(), "sitofp");
-            } else {
+            else
                 throw runtime_error("CodeGenerator Error: Incompatible types in binary expression.");
-            }
         }
 
         // Arithmetic and logical operators
@@ -650,17 +668,16 @@ llvm::Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
         llvm::Type* operandType = operandVal->getType();
         if (operandType == targetType)
             return operandVal;
-        if (operandType->isFloatingPointTy() && targetType->isIntegerTy()) {
+        if (operandType->isFloatingPointTy() && targetType->isIntegerTy())
             return builder.CreateFPToSI(operandVal, targetType, "casttmp");
-        } else if (operandType->isIntegerTy() && targetType->isFloatingPointTy()) {
+        else if (operandType->isIntegerTy() && targetType->isFloatingPointTy())
             return builder.CreateSIToFP(operandVal, targetType, "casttmp");
-        } else if (operandType->isIntegerTy() && targetType->isIntegerTy()) {
+        else if (operandType->isIntegerTy() && targetType->isIntegerTy())
             return builder.CreateIntCast(operandVal, targetType, false, "casttmp");
-        } else if (operandType->isFloatingPointTy() && targetType->isFloatingPointTy()) {
+        else if (operandType->isFloatingPointTy() && targetType->isFloatingPointTy())
             return builder.CreateFPCast(operandVal, targetType, "casttmp");
-        } else {
+        else
             throw runtime_error("CodeGenerator Error: Unsupported cast conversion.");
-        }
     }
     else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
         if (std::holds_alternative<char>(lit->value))
@@ -686,41 +703,44 @@ llvm::Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
             }
         }
         GlobalVariable* gVar = module->getGlobalVariable(id->name);
-        if (gVar) {
+        if (gVar)
             return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
-        }
         throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "'.");
     }
     else if (auto memberAccess = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-        // For member access, generate a load from the union variable.
-        // Use generateLValue to get the pointer, then load.
         llvm::Value* ptr = generateLValue(expr);
-        // Here, we assume the member type is int for demonstration.
-        return builder.CreateLoad(Type::getInt32Ty(context), ptr, "memberload");
+        // If this pointer is the union member pointer (bitcast to i32*), then use int32 as element type.
+        if (ptr->getType() == PointerType::getUnqual(Type::getInt32Ty(context))) {
+            return builder.CreateLoad(Type::getInt32Ty(context), ptr, "memberload");
+        }
+        llvm::Type* elemType = nullptr;
+        if (ptr->getType()->isPointerTy()) {
+            auto ptrType = cast<PointerType>(ptr->getType());
+            elemType = ptrType->getContainedType(0);
+        } else {
+            throw runtime_error("CodeGenerator Error: Unable to determine element type for member load.");
+        }
+        return builder.CreateLoad(elemType, ptr, "memberload");
     }
     else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
         auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
-        if (!id) {
+        if (!id)
             throw runtime_error("CodeGenerator Error: Postfix operator applied to non-identifier.");
-        }
         auto it = localVariables.find(id->name);
-        if (it == localVariables.end()) {
+        if (it == localVariables.end())
             throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name + "' in postfix expression.");
-        }
         llvm::Value* varPtr = it->second;
         AllocaInst* allocaInst = dyn_cast<AllocaInst>(varPtr);
-        if (!allocaInst) {
+        if (!allocaInst)
             throw runtime_error("CodeGenerator Error: Postfix operator applied to non-alloca variable.");
-        }
         llvm::Value* oldVal = builder.CreateLoad(allocaInst->getAllocatedType(), varPtr, id->name.c_str());
         llvm::Value* one = nullptr;
-        if (oldVal->getType()->isIntegerTy()) {
+        if (oldVal->getType()->isIntegerTy())
             one = ConstantInt::get(oldVal->getType(), 1);
-        } else if (oldVal->getType()->isFloatingPointTy()) {
+        else if (oldVal->getType()->isFloatingPointTy())
             one = ConstantFP::get(oldVal->getType(), 1.0);
-        } else {
+        else
             throw runtime_error("CodeGenerator Error: Unsupported type for postfix operator.");
-        }
         llvm::Value* newVal = nullptr;
         if (post->op == "++") {
             if (oldVal->getType()->isFloatingPointTy())
@@ -732,40 +752,34 @@ llvm::Value* CodeGenerator::generateExpression(const ExpressionPtr& expr) {
                 newVal = builder.CreateFSub(oldVal, one, "postdec");
             else
                 newVal = builder.CreateSub(oldVal, one, "postdec");
-        } else {
+        } else
             throw runtime_error("CodeGenerator Error: Unknown postfix operator '" + post->op + "'.");
-        }
         builder.CreateStore(newVal, varPtr);
         return oldVal;
-    } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
+    }
+    else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
         llvm::Value* ptr = generateLValue(assign->lhs);
         llvm::Value* rhsVal = generateExpression(assign->rhs);
         builder.CreateStore(rhsVal, ptr);
         return rhsVal;
-    } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
+    }
+    else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
         llvm::Function* callee = module->getFunction(funcCall->functionName);
-        if (!callee) {
+        if (!callee)
             throw runtime_error("CodeGenerator Error: Undefined function '" + funcCall->functionName + "' in IR.");
-        }
         vector<llvm::Value*> args;
-        for (auto& argExpr : funcCall->arguments) {
+        for (auto& argExpr : funcCall->arguments)
             args.push_back(generateExpression(argExpr));
-        }
         return builder.CreateCall(callee, args, "calltmp");
     }
     throw runtime_error("CodeGenerator Error: Unsupported expression type in generateExpression().");
 }
 
-//
-// For local variable declarations like "int x = 5;"
-// We create an alloca and store the initializer—if the initializer’s type does not match,
-// we insert a conversion (e.g. from double to float).
-//
-void CodeGenerator::generateVariableDeclarationStatement(
-    const shared_ptr<VariableDeclarationStatement>& varDeclStmt
-) {
+void CodeGenerator::generateVariableDeclarationStatement(const shared_ptr<VariableDeclarationStatement>& varDeclStmt) {
     llvm::Type* varTy = getLLVMType(varDeclStmt->type);
     AllocaInst* alloc = builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
+    if (varDeclStmt->type.rfind("union ", 0) == 0)
+        alloc->setAlignment(Align(4));
     localVariables[varDeclStmt->name] = alloc;
 
     if (varDeclStmt->initializer) {
