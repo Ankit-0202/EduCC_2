@@ -59,7 +59,7 @@ GCC_EXE    := gcc_executable
 OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
-.PHONY: all clean test test-verbose run create_test_output_dir copy
+.PHONY: all clean test test-verbose run create_test_output_dir copy lint
 
 ###############################################################################
 # Build Everything
@@ -166,7 +166,7 @@ test-verbose: all create_test_output_dir
 	@echo "Running tests in verbose mode..."
 	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
-	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
+	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$testfile .c).txt"; \
 	    echo "-----------------------------------------------------"; \
 	    echo "Testing $$testfile"; \
 	    echo "-----------------------------------------------------" >> $$output_file; \
@@ -248,3 +248,12 @@ copy:
 clean:
 	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
 	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) $(OUR_OUTPUT) $(GCC_OUTPUT)
+
+###############################################################################
+# Fix Linting Issues
+###############################################################################
+
+lint:
+	@echo "Fixing lint issues with clang-format..."
+	@find . \( -name "*.cpp" -o -name "*.hpp" -o -name "*.c" -o -name "*.h" \) -exec clang-format -i {} +
+	@echo "✅ Linting issues fixed."
