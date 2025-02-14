@@ -1,7 +1,3 @@
-int add(int a, int b) {
-    return a + b;
-}
+int add(int a, int b) { return a + b; }
 
-int main() {
-    return add(3, 7);
-}
+int main() { return add(3, 7); }
