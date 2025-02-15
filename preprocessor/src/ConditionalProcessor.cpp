@@ -18,7 +18,8 @@ bool ConditionalProcessor::isConditionalDirective(const std::string &line) {
 //
 // recordMacro:
 //   Records a simple macro definition for use in conditional expressions.
-//   (Only handles object-like macros. Function-like macros are not used in conditionals.)
+//   (Only handles object-like macros. Function-like macros are not used in
+//   conditionals.)
 //
 void ConditionalProcessor::recordMacro(const std::string &line) {
   std::string trimmed = line;
@@ -48,12 +49,15 @@ void ConditionalProcessor::recordMacro(const std::string &line) {
 //
 // processNonConditionalDirective:
 //   Processes non-conditional directives (like #define and #undef) by recording
-//   the macro and then returning the line (so it can be passed to the macro expander later).
+//   the macro and then returning the line (so it can be passed to the macro
+//   expander later).
 //
-std::string ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
+std::string
+ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
   std::string trimmed = line;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
-  if (trimmed.compare(0, 7, "#define") == 0 || trimmed.compare(0, 6, "#undef") == 0) {
+  if (trimmed.compare(0, 7, "#define") == 0 ||
+      trimmed.compare(0, 6, "#undef") == 0) {
     recordMacro(line);
     return line;
   }
@@ -75,7 +79,8 @@ int ConditionalProcessor::evaluateExpression(const std::string &expr) {
   // Support "defined" operator.
   if (trimmed.compare(0, 7, "defined") == 0) {
     size_t pos = 7;
-    while (pos < trimmed.size() && isspace(trimmed[pos])) pos++;
+    while (pos < trimmed.size() && isspace(trimmed[pos]))
+      pos++;
     std::string macroName;
     if (pos < trimmed.size() && trimmed[pos] == '(') {
       pos++; // skip '('
@@ -107,7 +112,8 @@ int ConditionalProcessor::evaluateExpression(const std::string &expr) {
       try {
         return std::stoi(replacement);
       } catch (...) {
-        throw std::runtime_error("Invalid expression after macro substitution: " + replacement);
+        throw std::runtime_error(
+            "Invalid expression after macro substitution: " + replacement);
       }
     }
     throw std::runtime_error("Invalid expression in conditional: " + expr);
@@ -116,8 +122,9 @@ int ConditionalProcessor::evaluateExpression(const std::string &expr) {
 
 //
 // processLine:
-//   Processes a single line. For macro directives (#define, #undef), it records them
-//   and preserves the line; for conditional directives (#if, #else, etc.), it uses the evaluator.
+//   Processes a single line. For macro directives (#define, #undef), it records
+//   them and preserves the line; for conditional directives (#if, #else, etc.),
+//   it uses the evaluator.
 //
 std::string ConditionalProcessor::processLine(const std::string &line) {
   std::string trimmed = line;
@@ -138,7 +145,7 @@ std::string ConditionalProcessor::processLine(const std::string &line) {
   // --- Preserve and record macro directives ---
   if (directive == "#define" || directive == "#undef") {
     recordMacro(line);
-    return line;  // Preserve for macro expansion.
+    return line; // Preserve for macro expansion.
   }
 
   // Now handle conditional directives.

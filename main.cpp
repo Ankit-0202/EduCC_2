@@ -16,50 +16,94 @@
 
 static std::string tokenTypeToString(TokenType type) {
   switch (type) {
-  case TokenType::KW_INT: return "KW_INT";
-  case TokenType::KW_FLOAT: return "KW_FLOAT";
-  case TokenType::KW_CHAR: return "KW_CHAR";
-  case TokenType::KW_DOUBLE: return "KW_DOUBLE";
-  case TokenType::KW_BOOL: return "KW_BOOL";
-  case TokenType::KW_RETURN: return "KW_RETURN";
-  case TokenType::KW_IF: return "KW_IF";
-  case TokenType::KW_ELSE: return "KW_ELSE";
-  case TokenType::KW_WHILE: return "KW_WHILE";
-  case TokenType::KW_FOR: return "KW_FOR";
-  case TokenType::KW_SWITCH: return "KW_SWITCH";
-  case TokenType::KW_CASE: return "KW_CASE";
-  case TokenType::KW_DEFAULT: return "KW_DEFAULT";
-  case TokenType::KW_ENUM: return "KW_ENUM";
-  case TokenType::KW_UNION: return "KW_UNION";
-  case TokenType::OP_PLUS: return "OP_PLUS";
-  case TokenType::OP_MINUS: return "OP_MINUS";
-  case TokenType::OP_MULTIPLY: return "OP_MULTIPLY";
-  case TokenType::OP_DIVIDE: return "OP_DIVIDE";
-  case TokenType::OP_ASSIGN: return "OP_ASSIGN";
-  case TokenType::OP_EQUAL: return "OP_EQUAL";
-  case TokenType::OP_NOT_EQUAL: return "OP_NOT_EQUAL";
-  case TokenType::OP_LESS: return "OP_LESS";
-  case TokenType::OP_GREATER: return "OP_GREATER";
-  case TokenType::OP_LESS_EQUAL: return "OP_LESS_EQUAL";
-  case TokenType::OP_GREATER_EQUAL: return "OP_GREATER_EQUAL";
-  case TokenType::OP_LOGICAL_AND: return "OP_LOGICAL_AND";
-  case TokenType::OP_LOGICAL_OR: return "OP_LOGICAL_OR";
-  case TokenType::DELIM_SEMICOLON: return "DELIM_SEMICOLON";
-  case TokenType::DELIM_COMMA: return "DELIM_COMMA";
-  case TokenType::DELIM_LPAREN: return "DELIM_LPAREN";
-  case TokenType::DELIM_RPAREN: return "DELIM_RPAREN";
-  case TokenType::DELIM_LBRACE: return "DELIM_LBRACE";
-  case TokenType::DELIM_RBRACE: return "DELIM_RBRACE";
-  case TokenType::DELIM_COLON: return "DELIM_COLON";
-  case TokenType::DOT: return "DOT";
-  case TokenType::LITERAL_INT: return "LITERAL_INT";
-  case TokenType::LITERAL_FLOAT: return "LITERAL_FLOAT";
-  case TokenType::LITERAL_DOUBLE: return "LITERAL_DOUBLE";
-  case TokenType::LITERAL_CHAR: return "LITERAL_CHAR";
-  case TokenType::IDENTIFIER: return "IDENTIFIER";
-  case TokenType::EOF_TOKEN: return "EOF_TOKEN";
-  case TokenType::UNKNOWN: return "UNKNOWN";
-  default: return "UNKNOWN";
+  case TokenType::KW_INT:
+    return "KW_INT";
+  case TokenType::KW_FLOAT:
+    return "KW_FLOAT";
+  case TokenType::KW_CHAR:
+    return "KW_CHAR";
+  case TokenType::KW_DOUBLE:
+    return "KW_DOUBLE";
+  case TokenType::KW_BOOL:
+    return "KW_BOOL";
+  case TokenType::KW_RETURN:
+    return "KW_RETURN";
+  case TokenType::KW_IF:
+    return "KW_IF";
+  case TokenType::KW_ELSE:
+    return "KW_ELSE";
+  case TokenType::KW_WHILE:
+    return "KW_WHILE";
+  case TokenType::KW_FOR:
+    return "KW_FOR";
+  case TokenType::KW_SWITCH:
+    return "KW_SWITCH";
+  case TokenType::KW_CASE:
+    return "KW_CASE";
+  case TokenType::KW_DEFAULT:
+    return "KW_DEFAULT";
+  case TokenType::KW_ENUM:
+    return "KW_ENUM";
+  case TokenType::KW_UNION:
+    return "KW_UNION";
+  case TokenType::OP_PLUS:
+    return "OP_PLUS";
+  case TokenType::OP_MINUS:
+    return "OP_MINUS";
+  case TokenType::OP_MULTIPLY:
+    return "OP_MULTIPLY";
+  case TokenType::OP_DIVIDE:
+    return "OP_DIVIDE";
+  case TokenType::OP_ASSIGN:
+    return "OP_ASSIGN";
+  case TokenType::OP_EQUAL:
+    return "OP_EQUAL";
+  case TokenType::OP_NOT_EQUAL:
+    return "OP_NOT_EQUAL";
+  case TokenType::OP_LESS:
+    return "OP_LESS";
+  case TokenType::OP_GREATER:
+    return "OP_GREATER";
+  case TokenType::OP_LESS_EQUAL:
+    return "OP_LESS_EQUAL";
+  case TokenType::OP_GREATER_EQUAL:
+    return "OP_GREATER_EQUAL";
+  case TokenType::OP_LOGICAL_AND:
+    return "OP_LOGICAL_AND";
+  case TokenType::OP_LOGICAL_OR:
+    return "OP_LOGICAL_OR";
+  case TokenType::DELIM_SEMICOLON:
+    return "DELIM_SEMICOLON";
+  case TokenType::DELIM_COMMA:
+    return "DELIM_COMMA";
+  case TokenType::DELIM_LPAREN:
+    return "DELIM_LPAREN";
+  case TokenType::DELIM_RPAREN:
+    return "DELIM_RPAREN";
+  case TokenType::DELIM_LBRACE:
+    return "DELIM_LBRACE";
+  case TokenType::DELIM_RBRACE:
+    return "DELIM_RBRACE";
+  case TokenType::DELIM_COLON:
+    return "DELIM_COLON";
+  case TokenType::DOT:
+    return "DOT";
+  case TokenType::LITERAL_INT:
+    return "LITERAL_INT";
+  case TokenType::LITERAL_FLOAT:
+    return "LITERAL_FLOAT";
+  case TokenType::LITERAL_DOUBLE:
+    return "LITERAL_DOUBLE";
+  case TokenType::LITERAL_CHAR:
+    return "LITERAL_CHAR";
+  case TokenType::IDENTIFIER:
+    return "IDENTIFIER";
+  case TokenType::EOF_TOKEN:
+    return "EOF_TOKEN";
+  case TokenType::UNKNOWN:
+    return "UNKNOWN";
+  default:
+    return "UNKNOWN";
   }
 }
 
@@ -92,7 +136,7 @@ int main(int argc, char *argv[]) {
    * Step 1: Preprocessing
    */
   std::vector<std::string> systemPaths = {"/usr/include", "/usr/local/include"};
-  std::vector<std::string> userPaths = { "." };
+  std::vector<std::string> userPaths = {"."};
 
   Preprocessor preprocessor(systemPaths, userPaths);
   std::string preprocessedSource;
@@ -121,9 +165,8 @@ int main(int argc, char *argv[]) {
 
   std::cout << "===== Token Stream =====\n";
   for (const auto &token : tokens) {
-    std::cout << "Type: " << tokenTypeToString(token.type)
-              << ", Lexeme: '" << token.lexeme
-              << "', Line: " << token.line
+    std::cout << "Type: " << tokenTypeToString(token.type) << ", Lexeme: '"
+              << token.lexeme << "', Line: " << token.line
               << ", Column: " << token.column << "\n";
   }
   std::cout << "========================\n\n";
@@ -164,7 +207,8 @@ int main(int argc, char *argv[]) {
   try {
     std::unique_ptr<llvm::Module> module = codeGen.generateCode(ast);
     std::error_code EC;
-    llvm::raw_fd_ostream dest(outFile, EC, static_cast<llvm::sys::fs::OpenFlags>(0));
+    llvm::raw_fd_ostream dest(outFile, EC,
+                              static_cast<llvm::sys::fs::OpenFlags>(0));
     if (EC) {
       std::cerr << "Could not open output file: " << EC.message() << "\n";
       return 1;

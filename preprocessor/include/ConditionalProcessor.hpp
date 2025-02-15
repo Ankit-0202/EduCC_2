@@ -1,8 +1,8 @@
 #ifndef CONDITIONAL_PROCESSOR_HPP
 #define CONDITIONAL_PROCESSOR_HPP
 
-#include <string>
 #include <stack>
+#include <string>
 #include <unordered_map>
 
 // Structure to hold the state for conditional directives.
@@ -18,7 +18,8 @@ public:
   // Checks if a line is any preprocessor directive (starting with '#').
   bool isConditionalDirective(const std::string &line);
 
-  // Process a given line (handles conditional directives and passes through non-conditionals).
+  // Process a given line (handles conditional directives and passes through
+  // non-conditionals).
   std::string processLine(const std::string &line);
 
   // Process non-conditional directives (e.g. #define, #undef).
