@@ -24,6 +24,9 @@ public:
     // Fully expand macros in the given source text.
     std::string expand(const std::string &source);
 
+    // Set the current file name for built-in macro expansion (__FILE__).
+    void setCurrentFile(const std::string &fileName);
+
 private:
     // Recursively expand macros in the source text.
     // 'disabled' holds macro names that are currently disabled (to prevent recursive re-expansion).
@@ -40,8 +43,11 @@ private:
     // Concatenate (paste) two token lexemes.
     std::string pasteTokens(const std::string &left, const std::string &right);
 
-    // Our macro table.
+    // The macro table.
     std::unordered_map<std::string, Macro> macros;
+
+    // Built-in macro state.
+    std::string currentFile; // For __FILE__ replacement.
 };
 
 #endif // MACRO_EXPANDER_HPP

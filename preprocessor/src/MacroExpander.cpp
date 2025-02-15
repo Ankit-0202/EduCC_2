@@ -17,19 +17,22 @@ static std::string tokensToString(const std::vector<Token> &tokens) {
     return oss.str();
 }
 
-MacroExpander::MacroExpander() {
+MacroExpander::MacroExpander() : currentFile("<unknown>") {
     // Empty constructor.
+}
+
+void MacroExpander::setCurrentFile(const std::string &fileName) {
+    currentFile = fileName;
 }
 
 //
 // processDirective:
 //   Parses a directive line and adds or removes macro definitions.
-//   This version manually parses the macro name and parameter list to avoid
-//   the problem where the function-like macro name token includes the '('.
+//   This version manually scans the line to extract the macro name and,
+//   if the next non‐whitespace character is '(', parses the parameter list.
 //   Supports object-like, function-like, and variadic macros.
 //
 void MacroExpander::processDirective(const std::string &line) {
-    // We assume the line starts with "#define" or "#undef"
     size_t pos = line.find("#define");
     if (pos != std::string::npos) {
         pos += 7; // Skip "#define"
@@ -92,10 +95,9 @@ void MacroExpander::processDirective(const std::string &line) {
         }
         std::cerr << " => '" << macro.replacement << "'\n";
     } else {
-        // Process undef
         pos = line.find("#undef");
         if (pos != std::string::npos) {
-            pos += 6; // skip "#undef"
+            pos += 6; // Skip "#undef"
             while (pos < line.size() && isspace(line[pos])) pos++;
             size_t start = pos;
             while (pos < line.size() && (isalnum(line[pos]) || line[pos]=='_'))
@@ -111,6 +113,7 @@ void MacroExpander::processDirective(const std::string &line) {
 // expandTokens:
 //   Recursively expands macros in the given source string.
 //   The 'disabled' map holds macro names that should not be expanded in this context.
+//   Also performs built-in macro substitution for __FILE__ and __LINE__.
 //
 std::string MacroExpander::expandTokens(const std::string &source, const std::unordered_map<std::string, bool>& disabled) {
     Lexer lexer(source);
@@ -121,18 +124,35 @@ std::string MacroExpander::expandTokens(const std::string &source, const std::un
     std::vector<Token> output;
     for (size_t i = 0; i < tokens.size(); ++i) {
         Token token = tokens[i];
+        // Built-in macros.
+        if (token.type == TokenType::IDENTIFIER) {
+            if (token.lexeme == "__FILE__") {
+                Token newToken;
+                newToken.type = TokenType::LITERAL_CHAR; // Using LITERAL_CHAR as placeholder for string literal.
+                newToken.lexeme = "\"" + currentFile + "\"";
+                newToken.line = token.line;
+                newToken.column = token.column;
+                output.push_back(newToken);
+                continue;
+            } else if (token.lexeme == "__LINE__") {
+                Token newToken;
+                newToken.type = TokenType::LITERAL_INT;
+                newToken.lexeme = std::to_string(token.line);
+                newToken.line = token.line;
+                newToken.column = token.column;
+                output.push_back(newToken);
+                continue;
+            }
+        }
+        // Check for macro expansion.
         if (token.type == TokenType::IDENTIFIER) {
             std::string name = token.lexeme;
-            // If macro exists and is not disabled:
             if (macros.find(name) != macros.end() && disabled.find(name) == disabled.end()) {
                 Macro macro = macros[name];
-                // Create a new disabled map that disables the current macro.
                 std::unordered_map<std::string, bool> newDisabled = disabled;
                 newDisabled[name] = true;
                 if (macro.isFunctionLike) {
-                    // Look ahead for '(' token.
                     if (i + 1 < tokens.size() && tokens[i + 1].type == TokenType::DELIM_LPAREN) {
-                        // Parse arguments.
                         size_t j = i + 1;
                         int parenLevel = 0;
                         std::vector<std::vector<Token>> args;
@@ -173,11 +193,9 @@ std::string MacroExpander::expandTokens(const std::string &source, const std::un
                         i = j; // skip tokens consumed in macro invocation
                         continue;
                     } else {
-                        // Not a macro call; treat as normal identifier.
                         output.push_back(token);
                     }
                 } else {
-                    // Object-like macro.
                     std::string expansion = macro.replacement;
                     std::string recursiveExpansion = expandTokens(expansion, newDisabled);
                     Lexer newLexer(recursiveExpansion);
@@ -219,7 +237,7 @@ std::string MacroExpander::expandTokens(const std::string &source, const std::un
 
 //
 // expand:
-//   Repeatedly apply macro expansion until a fixed point is reached.
+//   Repeatedly applies macro expansion until a fixed point is reached.
 //
 std::string MacroExpander::expand(const std::string &source) {
     std::string prev;
@@ -257,14 +275,14 @@ std::string MacroExpander::expandFunctionMacro(const Macro &macro,
     std::vector<Token> repTokens = lexer.tokenize();
     if (!repTokens.empty() && repTokens.back().type == TokenType::EOF_TOKEN)
         repTokens.pop_back();
-    
+
     // --- Merge adjacent '#' tokens into a single token "##" ---
     std::vector<Token> mergedTokens;
     for (size_t i = 0; i < repTokens.size(); ++i) {
         if (repTokens[i].lexeme == "#" && (i + 1 < repTokens.size() && repTokens[i+1].lexeme == "#")) {
             Token newToken;
             newToken.lexeme = "##";
-            newToken.type = repTokens[i].type; // or set to a dedicated token type if available
+            newToken.type = repTokens[i].type;
             newToken.line = repTokens[i].line;
             newToken.column = repTokens[i].column;
             mergedTokens.push_back(newToken);
@@ -274,7 +292,6 @@ std::string MacroExpander::expandFunctionMacro(const Macro &macro,
         }
     }
     
-    // Use mergedTokens from here on.
     std::vector<Token> result;
     // Process the tokens in the replacement.
     for (size_t i = 0; i < mergedTokens.size(); ++i) {
@@ -318,16 +335,15 @@ std::string MacroExpander::expandFunctionMacro(const Macro &macro,
                 newToken.line = t.line;
                 newToken.column = t.column;
                 result.push_back(newToken);
-                i++; // Skip the parameter token.
+                i++; // Skip parameter token.
                 continue;
             } else {
                 throw std::runtime_error("Invalid use of '#' in macro replacement.");
             }
         } else if (t.lexeme == "##") {
-            // Leave token pasting operators for later pass.
+            // Leave token pasting operators for later.
             result.push_back(t);
         } else if (t.type == TokenType::IDENTIFIER) {
-            // Check if this identifier matches a parameter.
             bool isParam = false;
             int index = -1;
             for (size_t j = 0; j < macro.parameters.size(); ++j) {

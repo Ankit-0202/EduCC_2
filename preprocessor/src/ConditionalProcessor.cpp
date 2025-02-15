@@ -4,10 +4,6 @@
 #include <stdexcept>
 #include <unordered_map>
 
-// Make sure ConditionalProcessor.hpp declares:
-//   std::unordered_map<std::string, std::string> macroDefinitions;
-// in its private section.
-
 ConditionalProcessor::ConditionalProcessor() {
   // Start with a default active state.
   stateStack.push({true, false});
@@ -20,7 +16,9 @@ bool ConditionalProcessor::isConditionalDirective(const std::string &line) {
 }
 
 //
-// Record simple macro definitions for conditionals (only handles simple cases)
+// recordMacro:
+//   Records a simple macro definition for use in conditional expressions.
+//   (Only handles object-like macros. Function-like macros are not used in conditionals.)
 //
 void ConditionalProcessor::recordMacro(const std::string &line) {
   std::string trimmed = line;
@@ -28,11 +26,10 @@ void ConditionalProcessor::recordMacro(const std::string &line) {
   if (trimmed.compare(0, 7, "#define") == 0) {
     std::string rest = trimmed.substr(7);
     rest = rest.substr(rest.find_first_not_of(" \t"));
-    size_t nameEnd = rest.find_first_of(" \t");
+    size_t nameEnd = rest.find_first_of(" \t(");
     std::string macroName;
     std::string replacement;
     if (nameEnd == std::string::npos) {
-      // No replacement text; use empty string.
       macroName = rest;
       replacement = "";
     } else {
@@ -49,28 +46,58 @@ void ConditionalProcessor::recordMacro(const std::string &line) {
 }
 
 //
-// Process non-conditional directives. For our purposes, process and record
-// macro definitions, then remove them from the output.
+// processNonConditionalDirective:
+//   Processes non-conditional directives (like #define and #undef) by recording
+//   the macro and then returning the line (so it can be passed to the macro expander later).
 //
 std::string ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
   std::string trimmed = line;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
   if (trimmed.compare(0, 7, "#define") == 0 || trimmed.compare(0, 6, "#undef") == 0) {
     recordMacro(line);
-    return "";
+    return line;
   }
   return "";
 }
 
 //
-// Evaluate a conditional expression. Our implementation is very simplified.
-// It first trims the expression, then attempts to convert it to an int.
-// If conversion fails, it looks up the expression in our macroDefinitions
-// (so that an expression like "FLAG" will be replaced with "1").
+// evaluateExpression:
+//   Evaluates a very simplified constant expression for conditionals.
+//   It supports integer literals and the defined operator in the forms:
+//       defined MACRO
+//       defined(MACRO)
+//   If the expression is not an integer literal, it attempts to substitute
+//   a recorded macro definition and convert it to an integer.
 //
 int ConditionalProcessor::evaluateExpression(const std::string &expr) {
   std::string trimmed = expr;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+  // Support "defined" operator.
+  if (trimmed.compare(0, 7, "defined") == 0) {
+    size_t pos = 7;
+    while (pos < trimmed.size() && isspace(trimmed[pos])) pos++;
+    std::string macroName;
+    if (pos < trimmed.size() && trimmed[pos] == '(') {
+      pos++; // skip '('
+      size_t endPos = trimmed.find(')', pos);
+      if (endPos == std::string::npos)
+        throw std::runtime_error("Missing ')' in defined operator: " + expr);
+      macroName = trimmed.substr(pos, endPos - pos);
+    } else {
+      size_t endPos = trimmed.find_first_of(" \t", pos);
+      if (endPos == std::string::npos)
+        macroName = trimmed.substr(pos);
+      else
+        macroName = trimmed.substr(pos, endPos - pos);
+    }
+    // Trim macroName.
+    size_t s = macroName.find_first_not_of(" \t");
+    size_t e = macroName.find_last_not_of(" \t");
+    if (s != std::string::npos && e != std::string::npos)
+      macroName = macroName.substr(s, e - s + 1);
+    return (macroDefinitions.find(macroName) != macroDefinitions.end()) ? 1 : 0;
+  }
+  // Otherwise, try to convert the expression to an integer.
   try {
     return std::stoi(trimmed);
   } catch (...) {
@@ -87,6 +114,11 @@ int ConditionalProcessor::evaluateExpression(const std::string &expr) {
   }
 }
 
+//
+// processLine:
+//   Processes a single line. For macro directives (#define, #undef), it records them
+//   and preserves the line; for conditional directives (#if, #else, etc.), it uses the evaluator.
+//
 std::string ConditionalProcessor::processLine(const std::string &line) {
   std::string trimmed = line;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
@@ -105,8 +137,8 @@ std::string ConditionalProcessor::processLine(const std::string &line) {
 
   // --- Preserve and record macro directives ---
   if (directive == "#define" || directive == "#undef") {
-    recordMacro(line);  // record the macro definition for conditionals
-    return line;        // preserve the line for later macro expansion
+    recordMacro(line);
+    return line;  // Preserve for macro expansion.
   }
 
   // Now handle conditional directives.
@@ -159,8 +191,6 @@ std::string ConditionalProcessor::processLine(const std::string &line) {
     return "";
   }
 }
-
-
 
 void ConditionalProcessor::verifyBalanced() const {
   if (stateStack.size() != 1)
