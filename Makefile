@@ -25,24 +25,24 @@ COMPILER_BUILD     := $(BUILD_DIR)/compiler
 TEST_OUTPUT_DIR    := test_output
 
 # Common Sources & Headers
-COMMON_SRC     := $(wildcard $(COMMON_DIR)/src/*.cpp)
-COMMON_OBJ     := $(patsubst $(COMMON_DIR)/src/%.cpp, $(COMMON_BUILD)/%.o, $(COMMON_SRC))
+COMMON_SRC     := $(shell find $(COMMON_DIR)/src -type f -name "*.cpp")
+COMMON_OBJ     := $(patsubst $(COMMON_DIR)/src/%, $(COMMON_BUILD)/%.o, $(COMMON_SRC))
 COMMON_INCLUDE := -I$(COMMON_DIR)/include
 COMMON_TARGET  := $(COMMON_BUILD)/libcommon.a
 
 # Preprocessor Sources & Headers
-PREPROC_SRC     := $(wildcard $(PREPROCESSOR_DIR)/src/*.cpp)
-PREPROC_HEADERS := $(wildcard $(PREPROCESSOR_DIR)/include/*.h)
+PREPROC_SRC     := $(shell find $(PREPROCESSOR_DIR)/src -type f -name "*.cpp")
+PREPROC_HEADERS := $(shell find $(PREPROCESSOR_DIR)/include -type f -name "*.h")
 PREPROC_FILES   := $(PREPROC_SRC) $(PREPROC_HEADERS)
-PREPROC_OBJ     := $(patsubst $(PREPROCESSOR_DIR)/src/%.cpp, $(PREPROC_BUILD)/%.o, $(PREPROC_SRC))
+PREPROC_OBJ     := $(patsubst $(PREPROCESSOR_DIR)/src/%, $(PREPROC_BUILD)/%.o, $(PREPROC_SRC))
 PREPROC_INCLUDE := -I$(PREPROCESSOR_DIR)/include
 PREPROC_TARGET  := $(PREPROC_BUILD)/libpreprocessor.a
 
 # Compiler Sources & Headers
-COMPILER_SRC     := $(wildcard $(COMPILER_DIR)/src/*.cpp)
-COMPILER_HEADERS := $(wildcard $(COMPILER_DIR)/include/*.h)
+COMPILER_SRC     := $(shell find $(COMPILER_DIR)/src -type f -name "*.cpp")
+COMPILER_HEADERS := $(shell find $(COMPILER_DIR)/include -type f -name "*.h")
 COMPILER_FILES   := $(COMPILER_SRC) $(COMPILER_HEADERS)
-COMPILER_OBJ     := $(patsubst $(COMPILER_DIR)/src/%.cpp, $(COMPILER_BUILD)/%.o, $(COMPILER_SRC))
+COMPILER_OBJ     := $(patsubst $(COMPILER_DIR)/src/%, $(COMPILER_BUILD)/%.o, $(COMPILER_SRC))
 COMPILER_INCLUDE := -I$(COMPILER_DIR)/include
 COMPILER_TARGET  := $(COMPILER_BUILD)/libcompiler.a
 
@@ -60,9 +60,7 @@ OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
 # Determine if a directory filter was passed on the command line to test or test-verbose.
-# For example, "make test preprocessor" sets FILTER to "preprocessor".
 FILTER := $(filter-out test test-verbose,$(MAKECMDGOALS))
-# If a filter was provided, then limit tests to that subdirectory (e.g., tests/preprocessor).
 TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
 
 .PHONY: all clean test test-verbose run create_test_output_dir copy lint
@@ -80,7 +78,8 @@ all: $(MAIN_TARGET)  ## 'all' builds the final executable (educc)
 $(COMMON_BUILD):
 	mkdir -p $(COMMON_BUILD)
 
-$(COMMON_BUILD)/%.o: $(COMMON_DIR)/src/%.cpp | $(COMMON_BUILD)
+$(COMMON_BUILD)/%.o: $(COMMON_DIR)/src/%
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(COMMON_INCLUDE) -c $< -o $@
 
 $(COMMON_TARGET): $(COMMON_OBJ)
@@ -93,7 +92,8 @@ $(COMMON_TARGET): $(COMMON_OBJ)
 $(PREPROC_BUILD):
 	mkdir -p $(PREPROC_BUILD)
 
-$(PREPROC_BUILD)/%.o: $(PREPROCESSOR_DIR)/src/%.cpp | $(PREPROC_BUILD)
+$(PREPROC_BUILD)/%.o: $(PREPROCESSOR_DIR)/src/%
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(PREPROC_INCLUDE) $(COMMON_INCLUDE) -c $< -o $@
 
 $(PREPROC_TARGET): $(PREPROC_OBJ)
@@ -106,7 +106,8 @@ $(PREPROC_TARGET): $(PREPROC_OBJ)
 $(COMPILER_BUILD):
 	mkdir -p $(COMPILER_BUILD)
 
-$(COMPILER_BUILD)/%.o: $(COMPILER_DIR)/src/%.cpp | $(COMPILER_BUILD)
+$(COMPILER_BUILD)/%.o: $(COMPILER_DIR)/src/%
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(COMPILER_INCLUDE) $(COMMON_INCLUDE) -c $< -o $@
 
 $(COMPILER_TARGET): $(COMPILER_OBJ)
@@ -120,7 +121,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET) | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -Icompiler/include -Ipreprocessor/include $(COMMON_INCLUDE) -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
+	$(CXX) $(CXXFLAGS) -I$(COMPILER_DIR)/include -I$(PREPROCESSOR_DIR)/include $(COMMON_INCLUDE) -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
 
 ###############################################################################
 # Testing Setup & Execution
@@ -154,7 +155,7 @@ test: all create_test_output_dir
 	    gcc_ret=$$?; \
 	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "[FAILED] $$testfile - Return code mismatch" >&2 ------ Ours: $$our_ret, GCC: $$gcc_ret; \
+	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
 	        continue; \
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
