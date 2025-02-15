@@ -4,30 +4,44 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "Token.hpp"  // Assumes Token.hpp defines Token and TokenType
 
-// Structure to hold a macro’s information.
+// Structure representing a macro definition.
 struct Macro {
-  bool isFunctionLike;
-  std::vector<std::string> parameters;
-  std::string replacement;
+    bool isFunctionLike;               // true if the macro is function-like
+    bool isVariadic;                   // true if the macro is variadic (has "..." in parameters)
+    std::vector<std::string> parameters; // List of parameter names (for variadic macros, the last is "__VA_ARGS__")
+    std::string replacement;           // The replacement text (as written in the macro definition)
 };
 
 class MacroExpander {
 public:
-  MacroExpander();
+    MacroExpander();
 
-  // Process a preprocessor directive (e.g. "#define SQUARE(x) ((x)*(x))" or
-  // "#undef ...")
-  void processDirective(const std::string &line);
+    // Process a macro directive line (e.g. "#define ..." or "#undef ...").
+    void processDirective(const std::string &line);
 
-  // Expand macros in the given source text.
-  std::string expand(const std::string &source);
+    // Fully expand macros in the given source text.
+    std::string expand(const std::string &source);
 
 private:
-  // Token–based helper: recursively expand macros in source text.
-  std::string expandTokens(const std::string &source);
+    // Recursively expand macros in the source text.
+    // 'disabled' holds macro names that are currently disabled (to prevent recursive re-expansion).
+    std::string expandTokens(const std::string &source, const std::unordered_map<std::string, bool>& disabled);
 
-  std::unordered_map<std::string, Macro> macros;
+    // Expand a function-like macro using its arguments.
+    std::string expandFunctionMacro(const Macro &macro,
+                                    const std::vector<std::vector<Token>> &args,
+                                    const std::unordered_map<std::string, bool>& disabled);
+
+    // Convert a sequence of tokens into a string literal (for stringification).
+    std::string stringifyArgument(const std::vector<Token>& tokens);
+
+    // Concatenate (paste) two token lexemes.
+    std::string pasteTokens(const std::string &left, const std::string &right);
+
+    // Our macro table.
+    std::unordered_map<std::string, Macro> macros;
 };
 
 #endif // MACRO_EXPANDER_HPP
