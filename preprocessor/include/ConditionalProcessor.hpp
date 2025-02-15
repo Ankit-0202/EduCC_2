@@ -1,41 +1,44 @@
 #ifndef CONDITIONAL_PROCESSOR_HPP
 #define CONDITIONAL_PROCESSOR_HPP
 
-#include <stack>
 #include <string>
+#include <stack>
 #include <unordered_map>
+
+// Structure to hold the state for conditional directives.
+struct ConditionalState {
+  bool active;
+  bool taken;
+};
 
 class ConditionalProcessor {
 public:
   ConditionalProcessor();
 
-  // Process a line that starts with a conditional directive.
-  // Returns an empty string if the line should be omitted,
-  // or the line (or modified line) if it should be kept.
-  // This function should update the internal conditional state.
-  std::string processLine(const std::string &line);
-
-  // After processing the entire file, check that all conditionals are closed.
-  void verifyBalanced() const;
-
-private:
-  // A simple state stack for conditionals.
-  struct ConditionalState {
-    bool active; // Is the current block active (i.e. being included)?
-    bool taken;  // Has a true branch been taken?
-  };
-
-  std::stack<ConditionalState> stateStack;
-
-  // Evaluate a constant expression (a very naive implementation that supports
-  // only integer literals and basic operators).
-  int evaluateExpression(const std::string &expr);
-
-  // Helper to check if a line is a conditional directive.
+  // Checks if a line is any preprocessor directive (starting with '#').
   bool isConditionalDirective(const std::string &line);
 
-  // Process a directive that is not conditional.
+  // Process a given line (handles conditional directives and passes through non-conditionals).
+  std::string processLine(const std::string &line);
+
+  // Process non-conditional directives (e.g. #define, #undef).
   std::string processNonConditionalDirective(const std::string &line);
+
+  // Verify that all conditionals have been closed.
+  void verifyBalanced() const;
+
+  // Evaluate a constant expression (very simplified).
+  int evaluateExpression(const std::string &expr);
+
+private:
+  // Record simple macro definitions for conditionals.
+  void recordMacro(const std::string &line);
+
+  // Stack that holds the current conditional state.
+  std::stack<ConditionalState> stateStack;
+
+  // Map to hold macro definitions (for simple cases) used in conditionals.
+  std::unordered_map<std::string, std::string> macroDefinitions;
 };
 
 #endif // CONDITIONAL_PROCESSOR_HPP
