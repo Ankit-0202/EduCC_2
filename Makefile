@@ -59,6 +59,12 @@ GCC_EXE    := gcc_executable
 OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
+# Determine if a directory filter was passed on the command line to test or test-verbose.
+# For example, "make test preprocessor" sets FILTER to "preprocessor".
+FILTER := $(filter-out test test-verbose,$(MAKECMDGOALS))
+# If a filter was provided, then limit tests to that subdirectory (e.g., tests/preprocessor).
+TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
+
 .PHONY: all clean test test-verbose run create_test_output_dir copy lint
 
 ###############################################################################
@@ -122,13 +128,13 @@ $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET
 
 create_test_output_dir:
 	@mkdir -p $(TEST_OUTPUT_DIR)
-	@find $(TEST_DIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
+	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
 
-# Standard Test Mode: Runs all .c tests (compares our output against gcc)
+# Standard Test Mode: Runs all .c tests (or only those in the given subdirectory)
 test: all create_test_output_dir
 	@clear
-	@echo "Running tests..."
-	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
+	@echo "Running tests in $(TEST_SUBDIR)..."
+	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
 	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
 	    echo "-----------------------------------------------------" >> $$output_file; \
@@ -163,8 +169,8 @@ test: all create_test_output_dir
 # Verbose Test Mode: Prints output to stdout as well as saving test logs
 test-verbose: all create_test_output_dir
 	@clear
-	@echo "Running tests in verbose mode..."
-	@find $(TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
+	@echo "Running tests in verbose mode in $(TEST_SUBDIR)..."
+	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
 	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$testfile .c).txt"; \
 	    echo "-----------------------------------------------------"; \
@@ -189,7 +195,7 @@ test-verbose: all create_test_output_dir
 	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" | tee -a $$output_file; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
 	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
-			echo "[FAILED] $$testfile - Return code mismatch" >&2 ------ Ours: $$our_ret, GCC: $$gcc_ret; \
+	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
 	        continue; \
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt; then \
@@ -200,7 +206,7 @@ test-verbose: all create_test_output_dir
 	    fi; \
 	done
 	@echo "-----------------------------------------------------"; \
-	echo "All tests executed in verbose mode. Check test_output/ for results."
+	echo "All tests executed in verbose mode. Check $(TEST_OUTPUT_DIR) for results."
 
 ###############################################################################
 # Run Compiler on a Single File
@@ -257,3 +263,10 @@ lint:
 	@echo "Fixing lint issues with clang-format..."
 	@find . \( -name "*.cpp" -o -name "*.hpp" -o -name "*.c" -o -name "*.h" \) -exec clang-format -i {} +
 	@echo "✅ Linting issues fixed."
+
+###############################################################################
+# Catch-all Rule
+###############################################################################
+# Prevent make from treating extra arguments (such as the filter) as targets.
+%:
+	@:
