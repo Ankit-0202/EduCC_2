@@ -17,14 +17,17 @@ bool ConditionalProcessor::isConditionalDirective(const std::string &line) {
 
 int ConditionalProcessor::evaluateExpression(const std::string &expr) {
   // VERY simplified: assume the expression is a single integer literal.
-  // A full implementation would parse and evaluate a complete constant
-  // expression.
+  // A full implementation would parse and evaluate a complete constant expression.
   return std::stoi(expr);
 }
 
-std::string
-ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
-  // For now, simply return an empty string (we remove these lines).
+std::string ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
+  // Instead of removing all non-conditional directives,
+  // pass through macro directives so that they can be processed later.
+  std::string trimmed = line;
+  trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+  if (trimmed.compare(0, 7, "#define") == 0 || trimmed.compare(0, 6, "#undef") == 0)
+    return line;
   return "";
 }
 
