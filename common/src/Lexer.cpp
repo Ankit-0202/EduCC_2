@@ -142,15 +142,40 @@ Token Lexer::character() {
   int startLine = line;
   int startColumn = column;
   std::string lexeme;
-  char openingQuote = get(); // Expect '
+  char openingQuote = get(); // Expect opening '
   if (openingQuote != '\'')
     throw std::runtime_error(
         "Lexer Error: Expected opening single quote for char literal");
   char ch = get();
-  lexeme.push_back(ch);
-  if (peek() != '\'')
+  // Handle escape sequence if present.
+  if (ch == '\\') {
+    if (isAtEnd())
+      throw std::runtime_error(
+          "Lexer Error: Unterminated escape sequence in char literal");
+    char escapeChar = get();
+    switch (escapeChar) {
+    case 'n':
+      ch = '\n';
+      break;
+    case 't':
+      ch = '\t';
+      break;
+    case '\'':
+      ch = '\'';
+      break;
+    case '\\':
+      ch = '\\';
+      break;
+    default:
+      ch = escapeChar;
+      break;
+    }
+  }
+  // Expect closing single quote.
+  if (isAtEnd() || get() != '\'')
     throw std::runtime_error("Lexer Error: Unterminated char literal");
-  get(); // consume closing '
+  // Build lexeme including the quotes.
+  lexeme = "'" + std::string(1, ch) + "'";
   Token token;
   token.type = TokenType::LITERAL_CHAR;
   token.lexeme = lexeme;
@@ -300,10 +325,12 @@ Token Lexer::opOrDelim() {
     token.type = TokenType::DELIM_COLON;
     break;
   case '.': {
-    token.type = TokenType::DOT; // NEW: dot operator
+    token.type = TokenType::DOT; // dot operator
     break;
   }
   case '\'':
+    // If we encounter a single quote here, backtrack and let character() handle
+    // it.
     currentPos--;
     column--;
     return character();

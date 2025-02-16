@@ -17,10 +17,10 @@ using std::runtime_error;
 using std::shared_ptr;
 using std::string;
 
-//
-// Helper: Recursively retrieve the top-level base variable name from a member
-// access chain. For example, given "rect.topLeft.x", returns "rect".
-//
+//---------------------------------------------------------------------
+// Helper: Recursively retrieve the top-level base variable name from a
+// member access chain. For example, given "rect.topLeft.x", returns "rect".
+//---------------------------------------------------------------------
 namespace {
 string getBaseVariableName(const ExpressionPtr &expr) {
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr))
@@ -32,10 +32,10 @@ string getBaseVariableName(const ExpressionPtr &expr) {
 }
 } // namespace
 
-//
+//---------------------------------------------------------------------
 // Helper: Normalize a tag (struct or union name) by stripping any trailing
 // ".<number>". For example, "Point.1" becomes "Point".
-//
+//---------------------------------------------------------------------
 namespace {
 string normalizeTag(const string &tag) {
   size_t pos = tag.find('.');
@@ -45,12 +45,12 @@ string normalizeTag(const string &tag) {
 }
 } // namespace
 
-//
+//---------------------------------------------------------------------
 // Helper: Recursively resolve the declared LLVM type for a member access chain.
 // Uses both the declaredTypes and declaredTypeStrings maps from the
 // CodeGenerator, as well as the global registries (structRegistry and
 // unionRegistry).
-//
+//---------------------------------------------------------------------
 namespace {
 llvm::Type *resolveFullMemberType(const ExpressionPtr &expr,
                                   CodeGenerator &CG) {
@@ -109,6 +109,9 @@ llvm::Type *resolveFullMemberType(const ExpressionPtr &expr,
 }
 } // namespace
 
+//---------------------------------------------------------------------
+// generateLValue: Generate an lvalue (pointer) for an expression.
+//---------------------------------------------------------------------
 llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
     auto it = localVariables.find(id->name);
@@ -116,7 +119,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
       return it->second;
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar)
-      return gVar;
+      return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "' in lvalue generation.");
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
