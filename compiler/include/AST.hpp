@@ -231,6 +231,12 @@ struct SwitchStatement : public Statement {
       : expression(expression), cases(cases), defaultCase(defaultCase) {}
 };
 
+class DeclarationStatement : public Statement {
+public:
+  DeclarationStatement(const DeclarationPtr &decl) : declaration(decl) {}
+  DeclarationPtr declaration;
+};
+
 struct VariableDeclarationStatement : public Statement {
   std::string type;
   std::string name;

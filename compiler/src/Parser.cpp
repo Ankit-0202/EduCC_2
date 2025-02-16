@@ -63,39 +63,36 @@ std::shared_ptr<Program> Parser::parse() {
   auto program = std::make_shared<Program>();
   while (!isAtEnd()) {
     DeclarationPtr decl = parseDeclaration();
+    if (decl)
     program->addDeclaration(decl);
+    else
+      break;
   }
   return program;
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-  // If the current token's lexeme is "struct", regardless of its token type,
-  // we treat this as a struct declaration.
+  // Global declarations: check for struct, union, or enum definitions.
   if (peek().lexeme == "struct") {
     return parseStructDeclaration();
   }
-  // Handle union declarations (both tagged and anonymous)
   if (check(TokenType::KW_UNION)) {
     return parseUnionDeclaration();
   }
-  // Handle enum declarations (both tagged and anonymous)
   if (check(TokenType::KW_ENUM)) {
     size_t save = current;
     advance(); // consume KW_ENUM
-    if (check(TokenType::IDENTIFIER)) {
-      advance(); // consume tag
-      if (check(TokenType::DELIM_LBRACE)) {
-        current = save;
-        return parseEnumDeclaration();
-      }
-      current = save; // Not followed by '{', so treat as part of a variable
-                      // declaration.
-    } else if (check(TokenType::DELIM_LBRACE)) {
+    if (check(TokenType::DELIM_LBRACE) ||
+        (check(TokenType::IDENTIFIER) &&
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
       current = save;
       return parseEnumDeclaration();
+    } else {
+      current = save;
     }
-    current = save;
   }
+  // Otherwise, if the next token is a primitive type specifier...
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
       check(TokenType::KW_BOOL)) {
@@ -129,6 +126,56 @@ DeclarationPtr Parser::parseDeclaration() {
   }
   error("Expected declaration");
   return nullptr;
+}
+
+/// --- Updated parseStatement() ---
+/// This version now first checks for control-flow statements (if, return,
+/// while, for, switch, compound statements) before falling back to declarations
+/// and expression statements.
+StatementPtr Parser::parseStatement() {
+  // First check for control-flow keywords.
+  if (match(TokenType::KW_IF)) {
+    return parseIfStatement();
+  } else if (match(TokenType::KW_RETURN)) {
+    return parseReturnStatement();
+  } else if (match(TokenType::KW_WHILE)) {
+    return parseWhileStatement();
+  } else if (match(TokenType::KW_FOR)) {
+    return parseForStatement();
+  } else if (match(TokenType::KW_SWITCH)) {
+    return parseSwitchStatement();
+  } else if (match(TokenType::DELIM_LBRACE)) {
+    // If a compound statement is encountered.
+    return parseCompoundStatement();
+  }
+
+  // Check for a local enum definition in statement context.
+  if (check(TokenType::KW_ENUM)) {
+    size_t save = current;
+    advance(); // consume KW_ENUM
+    if (check(TokenType::DELIM_LBRACE) ||
+        (check(TokenType::IDENTIFIER) &&
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+      current = save;
+      DeclarationPtr enumDecl = parseEnumDeclaration();
+      return std::make_shared<DeclarationStatement>(enumDecl);
+    } else {
+      current = save;
+    }
+
+    // Otherwise, check if this is a declaration statement.
+  }
+  if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+      check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+      check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
+      check(TokenType::KW_UNION) ||
+      (check(TokenType::KW_STRUCT) ||
+       (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
+    return parseVariableDeclarationStatement();
+  }
+  // Fall back to an expression statement.
+  return parseExpressionStatement();
 }
 
 DeclarationPtr Parser::parseStructDeclaration() {
@@ -210,24 +257,29 @@ DeclarationPtr Parser::parseVariableDeclaration() {
   } else if (match(TokenType::KW_BOOL)) {
     type = "bool";
   } else if (match(TokenType::KW_ENUM)) {
-    if (!check(TokenType::IDENTIFIER)) {
+    if (check(TokenType::DELIM_LBRACE) ||
+        (check(TokenType::IDENTIFIER) &&
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+      current--;
+      return parseEnumDeclaration();
+    } else {
+      if (!check(TokenType::IDENTIFIER))
       error("Expected enum tag after 'enum' in variable declaration");
-    }
     std::string tag = advance().lexeme;
     type = "enum " + tag;
-  } else if (match(TokenType::KW_UNION)) {
-    if (!check(TokenType::IDENTIFIER)) {
-      error("Expected union tag after 'union' in variable declaration");
     }
+  } else if (match(TokenType::KW_UNION)) {
+    if (!check(TokenType::IDENTIFIER))
+      error("Expected union tag after 'union' in variable declaration");
     std::string tag = advance().lexeme;
     type = "union " + tag;
   } else if (match(TokenType::KW_STRUCT) ||
              (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
-    // Handle struct type specifier.
     if (peek().lexeme == "struct")
       advance();
     else
-      advance(); // consumed "struct"
+      advance();
     if (!check(TokenType::IDENTIFIER)) {
       error("Expected struct tag after 'struct' in variable declaration");
     }
@@ -418,31 +470,6 @@ std::shared_ptr<CompoundStatement> Parser::parseCompoundStatement() {
   return compound;
 }
 
-StatementPtr Parser::parseStatement() {
-  if (match(TokenType::KW_IF)) {
-    return parseIfStatement();
-  } else if (match(TokenType::KW_RETURN)) {
-    return parseReturnStatement();
-  } else if (match(TokenType::KW_WHILE)) {
-    return parseWhileStatement();
-  } else if (match(TokenType::KW_FOR)) {
-    return parseForStatement();
-  } else if (match(TokenType::KW_SWITCH)) {
-    return parseSwitchStatement();
-  } else if (match(TokenType::DELIM_LBRACE)) {
-    return parseCompoundStatement();
-  } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-             check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-             check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
-             check(TokenType::KW_UNION) ||
-             (check(TokenType::KW_STRUCT) ||
-              (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
-    return parseVariableDeclarationStatement();
-  } else {
-    return parseExpressionStatement();
-  }
-}
-
 StatementPtr Parser::parseIfStatement() {
   consume(TokenType::DELIM_LPAREN, "Expected '(' after 'if'");
   ExpressionPtr condition = parseExpression();
@@ -543,10 +570,19 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   } else if (match(TokenType::KW_BOOL)) {
     type = "bool";
   } else if (match(TokenType::KW_ENUM)) {
+    if (check(TokenType::DELIM_LBRACE) ||
+        (check(TokenType::IDENTIFIER) &&
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+      current--;
+      DeclarationPtr enumDecl = parseEnumDeclaration();
+      return std::make_shared<DeclarationStatement>(enumDecl);
+    } else {
     if (!check(TokenType::IDENTIFIER))
       error("Expected enum tag after 'enum' in variable declaration");
     std::string tag = advance().lexeme;
     type = "enum " + tag;
+    }
   } else if (match(TokenType::KW_UNION)) {
     if (!check(TokenType::IDENTIFIER))
       error("Expected union tag after 'union' in variable declaration");
@@ -557,7 +593,7 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     if (peek().lexeme == "struct")
       advance();
     else
-      advance(); // consumed "struct"
+      advance();
     if (!check(TokenType::IDENTIFIER)) {
       error("Expected struct tag after 'struct' in variable declaration");
     }
