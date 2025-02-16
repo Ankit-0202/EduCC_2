@@ -1,10 +1,10 @@
-#include "CodeGenerator.hpp"
 #include "AST.hpp"
+#include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 #include <llvm/IR/BasicBlock.h>
-#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/raw_ostream.h>
 #include <stdexcept>
 #include <vector>
@@ -24,13 +24,18 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
         break;
     }
     return terminated;
-  } else if (auto exprStmt = std::dynamic_pointer_cast<ExpressionStatement>(stmt)) {
+  } else if (auto exprStmt =
+                 std::dynamic_pointer_cast<ExpressionStatement>(stmt)) {
     generateExpression(exprStmt->expression);
     return false;
-  } else if (auto varDeclStmt = std::dynamic_pointer_cast<VariableDeclarationStatement>(stmt)) {
+  } else if (auto varDeclStmt =
+                 std::dynamic_pointer_cast<VariableDeclarationStatement>(
+                     stmt)) {
     generateVariableDeclarationStatement(varDeclStmt);
     return false;
-  } else if (auto multiVarDeclStmt = std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(stmt)) {
+  } else if (auto multiVarDeclStmt =
+                 std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
+                     stmt)) {
     for (auto &singleDeclStmt : multiVarDeclStmt->declarations) {
       generateVariableDeclarationStatement(singleDeclStmt);
     }
@@ -42,10 +47,13 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     if (retVal->getType() != expectedType) {
       if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32)) {
         retVal = builder.CreateZExt(retVal, expectedType, "zexttmp");
-      } else if (retVal->getType()->isIntegerTy() && expectedType->isIntegerTy()) {
-        retVal = builder.CreateIntCast(retVal, expectedType, false, "intcasttmp");
+      } else if (retVal->getType()->isIntegerTy() &&
+                 expectedType->isIntegerTy()) {
+        retVal =
+            builder.CreateIntCast(retVal, expectedType, false, "intcasttmp");
       } else {
-        throw runtime_error("CodeGenerator Error: Return value type does not match function return type.");
+        throw runtime_error("CodeGenerator Error: Return value type does not "
+                            "match function return type.");
       }
     }
     builder.CreateRet(retVal);
@@ -53,12 +61,16 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
   } else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
     llvm::Value *condVal = generateExpression(ifStmt->condition);
     if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
-      condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
+      condVal = builder.CreateICmpNE(
+          condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
     }
     llvm::Function *theFunction = builder.GetInsertBlock()->getParent();
-    llvm::BasicBlock *thenBB = llvm::BasicBlock::Create(context, "then", theFunction);
-    llvm::BasicBlock *elseBB = llvm::BasicBlock::Create(context, "else", theFunction);
-    llvm::BasicBlock *mergeBB = llvm::BasicBlock::Create(context, "ifcont", theFunction);
+    llvm::BasicBlock *thenBB =
+        llvm::BasicBlock::Create(context, "then", theFunction);
+    llvm::BasicBlock *elseBB =
+        llvm::BasicBlock::Create(context, "else", theFunction);
+    llvm::BasicBlock *mergeBB =
+        llvm::BasicBlock::Create(context, "ifcont", theFunction);
     builder.CreateCondBr(condVal, thenBB, elseBB);
 
     builder.SetInsertPoint(thenBB);
@@ -79,14 +91,18 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     return false;
   } else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
     llvm::Function *theFunction = builder.GetInsertBlock()->getParent();
-    llvm::BasicBlock *condBB = llvm::BasicBlock::Create(context, "while.cond", theFunction);
-    llvm::BasicBlock *bodyBB = llvm::BasicBlock::Create(context, "while.body", theFunction);
-    llvm::BasicBlock *afterBB = llvm::BasicBlock::Create(context, "while.after", theFunction);
+    llvm::BasicBlock *condBB =
+        llvm::BasicBlock::Create(context, "while.cond", theFunction);
+    llvm::BasicBlock *bodyBB =
+        llvm::BasicBlock::Create(context, "while.body", theFunction);
+    llvm::BasicBlock *afterBB =
+        llvm::BasicBlock::Create(context, "while.after", theFunction);
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
     llvm::Value *condVal = generateExpression(whileStmt->condition);
     if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
-      condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
+      condVal = builder.CreateICmpNE(
+          condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
     }
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(bodyBB);
@@ -100,10 +116,14 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     if (forStmt->initializer)
       generateStatement(forStmt->initializer);
     llvm::Function *theFunction = builder.GetInsertBlock()->getParent();
-    llvm::BasicBlock *condBB = llvm::BasicBlock::Create(context, "for.cond", theFunction);
-    llvm::BasicBlock *bodyBB = llvm::BasicBlock::Create(context, "for.body", theFunction);
-    llvm::BasicBlock *incrBB = llvm::BasicBlock::Create(context, "for.incr", theFunction);
-    llvm::BasicBlock *afterBB = llvm::BasicBlock::Create(context, "for.after", theFunction);
+    llvm::BasicBlock *condBB =
+        llvm::BasicBlock::Create(context, "for.cond", theFunction);
+    llvm::BasicBlock *bodyBB =
+        llvm::BasicBlock::Create(context, "for.body", theFunction);
+    llvm::BasicBlock *incrBB =
+        llvm::BasicBlock::Create(context, "for.incr", theFunction);
+    llvm::BasicBlock *afterBB =
+        llvm::BasicBlock::Create(context, "for.after", theFunction);
     builder.CreateBr(condBB);
 
     builder.SetInsertPoint(condBB);
@@ -111,7 +131,8 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     if (forStmt->condition) {
       condVal = generateExpression(forStmt->condition);
       if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
-        condVal = builder.CreateICmpNE(condVal, ConstantInt::get(condVal->getType(), 0), "forcond");
+        condVal = builder.CreateICmpNE(
+            condVal, ConstantInt::get(condVal->getType(), 0), "forcond");
       }
     } else {
       condVal = ConstantInt::get(llvm::Type::getInt1Ty(context), 1);
@@ -132,24 +153,31 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
 
     builder.SetInsertPoint(afterBB);
     return false;
-  } else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
+  } else if (auto switchStmt =
+                 std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
     llvm::Value *condVal = generateExpression(switchStmt->expression);
     if (!condVal->getType()->isIntegerTy()) {
-      throw runtime_error("CodeGenerator Error: Switch expression must be of integer type.");
+      throw runtime_error(
+          "CodeGenerator Error: Switch expression must be of integer type.");
     }
     llvm::Function *theFunction = builder.GetInsertBlock()->getParent();
-    llvm::BasicBlock *defaultBB = llvm::BasicBlock::Create(context, "switch.default", theFunction);
+    llvm::BasicBlock *defaultBB =
+        llvm::BasicBlock::Create(context, "switch.default", theFunction);
 
-    SwitchInst *switchInst = builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
+    SwitchInst *switchInst =
+        builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
     for (auto &casePair : switchStmt->cases) {
       if (!casePair.first.has_value()) {
-        throw runtime_error("CodeGenerator Error: Case label missing in case clause.");
+        throw runtime_error(
+            "CodeGenerator Error: Case label missing in case clause.");
       }
       llvm::Value *caseVal = generateExpression(casePair.first.value());
       if (!isa<ConstantInt>(caseVal)) {
-        throw runtime_error("CodeGenerator Error: Case label must be a constant integer.");
+        throw runtime_error(
+            "CodeGenerator Error: Case label must be a constant integer.");
       }
-      llvm::BasicBlock *caseBB = llvm::BasicBlock::Create(context, "switch.case", theFunction);
+      llvm::BasicBlock *caseBB =
+          llvm::BasicBlock::Create(context, "switch.case", theFunction);
       switchInst->addCase(cast<ConstantInt>(caseVal), caseBB);
       builder.SetInsertPoint(caseBB);
       bool terminated = generateStatement(casePair.second);
@@ -172,21 +200,26 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
   }
 }
 
-void CodeGenerator::generateVariableDeclarationStatement(const shared_ptr<VariableDeclarationStatement> &varDeclStmt) {
+void CodeGenerator::generateVariableDeclarationStatement(
+    const shared_ptr<VariableDeclarationStatement> &varDeclStmt) {
   llvm::Type *varTy = getLLVMType(varDeclStmt->type);
-  AllocaInst *alloc = builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
+  AllocaInst *alloc =
+      builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
   localVariables[varDeclStmt->name] = alloc;
 
   if (varDeclStmt->initializer) {
     llvm::Value *initVal = generateExpression(varDeclStmt->initializer.value());
     if (initVal->getType() != varTy) {
-      if (initVal->getType()->isFloatingPointTy() && varTy->isFloatingPointTy()) {
-        if (initVal->getType()->getFPMantissaWidth() > varTy->getFPMantissaWidth())
+      if (initVal->getType()->isFloatingPointTy() &&
+          varTy->isFloatingPointTy()) {
+        if (initVal->getType()->getFPMantissaWidth() >
+            varTy->getFPMantissaWidth())
           initVal = builder.CreateFPTrunc(initVal, varTy, "fptrunc");
         else
           initVal = builder.CreateFPExt(initVal, varTy, "fpext");
       } else {
-        throw runtime_error("CodeGenerator Error: Incompatible initializer type in local variable declaration.");
+        throw runtime_error("CodeGenerator Error: Incompatible initializer "
+                            "type in local variable declaration.");
       }
     }
     builder.CreateStore(initVal, alloc);

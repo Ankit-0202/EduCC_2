@@ -22,12 +22,13 @@ public:
   std::unique_ptr<llvm::Module> module;
 
   // Map of local variables (name -> alloca)
-  std::unordered_map<std::string, llvm::Value*> localVariables;
+  std::unordered_map<std::string, llvm::Value *> localVariables;
 
   CodeGenerator();
 
   // Entry point
-  std::unique_ptr<llvm::Module> generateCode(const std::shared_ptr<Program> &program);
+  std::unique_ptr<llvm::Module>
+  generateCode(const std::shared_ptr<Program> &program);
 
   // Returns the LLVM type corresponding to the given string type.
   llvm::Type *getLLVMType(const std::string &type);
@@ -42,15 +43,17 @@ public:
   bool generateStatement(const StatementPtr &stmt);
 
   // Generates code for a variable declaration statement.
-  void generateVariableDeclarationStatement(const std::shared_ptr<VariableDeclarationStatement> &varDeclStmt);
+  void generateVariableDeclarationStatement(
+      const std::shared_ptr<VariableDeclarationStatement> &varDeclStmt);
 
   // Generates a function declaration/definition.
   void generateFunction(const std::shared_ptr<FunctionDeclaration> &funcDecl);
 
   // Helper: get or create a function in the module.
-  llvm::Function *getOrCreateFunctionInModule(const std::string &name, llvm::Type *returnType,
-                                                const std::vector<llvm::Type *> &paramTypes,
-                                                bool isDefinition);
+  llvm::Function *
+  getOrCreateFunctionInModule(const std::string &name, llvm::Type *returnType,
+                              const std::vector<llvm::Type *> &paramTypes,
+                              bool isDefinition);
 };
 
 #endif // CODEGENERATOR_HPP
