@@ -1,3 +1,4 @@
+// compiler/src/CodeGenerator/Statements.cpp
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
@@ -17,6 +18,7 @@ using std::string;
 using std::vector;
 
 bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
+  // Handle compound statements.
   if (auto compound = std::dynamic_pointer_cast<CompoundStatement>(stmt)) {
     bool terminated = false;
     for (auto &substmt : compound->statements) {
@@ -25,23 +27,30 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
         break;
     }
     return terminated;
-  } else if (auto exprStmt =
-                 std::dynamic_pointer_cast<ExpressionStatement>(stmt)) {
+  }
+  // Handle expression statements.
+  else if (auto exprStmt =
+               std::dynamic_pointer_cast<ExpressionStatement>(stmt)) {
     generateExpression(exprStmt->expression);
     return false;
-  } else if (auto varDeclStmt =
-                 std::dynamic_pointer_cast<VariableDeclarationStatement>(
-                     stmt)) {
+  }
+  // Handle variable declaration statements.
+  else if (auto varDeclStmt =
+               std::dynamic_pointer_cast<VariableDeclarationStatement>(stmt)) {
     generateVariableDeclarationStatement(varDeclStmt);
     return false;
-  } else if (auto multiVarDeclStmt =
-                 std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
-                     stmt)) {
+  }
+  // Handle multiple variable declarations.
+  else if (auto multiVarDeclStmt =
+               std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
+                   stmt)) {
     for (auto &singleDeclStmt : multiVarDeclStmt->declarations) {
       generateVariableDeclarationStatement(singleDeclStmt);
     }
     return false;
-  } else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
+  }
+  // Handle return statements.
+  else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
     llvm::Value *retVal = generateExpression(retStmt->expression);
     llvm::Function *currentFunction = builder.GetInsertBlock()->getParent();
     llvm::Type *expectedType = currentFunction->getReturnType();
@@ -59,7 +68,9 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     }
     builder.CreateRet(retVal);
     return true;
-  } else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
+  }
+  // Handle if statements.
+  else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
     llvm::Value *condVal = generateExpression(ifStmt->condition);
     if (condVal->getType() != llvm::Type::getInt1Ty(context)) {
       condVal = builder.CreateICmpNE(
@@ -90,7 +101,9 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
 
     builder.SetInsertPoint(mergeBB);
     return false;
-  } else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
+  }
+  // Handle while statements.
+  else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
     llvm::Function *theFunction = builder.GetInsertBlock()->getParent();
     llvm::BasicBlock *condBB =
         llvm::BasicBlock::Create(context, "while.cond", theFunction);
@@ -113,7 +126,9 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     }
     builder.SetInsertPoint(afterBB);
     return false;
-  } else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
+  }
+  // Handle for statements.
+  else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
     if (forStmt->initializer)
       generateStatement(forStmt->initializer);
     llvm::Function *theFunction = builder.GetInsertBlock()->getParent();
@@ -154,8 +169,9 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
 
     builder.SetInsertPoint(afterBB);
     return false;
-  } else if (auto switchStmt =
-                 std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
+  }
+  // Handle switch statements.
+  else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
     llvm::Value *condVal = generateExpression(switchStmt->expression);
     if (!condVal->getType()->isIntegerTy()) {
       throw runtime_error(
@@ -194,6 +210,30 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       builder.CreateUnreachable();
     }
     return false;
+  }
+  // Handle DeclarationStatements that wrap an enum declaration.
+  else if (auto declStmt =
+               std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
+    if (auto enumDecl =
+            std::dynamic_pointer_cast<EnumDeclaration>(declStmt->declaration)) {
+      // Generate global constants for each enumerator (if not already
+      // generated)
+      for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
+        string enumName = enumDecl->enumerators[i].first;
+        int value = enumDecl->enumeratorValues[i];
+        if (!module->getGlobalVariable(enumName)) {
+          Constant *initVal =
+              ConstantInt::get(Type::getInt32Ty(context), value);
+          GlobalVariable *gEnum = new GlobalVariable(
+              *module, Type::getInt32Ty(context), true,
+              GlobalValue::ExternalLinkage, initVal, enumName);
+        }
+      }
+      return false;
+    } else {
+      throw runtime_error(
+          "CodeGenerator Error: Unsupported declaration statement type.");
+    }
   } else {
     throw runtime_error("CodeGenerator Error: Unsupported statement type.");
   }

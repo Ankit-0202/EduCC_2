@@ -1,3 +1,4 @@
+// compiler/src/CodeGenerator/Expressions.cpp
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
@@ -16,6 +17,9 @@ using namespace llvm;
 using std::runtime_error;
 using std::shared_ptr;
 using std::string;
+
+extern std::unordered_map<std::string, int>
+    enumRegistry; // New global map for enum constants
 
 //
 // Helper: Recursively retrieve the top-level base variable name from a member
@@ -122,6 +126,11 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         return gVar->getInitializer();
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     }
+    // NEW: Check if the identifier is an enum constant using the global
+    // enumRegistry.
+    auto ecIt = enumRegistry.find(id->name);
+    if (ecIt != enumRegistry.end())
+      return ConstantInt::get(Type::getInt32Ty(context), ecIt->second);
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "'.");
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
@@ -301,6 +310,7 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     else if (lit->type == Literal::LiteralType::Double)
       return ConstantFP::get(Type::getDoubleTy(context), lit->doubleValue);
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+    // First check for local variable
     auto it = localVariables.find(id->name);
     if (it != localVariables.end()) {
       llvm::Value *varPtr = it->second;
@@ -312,6 +322,7 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
                             "' is not an alloca instruction.");
       }
     }
+    // Then check for global variable
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar) {
       // If this global is constant (e.g. an enum constant), return its
@@ -320,11 +331,14 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         return gVar->getInitializer();
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     }
+    // Finally, check for an enum constant in the global enumRegistry.
+    auto ecIt = enumRegistry.find(id->name);
+    if (ecIt != enumRegistry.end())
+      return ConstantInt::get(Type::getInt32Ty(context), ecIt->second);
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "'.");
-  }
-  // Handle member access as an rvalue.
-  else if (auto memberAccess = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+  } else if (auto memberAccess =
+                 std::dynamic_pointer_cast<MemberAccess>(expr)) {
     llvm::Value *ptr = generateLValue(expr);
     llvm::Type *loadType = resolveFullMemberType(expr, *this);
     return builder.CreateLoad(loadType, ptr, "memberload");

@@ -59,6 +59,7 @@ public:
   std::unordered_map<std::string, llvm::Value *> localVariables;
   std::unordered_map<std::string, llvm::Type *> declaredTypes;
   std::unordered_map<std::string, std::string> declaredTypeStrings;
+  std::unordered_map<std::string, int> enumConstants;
 };
 
 #endif // CODE_GENERATOR_HPP

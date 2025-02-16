@@ -64,7 +64,7 @@ std::shared_ptr<Program> Parser::parse() {
   while (!isAtEnd()) {
     DeclarationPtr decl = parseDeclaration();
     if (decl)
-    program->addDeclaration(decl);
+      program->addDeclaration(decl);
     else
       break;
   }
@@ -265,9 +265,9 @@ DeclarationPtr Parser::parseVariableDeclaration() {
       return parseEnumDeclaration();
     } else {
       if (!check(TokenType::IDENTIFIER))
-      error("Expected enum tag after 'enum' in variable declaration");
-    std::string tag = advance().lexeme;
-    type = "enum " + tag;
+        error("Expected enum tag after 'enum' in variable declaration");
+      std::string tag = advance().lexeme;
+      type = "enum " + tag;
     }
   } else if (match(TokenType::KW_UNION)) {
     if (!check(TokenType::IDENTIFIER))
@@ -578,10 +578,10 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     } else {
-    if (!check(TokenType::IDENTIFIER))
-      error("Expected enum tag after 'enum' in variable declaration");
-    std::string tag = advance().lexeme;
-    type = "enum " + tag;
+      if (!check(TokenType::IDENTIFIER))
+        error("Expected enum tag after 'enum' in variable declaration");
+      std::string tag = advance().lexeme;
+      type = "enum " + tag;
     }
   } else if (match(TokenType::KW_UNION)) {
     if (!check(TokenType::IDENTIFIER))
