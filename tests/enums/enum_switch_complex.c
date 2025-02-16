@@ -7,14 +7,11 @@ int main() {
   case MON:
   case TUE:
     result = 1;
-    break;
   case WED:
   case THU:
     result = 2;
-    break;
   case FRI:
     result = 3;
-    break;
   default:
     result = 0;
   }

@@ -8,7 +8,6 @@ int main() {
     result = result + 2;
   case 3:
     result = result + 3;
-    break;
   default:
     result = 0;
   }
