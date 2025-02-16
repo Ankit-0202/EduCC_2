@@ -39,17 +39,31 @@ char Lexer::get() {
   return c;
 }
 
-// Skip whitespace (and comments).
+// Skip whitespace and comments.
 void Lexer::skipWhitespace() {
   while (!isAtEnd()) {
     char c = peek();
     if (std::isspace(static_cast<unsigned char>(c))) {
       get();
-    } else if (c == '/' && peekNext() == '/') {
+    }
+    // Skip single-line comments.
+    else if (c == '/' && peekNext() == '/') {
       get(); // consume '/'
       get(); // consume second '/'
       while (peek() != '\n' && !isAtEnd())
         get();
+    }
+    // Skip block comments.
+    else if (c == '/' && peekNext() == '*') {
+      get(); // consume '/'
+      get(); // consume '*'
+      while (!(peek() == '*' && peekNext() == '/') && !isAtEnd()) {
+        get();
+      }
+      if (!isAtEnd()) {
+        get(); // consume '*'
+        get(); // consume '/'
+      }
     } else {
       break;
     }
@@ -138,6 +152,7 @@ Token Lexer::number() {
   return token;
 }
 
+// Updated character() function to handle escape sequences and include quotes.
 Token Lexer::character() {
   int startLine = line;
   int startColumn = column;
