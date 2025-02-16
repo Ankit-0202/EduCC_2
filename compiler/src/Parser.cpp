@@ -130,8 +130,8 @@ DeclarationPtr Parser::parseDeclaration() {
   return nullptr;
 }
 
-/// --- Updated parseStatement() ---
-/// This version now first checks for control-flow statements (if, return,
+/// --- parseStatement() ---
+/// This version first checks for control-flow statements (if, return,
 /// while, for, switch, compound statements) before falling back to declarations
 /// and expression statements.
 StatementPtr Parser::parseStatement() {
@@ -181,7 +181,8 @@ StatementPtr Parser::parseStatement() {
 }
 
 DeclarationPtr Parser::parseStructDeclaration() {
-  // Consume the "struct" keyword.
+  // Consume the "struct" keyword. (It might be a KW_STRUCT or an identifier
+  // with lexeme "struct".)
   if (peek().lexeme == "struct")
     advance();
   else
@@ -210,6 +211,12 @@ DeclarationPtr Parser::parseStructDeclaration() {
         }
         std::string tag = advance().lexeme;
         memberType = "struct " + tag;
+      } else if (match(TokenType::KW_ENUM)) {
+        // Handle enum types in struct members.
+        if (!check(TokenType::IDENTIFIER))
+          error("Expected enum tag after 'enum' in member declaration");
+        std::string tag = advance().lexeme;
+        memberType = "enum " + tag;
       } else if (match(TokenType::KW_INT)) {
         memberType = "int";
       } else if (match(TokenType::KW_FLOAT)) {
@@ -239,8 +246,6 @@ DeclarationPtr Parser::parseStructDeclaration() {
     return std::make_shared<StructDeclaration>(tag, members);
   } else {
     // No struct definition body; treat as a type specifier.
-    // Depending on your design, you might want to return a forward declaration
-    // or error.
     return nullptr;
   }
 }
@@ -526,27 +531,22 @@ StatementPtr Parser::parseSwitchStatement() {
   ExpressionPtr expr = parseExpression();
   consume(TokenType::DELIM_RPAREN, "Expected ')' after switch expression");
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin switch block");
-
-  // Use fully qualified std::vector and std::optional.
   std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>> cases;
   std::optional<StatementPtr> defaultCase = std::nullopt;
-  // Collect pending case labels that have not yet been assigned a statement.
-  std::vector<std::optional<ExpressionPtr>> pendingCases;
-
   while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
     if (match(TokenType::KW_CASE)) {
-      // Parse a case label.
-      ExpressionPtr caseExpr = parseExpression();
-      consume(TokenType::DELIM_COLON, "Expected ':' after case label");
-      pendingCases.push_back(caseExpr);
-      // If the next token is another case or default label, continue.
-      if (check(TokenType::KW_CASE) || check(TokenType::KW_DEFAULT))
-        continue;
-      // Otherwise, parse the statement that applies to all pending cases.
-      StatementPtr stmt = parseStatement();
-      for (const auto &ce : pendingCases)
-        cases.push_back({ce, stmt});
-      pendingCases.clear();
+      // Begin a group of one or more consecutive case labels.
+      std::vector<ExpressionPtr> caseExprs;
+      do {
+        ExpressionPtr caseExpr = parseExpression();
+        consume(TokenType::DELIM_COLON, "Expected ':' after case label");
+        caseExprs.push_back(caseExpr);
+      } while (check(TokenType::KW_CASE) && (advance(), true));
+      // Parse the statement that follows the case labels.
+      StatementPtr caseStmt = parseStatement();
+      for (auto &e : caseExprs) {
+        cases.push_back({e, caseStmt});
+      }
     } else if (match(TokenType::KW_DEFAULT)) {
       consume(TokenType::DELIM_COLON, "Expected ':' after 'default'");
       defaultCase = parseStatement();
@@ -572,7 +572,7 @@ StatementPtr Parser::parseExpressionStatement() {
 
 StatementPtr Parser::parseVariableDeclarationStatement() {
   std::string type;
-  // Allow "enum", "union" and "struct" as type specifiers.
+  // Allow "enum", "union", and "struct" as type specifiers.
   if (match(TokenType::KW_INT)) {
     type = "int";
   } else if (match(TokenType::KW_FLOAT)) {
@@ -807,7 +807,7 @@ ExpressionPtr Parser::parseUnary() {
       ExpressionPtr operand = parseUnary();
       return std::make_shared<CastExpression>(castType, operand);
     } else {
-      // Not a cast; treat as a parenthesized (grouped) expression.
+      // Not a cast; treat as a parenthesised expression.
       ExpressionPtr expr = parseExpression();
       consume(TokenType::DELIM_RPAREN, "Expected ')' after expression");
       return expr;
