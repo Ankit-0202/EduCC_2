@@ -22,9 +22,6 @@ using std::vector;
 CodeGenerator::CodeGenerator()
     : builder(context),
       module(std::make_unique<Module>("main_module", context)) {
-  // Note: In LLVM 19 opaque pointers are enabled by default and cannot be
-  // disabled via setOpaquePointers(). Instead, we record each variable’s
-  // declared type.
 }
 
 std::unique_ptr<Module>
@@ -174,8 +171,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
     }
   }
 
-  // Function declarations are handled in CodeGenerator_Functions.cpp
-
+  // Function declarations are handled in generateFunction.
   for (const auto &decl : program->declarations) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
       generateFunction(funcDecl);
@@ -248,9 +244,8 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
       throw runtime_error("CodeGenerator Error: Unknown struct type '" + type +
                           "'.");
     }
-    auto structDecl = it->second;
     vector<Type *> memberTypes;
-    for (auto &member : structDecl->members) {
+    for (auto &member : it->second->members) {
       memberTypes.push_back(getLLVMType(member->type));
     }
     StructType *structType =
@@ -275,8 +270,8 @@ static bool functionSignaturesMatch(FunctionType *existing,
 }
 
 llvm::Function *CodeGenerator::getOrCreateFunctionInModule(
-    const std::string &name, Type *returnType, const vector<Type *> &paramTypes,
-    bool isDefinition) {
+    const std::string &name, llvm::Type *returnType,
+    const vector<Type *> &paramTypes, bool isDefinition) {
   FunctionType *fType = FunctionType::get(returnType, paramTypes, false);
   if (Function *existingFn = module->getFunction(name)) {
     FunctionType *existingType = existingFn->getFunctionType();
@@ -294,4 +289,75 @@ llvm::Function *CodeGenerator::getOrCreateFunctionInModule(
   Function *newFn =
       Function::Create(fType, Function::ExternalLinkage, name, module.get());
   return newFn;
+}
+
+llvm::Function *CodeGenerator::generateFunction(
+    const shared_ptr<FunctionDeclaration> &funcDecl) {
+  llvm::Type *retTy = getLLVMType(funcDecl->returnType);
+  vector<Type *> paramTys;
+  for (auto &param : funcDecl->parameters) {
+    paramTys.push_back(getLLVMType(param.first));
+  }
+  bool hasBody = (funcDecl->body != nullptr);
+  llvm::Function *function =
+      getOrCreateFunctionInModule(funcDecl->name, retTy, paramTys, hasBody);
+  if (!hasBody)
+    return function;
+  if (function->empty()) {
+    BasicBlock *entryBB = BasicBlock::Create(context, "entry", function);
+    builder.SetInsertPoint(entryBB);
+
+    // Clear any previous local state and push a new local scope.
+    localVarStack.clear();
+    pushLocalScope();
+
+    // For each function parameter, allocate space in the current local scope.
+    size_t i = 0;
+    for (auto &arg : function->args()) {
+      const auto &paramName = funcDecl->parameters[i].second;
+      arg.setName(paramName);
+      AllocaInst *alloc =
+          builder.CreateAlloca(arg.getType(), nullptr, paramName);
+      builder.CreateStore(&arg, alloc);
+      // Store in the current local scope.
+      localVarStack.back()[paramName] = alloc;
+      // Record the declared type.
+      declaredTypes[paramName] = arg.getType();
+      i++;
+    }
+
+    // Generate code for the function body.
+    auto compound =
+        std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body);
+    if (!compound) {
+      throw runtime_error(
+          "CodeGenerator Error: Function body is not a CompoundStatement.");
+    }
+    generateStatement(compound);
+
+    // If the current basic block is not terminated, add an appropriate return.
+    if (!builder.GetInsertBlock()->getTerminator()) {
+      if (funcDecl->returnType == "void") {
+        builder.CreateRetVoid();
+      } else if (funcDecl->returnType == "int") {
+        builder.CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
+      } else if (funcDecl->returnType == "float") {
+        builder.CreateRet(ConstantFP::get(Type::getFloatTy(context), 0.0f));
+      } else if (funcDecl->returnType == "double") {
+        builder.CreateRet(ConstantFP::get(Type::getDoubleTy(context), 0.0));
+      } else if (funcDecl->returnType == "char") {
+        builder.CreateRet(ConstantInt::get(Type::getInt8Ty(context), 0));
+      } else if (funcDecl->returnType == "bool") {
+        builder.CreateRet(ConstantInt::get(Type::getInt1Ty(context), 0));
+      } else {
+        throw runtime_error("CodeGenerator Error: Unsupported return type '" +
+                            funcDecl->returnType + "'.");
+      }
+    }
+    return function;
+  } else {
+    throw runtime_error(
+        "CodeGenerator Error: Unexpected redefinition encountered for '" +
+        funcDecl->name + "'.");
+  }
 }

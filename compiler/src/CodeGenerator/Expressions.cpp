@@ -19,7 +19,7 @@ using std::shared_ptr;
 using std::string;
 
 extern std::unordered_map<std::string, int>
-    enumRegistry; // New global map for enum constants
+    enumRegistry; // Global map for enum constants
 
 //
 // Helper: Recursively retrieve the top-level base variable name from a member
@@ -115,9 +115,10 @@ llvm::Type *resolveFullMemberType(const ExpressionPtr &expr,
 
 llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    auto it = localVariables.find(id->name);
-    if (it != localVariables.end())
-      return it->second;
+    // Look up the identifier in the local variable stack.
+    llvm::Value *v = lookupLocalVar(id->name);
+    if (v)
+      return v;
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar) {
       // If the global variable is constant and has an initializer (as with
@@ -126,8 +127,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         return gVar->getInitializer();
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     }
-    // NEW: Check if the identifier is an enum constant using the global
-    // enumRegistry.
+    // Check for an enum constant in the global enumRegistry.
     auto ecIt = enumRegistry.find(id->name);
     if (ecIt != enumRegistry.end())
       return ConstantInt::get(Type::getInt32Ty(context), ecIt->second);
@@ -198,6 +198,10 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   }
 }
 
+//
+// generateExpression - Generates code for an expression.
+// Parameter is now taken as a const reference to match the header.
+//
 llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     llvm::Value *lhs = generateExpression(binExpr->left);
@@ -310,19 +314,18 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     else if (lit->type == Literal::LiteralType::Double)
       return ConstantFP::get(Type::getDoubleTy(context), lit->doubleValue);
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    // First check for local variable
-    auto it = localVariables.find(id->name);
-    if (it != localVariables.end()) {
-      llvm::Value *varPtr = it->second;
-      if (auto allocaInst = dyn_cast<AllocaInst>(varPtr)) {
+    // Use lookupLocalVar to find the variable declared in the current scope(s).
+    llvm::Value *v = lookupLocalVar(id->name);
+    if (v) {
+      if (auto allocaInst = dyn_cast<AllocaInst>(v)) {
         llvm::Type *allocatedType = allocaInst->getAllocatedType();
-        return builder.CreateLoad(allocatedType, varPtr, id->name.c_str());
+        return builder.CreateLoad(allocatedType, v, id->name.c_str());
       } else {
         throw runtime_error("CodeGenerator Error: '" + id->name +
                             "' is not an alloca instruction.");
       }
     }
-    // Then check for global variable
+    // Then check for global variable.
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar) {
       // If this global is constant (e.g. an enum constant), return its
@@ -331,7 +334,7 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         return gVar->getInitializer();
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     }
-    // Finally, check for an enum constant in the global enumRegistry.
+    // Finally, check for an enum constant.
     auto ecIt = enumRegistry.find(id->name);
     if (ecIt != enumRegistry.end())
       return ConstantInt::get(Type::getInt32Ty(context), ecIt->second);
@@ -347,17 +350,16 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     if (!id)
       throw runtime_error(
           "CodeGenerator Error: Postfix operator applied to non-identifier.");
-    auto it = localVariables.find(id->name);
-    if (it == localVariables.end())
+    llvm::Value *v = lookupLocalVar(id->name);
+    if (!v)
       throw runtime_error("CodeGenerator Error: Undefined variable '" +
                           id->name + "' in postfix expression.");
-    llvm::Value *varPtr = it->second;
-    AllocaInst *allocaInst = dyn_cast<AllocaInst>(varPtr);
+    AllocaInst *allocaInst = dyn_cast<AllocaInst>(v);
     if (!allocaInst)
       throw runtime_error("CodeGenerator Error: Postfix operator applied to "
                           "non-alloca variable.");
-    llvm::Value *oldVal = builder.CreateLoad(allocaInst->getAllocatedType(),
-                                             varPtr, id->name.c_str());
+    llvm::Value *oldVal =
+        builder.CreateLoad(allocaInst->getAllocatedType(), v, id->name.c_str());
     llvm::Value *one = nullptr;
     if (oldVal->getType()->isIntegerTy())
       one = ConstantInt::get(oldVal->getType(), 1);
@@ -378,7 +380,7 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     else
       throw runtime_error("CodeGenerator Error: Unknown postfix operator '" +
                           post->op + "'.");
-    builder.CreateStore(newVal, varPtr);
+    builder.CreateStore(newVal, v);
     return oldVal;
   } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
     llvm::Value *ptr = generateLValue(assign->lhs);
