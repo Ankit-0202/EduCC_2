@@ -1,12 +1,14 @@
-#ifndef CODEGENERATOR_HPP
-#define CODEGENERATOR_HPP
+#ifndef CODE_GENERATOR_HPP
+#define CODE_GENERATOR_HPP
 
 #include "AST.hpp"
+#include "SymbolTable.hpp"
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Module.h>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 /*
  * CodeGenerator class:
@@ -17,43 +19,46 @@
  */
 class CodeGenerator {
 public:
-  llvm::LLVMContext context;
-  llvm::IRBuilder<> builder;
-  std::unique_ptr<llvm::Module> module;
-
-  // Map of local variables (name -> alloca)
-  std::unordered_map<std::string, llvm::Value *> localVariables;
-
   CodeGenerator();
 
-  // Entry point
+  // Generates LLVM IR from the AST.
   std::unique_ptr<llvm::Module>
   generateCode(const std::shared_ptr<Program> &program);
 
-  // Returns the LLVM type corresponding to the given string type.
+  // Returns the LLVM type for a given C type name.
   llvm::Type *getLLVMType(const std::string &type);
 
-  // Returns a pointer to an lvalue for assignment.
+  // Expression generation routines.
+  llvm::Value *generateExpression(const ExpressionPtr &expr);
   llvm::Value *generateLValue(const ExpressionPtr &expr);
 
-  // Generates code for an expression.
-  llvm::Value *generateExpression(const ExpressionPtr &expr);
-
-  // Generates code for a statement; returns true if the statement terminates.
+  // Statement generation routine.
   bool generateStatement(const StatementPtr &stmt);
 
-  // Generates code for a variable declaration statement.
+  // Generates a local variable declaration statement.
   void generateVariableDeclarationStatement(
       const std::shared_ptr<VariableDeclarationStatement> &varDeclStmt);
 
-  // Generates a function declaration/definition.
-  void generateFunction(const std::shared_ptr<FunctionDeclaration> &funcDecl);
-
-  // Helper: get or create a function in the module.
+  // If a function is being defined, this routine either creates or returns an
+  // existing function in the module.
   llvm::Function *
   getOrCreateFunctionInModule(const std::string &name, llvm::Type *returnType,
                               const std::vector<llvm::Type *> &paramTypes,
                               bool isDefinition);
+
+  // NEW: Declaration for function generation.
+  llvm::Function *
+  generateFunction(const std::shared_ptr<FunctionDeclaration> &funcDecl);
+
+  // Expose context and module for convenience.
+  llvm::LLVMContext context;
+  llvm::IRBuilder<> builder;
+  std::unique_ptr<llvm::Module> module;
+
+  // Map of local variable names to their alloca instructions.
+  std::unordered_map<std::string, llvm::Value *> localVariables;
+  // NEW: Map of variable names to their declared (non-opaque) LLVM types.
+  std::unordered_map<std::string, llvm::Type *> declaredTypes;
 };
 
-#endif // CODEGENERATOR_HPP
+#endif // CODE_GENERATOR_HPP

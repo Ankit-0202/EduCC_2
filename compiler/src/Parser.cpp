@@ -69,6 +69,13 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
+  // Handle struct declarations.
+  // If the current token is a keyword "struct" or an identifier whose lexeme is
+  // "struct"
+  if ((check(TokenType::KW_STRUCT)) ||
+      (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
+    return parseStructDeclaration();
+  }
   // Handle union declarations (both tagged and anonymous)
   if (check(TokenType::KW_UNION)) {
     return parseUnionDeclaration();
@@ -126,6 +133,65 @@ DeclarationPtr Parser::parseDeclaration() {
   return nullptr;
 }
 
+DeclarationPtr Parser::parseStructDeclaration() {
+  // Consume the "struct" keyword.
+  // It might be returned as KW_STRUCT or as an identifier with lexeme "struct"
+  if (check(TokenType::KW_STRUCT))
+    advance();
+  else if (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")
+    advance();
+  else
+    error("Expected 'struct' keyword");
+
+  // Optionally, get the struct tag.
+  std::optional<std::string> tag = std::nullopt;
+  if (check(TokenType::IDENTIFIER)) {
+    tag = advance().lexeme;
+  }
+  // If the next token is a left brace, this is a struct definition.
+  if (check(TokenType::DELIM_LBRACE)) {
+    consume(TokenType::DELIM_LBRACE,
+            "Expected '{' to begin struct declaration");
+    std::vector<std::shared_ptr<VariableDeclaration>> members;
+    while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+      // Parse a member declaration. We assume members are simple variable
+      // declarations. For simplicity, we only support basic types in struct
+      // members.
+      std::string memberType;
+      if (match(TokenType::KW_INT)) {
+        memberType = "int";
+      } else if (match(TokenType::KW_FLOAT)) {
+        memberType = "float";
+      } else if (match(TokenType::KW_CHAR)) {
+        memberType = "char";
+      } else if (match(TokenType::KW_DOUBLE)) {
+        memberType = "double";
+      } else if (match(TokenType::KW_BOOL)) {
+        memberType = "bool";
+      } else {
+        error("Expected type specifier in struct member declaration");
+      }
+      if (!check(TokenType::IDENTIFIER)) {
+        error("Expected member name in struct declaration");
+      }
+      std::string memberName = advance().lexeme;
+      consume(TokenType::DELIM_SEMICOLON,
+              "Expected ';' after struct member declaration");
+      members.push_back(std::make_shared<VariableDeclaration>(
+          memberType, memberName, std::nullopt));
+    }
+    consume(TokenType::DELIM_RBRACE,
+            "Expected '}' to close struct declaration");
+    consume(TokenType::DELIM_SEMICOLON,
+            "Expected ';' after struct declaration");
+    return std::make_shared<StructDeclaration>(tag, members);
+  } else {
+    // No struct definition body; this is just a type specifier.
+    // Return a dummy declaration (or handle as needed by your design).
+    return nullptr; // For now, we return nullptr to indicate no definition.
+  }
+}
+
 DeclarationPtr Parser::parseVariableDeclaration() {
   std::string type;
   if (match(TokenType::KW_INT)) {
@@ -138,8 +204,33 @@ DeclarationPtr Parser::parseVariableDeclaration() {
     type = "double";
   } else if (match(TokenType::KW_BOOL)) {
     type = "bool";
+  } else if (match(TokenType::KW_ENUM)) {
+    if (!check(TokenType::IDENTIFIER)) {
+      error("Expected enum tag after 'enum' in variable declaration");
+    }
+    std::string tag = advance().lexeme;
+    type = "enum " + tag;
+  } else if (match(TokenType::KW_UNION)) {
+    if (!check(TokenType::IDENTIFIER)) {
+      error("Expected union tag after 'union' in variable declaration");
+    }
+    std::string tag = advance().lexeme;
+    type = "union " + tag;
+  } else if (match(TokenType::KW_STRUCT) ||
+             (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
+    // Handle struct type specifier.
+    // Consume the "struct" keyword.
+    if (check(TokenType::KW_STRUCT))
+      advance();
+    else
+      advance(); // if it came as identifier "struct"
+    if (!check(TokenType::IDENTIFIER)) {
+      error("Expected struct tag after 'struct' in variable declaration");
+    }
+    std::string tag = advance().lexeme;
+    type = "struct " + tag;
   } else {
-    error("Expected type specifier");
+    error("Expected type specifier in variable declaration");
   }
   std::vector<std::shared_ptr<VariableDeclaration>> decls;
   do {
@@ -339,7 +430,9 @@ StatementPtr Parser::parseStatement() {
   } else if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
              check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
              check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
-             check(TokenType::KW_UNION)) {
+             check(TokenType::KW_UNION) ||
+             (check(TokenType::KW_STRUCT) ||
+              (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
     return parseVariableDeclarationStatement();
   } else {
     return parseExpressionStatement();
@@ -372,7 +465,9 @@ StatementPtr Parser::parseForStatement() {
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
       check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
-      check(TokenType::KW_UNION)) {
+      check(TokenType::KW_UNION) ||
+      (check(TokenType::KW_STRUCT) ||
+       (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
     initializer = parseVariableDeclarationStatement();
   } else {
     initializer = parseExpressionStatement();
@@ -432,7 +527,7 @@ StatementPtr Parser::parseExpressionStatement() {
 
 StatementPtr Parser::parseVariableDeclarationStatement() {
   std::string type;
-  // Allow "enum" and "union" as type specifiers.
+  // Allow "enum", "union", and "struct" as type specifiers.
   if (match(TokenType::KW_INT)) {
     type = "int";
   } else if (match(TokenType::KW_FLOAT)) {
@@ -444,17 +539,27 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   } else if (match(TokenType::KW_BOOL)) {
     type = "bool";
   } else if (match(TokenType::KW_ENUM)) {
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!check(TokenType::IDENTIFIER))
       error("Expected enum tag after 'enum' in variable declaration");
-    }
     std::string tag = advance().lexeme;
     type = "enum " + tag;
   } else if (match(TokenType::KW_UNION)) {
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!check(TokenType::IDENTIFIER))
       error("Expected union tag after 'union' in variable declaration");
-    }
     std::string tag = advance().lexeme;
     type = "union " + tag;
+  } else if (match(TokenType::KW_STRUCT) ||
+             (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
+    // Handle struct type specifier.
+    if (check(TokenType::KW_STRUCT))
+      advance();
+    else
+      advance(); // consumed "struct" as identifier
+    if (!check(TokenType::IDENTIFIER)) {
+      error("Expected struct tag after 'struct' in variable declaration");
+    }
+    std::string tag = advance().lexeme;
+    type = "struct " + tag;
   } else {
     error("Expected type specifier in variable declaration");
   }

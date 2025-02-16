@@ -30,27 +30,52 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr &expr) {
                             baseId->name + "' used in member access.");
       }
       string type = symbolOpt.value().type;
-      if (type.rfind("union ", 0) != 0) {
-        throw runtime_error("Semantic Analysis Error: Variable '" +
-                            baseId->name + "' is not of a union type.");
-      }
-      string tag = type.substr(6);
-      auto unionIt = unionRegistry.find(tag);
-      if (unionIt == unionRegistry.end()) {
-        throw runtime_error("Semantic Analysis Error: Unknown union type '" +
-                            type + "'.");
-      }
-      bool found = false;
-      for (auto &member : unionIt->second->members) {
-        if (member->name == mem->member) {
-          found = true;
-          break;
+      // Check for union member access.
+      if (type.rfind("union ", 0) == 0) {
+        string tag = type.substr(6);
+        auto unionIt = unionRegistry.find(tag);
+        if (unionIt == unionRegistry.end()) {
+          throw runtime_error("Semantic Analysis Error: Unknown union type '" +
+                              type + "'.");
+        }
+        bool found = false;
+        for (auto &member : unionIt->second->members) {
+          if (member->name == mem->member) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          throw runtime_error("Semantic Analysis Error: Union type '" + type +
+                              "' does not contain a member named '" +
+                              mem->member + "'.");
         }
       }
-      if (!found) {
-        throw runtime_error("Semantic Analysis Error: Union type '" + type +
-                            "' does not contain a member named '" +
-                            mem->member + "'.");
+      // Check for struct member access.
+      else if (type.rfind("struct ", 0) == 0) {
+        string tag = type.substr(7);
+        // Look up the struct declaration in the registry.
+        auto structIt = structRegistry.find(tag);
+        if (structIt == structRegistry.end()) {
+          throw runtime_error("Semantic Analysis Error: Unknown struct type '" +
+                              type + "'.");
+        }
+        bool found = false;
+        for (auto &member : structIt->second->members) {
+          if (member->name == mem->member) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          throw runtime_error("Semantic Analysis Error: Struct type '" + type +
+                              "' does not contain a member named '" +
+                              mem->member + "'.");
+        }
+      } else {
+        throw runtime_error("Semantic Analysis Error: Variable '" +
+                            baseId->name +
+                            "' is not of a union or struct type.");
       }
     } else {
       throw runtime_error("Semantic Analysis Error: Unsupported base "

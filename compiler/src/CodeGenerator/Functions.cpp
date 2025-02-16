@@ -17,7 +17,7 @@ using std::shared_ptr;
 using std::string;
 using std::vector;
 
-void CodeGenerator::generateFunction(
+llvm::Function *CodeGenerator::generateFunction(
     const shared_ptr<FunctionDeclaration> &funcDecl) {
   llvm::Type *retTy = getLLVMType(funcDecl->returnType);
   vector<Type *> paramTys;
@@ -28,12 +28,13 @@ void CodeGenerator::generateFunction(
   Function *function =
       getOrCreateFunctionInModule(funcDecl->name, retTy, paramTys, hasBody);
   if (!hasBody)
-    return;
+    return function;
   if (function->empty()) {
     BasicBlock *entryBB = BasicBlock::Create(context, "entry", function);
     builder.SetInsertPoint(entryBB);
 
     localVariables.clear();
+    declaredTypes.clear();
 
     size_t i = 0;
     for (auto &arg : function->args()) {
@@ -43,6 +44,8 @@ void CodeGenerator::generateFunction(
           builder.CreateAlloca(arg.getType(), nullptr, paramName);
       builder.CreateStore(&arg, alloc);
       localVariables[paramName] = alloc;
+      // Record declared type for parameter.
+      declaredTypes[paramName] = arg.getType();
       i++;
     }
 
@@ -73,6 +76,7 @@ void CodeGenerator::generateFunction(
                             funcDecl->returnType + "'.");
       }
     }
+    return function;
   } else {
     throw runtime_error(
         "CodeGenerator Error: Unexpected redefinition encountered for '" +

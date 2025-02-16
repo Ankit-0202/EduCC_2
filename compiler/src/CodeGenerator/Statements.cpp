@@ -206,6 +206,8 @@ void CodeGenerator::generateVariableDeclarationStatement(
   AllocaInst *alloc =
       builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
   localVariables[varDeclStmt->name] = alloc;
+  // Record the declared type.
+  declaredTypes[varDeclStmt->name] = varTy;
 
   if (varDeclStmt->initializer) {
     llvm::Value *initVal = generateExpression(varDeclStmt->initializer.value());

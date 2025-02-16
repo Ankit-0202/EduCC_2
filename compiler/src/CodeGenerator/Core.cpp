@@ -21,7 +21,11 @@ using std::vector;
 
 CodeGenerator::CodeGenerator()
     : builder(context),
-      module(std::make_unique<Module>("main_module", context)) {}
+      module(std::make_unique<Module>("main_module", context)) {
+  // Note: In LLVM 19 opaque pointers are enabled by default and cannot be
+  // disabled via setOpaquePointers(). Instead, we record each variable’s
+  // declared type.
+}
 
 std::unique_ptr<Module>
 CodeGenerator::generateCode(const shared_ptr<Program> &program) {
@@ -36,21 +40,21 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
         if (auto lit = std::dynamic_pointer_cast<Literal>(
                 varDecl->initializer.value())) {
           Constant *initVal = nullptr;
-          if (std::holds_alternative<int>(lit->value))
-            initVal = ConstantInt::get(Type::getInt32Ty(context),
-                                       std::get<int>(lit->value));
-          else if (std::holds_alternative<float>(lit->value))
-            initVal = ConstantFP::get(Type::getFloatTy(context),
-                                      std::get<float>(lit->value));
-          else if (std::holds_alternative<double>(lit->value))
-            initVal = ConstantFP::get(Type::getDoubleTy(context),
-                                      std::get<double>(lit->value));
-          else if (std::holds_alternative<char>(lit->value))
-            initVal = ConstantInt::get(Type::getInt8Ty(context),
-                                       std::get<char>(lit->value));
-          else if (std::holds_alternative<bool>(lit->value))
-            initVal = ConstantInt::get(Type::getInt1Ty(context),
-                                       std::get<bool>(lit->value));
+          if (lit->type == Literal::LiteralType::Int)
+            initVal =
+                ConstantInt::get(Type::getInt32Ty(context), lit->intValue);
+          else if (lit->type == Literal::LiteralType::Float)
+            initVal =
+                ConstantFP::get(Type::getFloatTy(context), lit->floatValue);
+          else if (lit->type == Literal::LiteralType::Double)
+            initVal =
+                ConstantFP::get(Type::getDoubleTy(context), lit->doubleValue);
+          else if (lit->type == Literal::LiteralType::Char)
+            initVal =
+                ConstantInt::get(Type::getInt8Ty(context), lit->charValue);
+          else if (lit->type == Literal::LiteralType::Bool)
+            initVal =
+                ConstantInt::get(Type::getInt1Ty(context), lit->boolValue);
           else
             throw runtime_error("CodeGenerator Error: Unsupported literal type "
                                 "in global initializer.");
@@ -60,11 +64,9 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                 varType->isFloatingPointTy()) {
               if (initVal->getType()->getFPMantissaWidth() >
                   varType->getFPMantissaWidth())
-                initVal = ConstantFP::get(varType,
-                                          (float)std::get<double>(lit->value));
+                initVal = ConstantFP::get(varType, (float)lit->doubleValue);
               else
-                initVal = ConstantFP::get(varType,
-                                          (double)std::get<float>(lit->value));
+                initVal = ConstantFP::get(varType, (double)lit->floatValue);
             } else {
               throw runtime_error(
                   "CodeGenerator Error: Incompatible initializer type in "
@@ -104,21 +106,21 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           if (auto lit = std::dynamic_pointer_cast<Literal>(
                   singleDecl->initializer.value())) {
             Constant *initVal = nullptr;
-            if (std::holds_alternative<int>(lit->value))
-              initVal = ConstantInt::get(Type::getInt32Ty(context),
-                                         std::get<int>(lit->value));
-            else if (std::holds_alternative<float>(lit->value))
-              initVal = ConstantFP::get(Type::getFloatTy(context),
-                                        std::get<float>(lit->value));
-            else if (std::holds_alternative<double>(lit->value))
-              initVal = ConstantFP::get(Type::getDoubleTy(context),
-                                        std::get<double>(lit->value));
-            else if (std::holds_alternative<char>(lit->value))
-              initVal = ConstantInt::get(Type::getInt8Ty(context),
-                                         std::get<char>(lit->value));
-            else if (std::holds_alternative<bool>(lit->value))
-              initVal = ConstantInt::get(Type::getInt1Ty(context),
-                                         std::get<bool>(lit->value));
+            if (lit->type == Literal::LiteralType::Int)
+              initVal =
+                  ConstantInt::get(Type::getInt32Ty(context), lit->intValue);
+            else if (lit->type == Literal::LiteralType::Float)
+              initVal =
+                  ConstantFP::get(Type::getFloatTy(context), lit->floatValue);
+            else if (lit->type == Literal::LiteralType::Double)
+              initVal =
+                  ConstantFP::get(Type::getDoubleTy(context), lit->doubleValue);
+            else if (lit->type == Literal::LiteralType::Char)
+              initVal =
+                  ConstantInt::get(Type::getInt8Ty(context), lit->charValue);
+            else if (lit->type == Literal::LiteralType::Bool)
+              initVal =
+                  ConstantInt::get(Type::getInt1Ty(context), lit->boolValue);
             else
               throw runtime_error("CodeGenerator Error: Unsupported literal "
                                   "type in global initializer.");
@@ -127,11 +129,9 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                   varType->isFloatingPointTy()) {
                 if (initVal->getType()->getFPMantissaWidth() >
                     varType->getFPMantissaWidth())
-                  initVal = ConstantFP::get(
-                      varType, (float)std::get<double>(lit->value));
+                  initVal = ConstantFP::get(varType, (float)lit->doubleValue);
                 else
-                  initVal = ConstantFP::get(
-                      varType, (double)std::get<float>(lit->value));
+                  initVal = ConstantFP::get(varType, (double)lit->floatValue);
               } else {
                 throw runtime_error(
                     "CodeGenerator Error: Incompatible initializer type in "
@@ -236,6 +236,21 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
         maxSize = memberSize;
     }
     return ArrayType::get(Type::getInt8Ty(context), maxSize);
+  } else if (type.rfind("struct ", 0) == 0) {
+    std::string tag = type.substr(7);
+    auto it = structRegistry.find(tag);
+    if (it == structRegistry.end()) {
+      throw runtime_error("CodeGenerator Error: Unknown struct type '" + type +
+                          "'");
+    }
+    auto structDecl = it->second;
+    vector<Type *> memberTypes;
+    for (auto &member : structDecl->members) {
+      memberTypes.push_back(getLLVMType(member->type));
+    }
+    StructType *structType =
+        StructType::create(context, memberTypes, tag, false);
+    return structType;
   } else
     throw runtime_error("CodeGenerator Error: Unsupported type '" + type +
                         "'.");

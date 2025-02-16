@@ -34,6 +34,9 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
   } else if (auto unionDecl =
                  std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
     analyzeUnionDeclaration(unionDecl);
+  } else if (auto structDecl =
+                 std::dynamic_pointer_cast<StructDeclaration>(decl)) {
+    analyzeStructDeclaration(structDecl);
   } else {
     throw runtime_error(
         "Semantic Analysis Error: Unknown declaration type encountered.");
@@ -126,11 +129,11 @@ void SemanticAnalyzer::analyzeEnumDeclaration(
         throw runtime_error("Semantic Analysis Error: Enum initializer for '" +
                             enumerator.first + "' is not a literal.");
       }
-      if (!std::holds_alternative<int>(lit->value)) {
+      if (lit->type != Literal::LiteralType::Int) {
         throw runtime_error("Semantic Analysis Error: Enum initializer for '" +
                             enumerator.first + "' must be an integer literal.");
       }
-      value = std::get<int>(lit->value);
+      value = lit->intValue;
       currentValue = value + 1;
     } else {
       value = currentValue;
@@ -152,6 +155,16 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
   }
   if (unionDecl->tag.has_value()) {
     unionRegistry[unionDecl->tag.value()] = unionDecl;
+  }
+}
+
+void SemanticAnalyzer::analyzeStructDeclaration(
+    const std::shared_ptr<StructDeclaration> &structDecl) {
+  for (auto &member : structDecl->members) {
+    analyzeVariableDeclaration(member);
+  }
+  if (structDecl->tag.has_value()) {
+    structRegistry[structDecl->tag.value()] = structDecl;
   }
 }
 

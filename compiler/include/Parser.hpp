@@ -32,9 +32,9 @@ private:
   DeclarationPtr parseVariableDeclaration();
   DeclarationPtr parseFunctionDeclaration();
   DeclarationPtr parseEnumDeclaration();
-  DeclarationPtr parseUnionDeclaration(); // NEW: union declaration
-  std::shared_ptr<VariableDeclaration>
-  parseUnionMemberDeclaration(); // NEW: union member parsing
+  DeclarationPtr parseUnionDeclaration();
+  DeclarationPtr parseStructDeclaration();
+  std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
 
   std::vector<std::pair<std::string, std::string>> parseParameters();
 
