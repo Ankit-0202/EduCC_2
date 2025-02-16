@@ -2,7 +2,9 @@
 #include "AST.hpp"
 #include "Lexer.hpp"
 #include <iostream>
+#include <optional>
 #include <stdexcept>
+#include <vector>
 
 Parser::Parser(const std::vector<Token> &tokens) : tokens(tokens), current(0) {}
 
@@ -179,8 +181,7 @@ StatementPtr Parser::parseStatement() {
 }
 
 DeclarationPtr Parser::parseStructDeclaration() {
-  // Consume the "struct" keyword. (It might be a KW_STRUCT or an identifier
-  // with lexeme "struct".)
+  // Consume the "struct" keyword.
   if (peek().lexeme == "struct")
     advance();
   else
@@ -525,14 +526,27 @@ StatementPtr Parser::parseSwitchStatement() {
   ExpressionPtr expr = parseExpression();
   consume(TokenType::DELIM_RPAREN, "Expected ')' after switch expression");
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin switch block");
+
+  // Use fully qualified std::vector and std::optional.
   std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>> cases;
   std::optional<StatementPtr> defaultCase = std::nullopt;
+  // Collect pending case labels that have not yet been assigned a statement.
+  std::vector<std::optional<ExpressionPtr>> pendingCases;
+
   while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
     if (match(TokenType::KW_CASE)) {
+      // Parse a case label.
       ExpressionPtr caseExpr = parseExpression();
       consume(TokenType::DELIM_COLON, "Expected ':' after case label");
-      StatementPtr caseStmt = parseStatement();
-      cases.push_back({caseExpr, caseStmt});
+      pendingCases.push_back(caseExpr);
+      // If the next token is another case or default label, continue.
+      if (check(TokenType::KW_CASE) || check(TokenType::KW_DEFAULT))
+        continue;
+      // Otherwise, parse the statement that applies to all pending cases.
+      StatementPtr stmt = parseStatement();
+      for (const auto &ce : pendingCases)
+        cases.push_back({ce, stmt});
+      pendingCases.clear();
     } else if (match(TokenType::KW_DEFAULT)) {
       consume(TokenType::DELIM_COLON, "Expected ':' after 'default'");
       defaultCase = parseStatement();
@@ -558,7 +572,7 @@ StatementPtr Parser::parseExpressionStatement() {
 
 StatementPtr Parser::parseVariableDeclarationStatement() {
   std::string type;
-  // Allow "enum", "union", and "struct" as type specifiers.
+  // Allow "enum", "union" and "struct" as type specifiers.
   if (match(TokenType::KW_INT)) {
     type = "int";
   } else if (match(TokenType::KW_FLOAT)) {

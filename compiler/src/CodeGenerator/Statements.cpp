@@ -23,12 +23,11 @@ using std::vector;
 //  Local Scope Management
 //
 // We maintain two parallel stacks:
-//   - localVarStack: a stack (vector) of unordered_maps mapping variable names
-//   to their AllocaInst pointers.
-//   - declaredVarStack: a stack (vector) of unordered_sets of strings, which
-//   record the variable names declared in each scope.
-// When a scope is popped, we remove the variable names declared in that scope
-// from declaredTypes and declaredTypeStrings.
+//   - localVarStack: a vector of unordered_maps mapping variable names to their
+//     AllocaInst pointers.
+//   - declaredVarStack: a vector of unordered_sets (of variable names) declared
+//     in that scope. When a scope is popped, the names are removed from
+//     declaredTypes and declaredTypeStrings.
 //===----------------------------------------------------------------------===//
 
 void CodeGenerator::pushLocalScope() {
@@ -62,8 +61,8 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
 //===----------------------------------------------------------------------===//
 //  generateStatement
 //
-// For compound statements we push a new scope, process each substatement,
-// and then (if this isn’t the outermost function body) pop the scope.
+// This function generates LLVM IR for a given statement.
+// For compound statements a new local scope is pushed and later popped.
 //===----------------------------------------------------------------------===//
 
 bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
@@ -75,8 +74,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       if (terminated)
         break;
     }
-    // If more than one scope exists, we are in a nested compound and pop the
-    // local scope.
+    // For nested compounds, pop the local scope.
     if (localVarStack.size() > 1)
       popLocalScope();
     return terminated;
@@ -101,25 +99,22 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     Function *currentFunction = builder.GetInsertBlock()->getParent();
     Type *expectedType = currentFunction->getReturnType();
     if (retVal->getType() != expectedType) {
-      if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32)) {
+      if (retVal->getType()->isIntegerTy(1) && expectedType->isIntegerTy(32))
         retVal = builder.CreateZExt(retVal, expectedType, "zexttmp");
-      } else if (retVal->getType()->isIntegerTy() &&
-                 expectedType->isIntegerTy()) {
+      else if (retVal->getType()->isIntegerTy() && expectedType->isIntegerTy())
         retVal =
             builder.CreateIntCast(retVal, expectedType, false, "intcasttmp");
-      } else {
+      else
         throw runtime_error("CodeGenerator Error: Return value type does not "
                             "match function return type.");
-      }
     }
     builder.CreateRet(retVal);
     return true;
   } else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
     Value *condVal = generateExpression(ifStmt->condition);
-    if (condVal->getType() != Type::getInt1Ty(context)) {
+    if (condVal->getType() != Type::getInt1Ty(context))
       condVal = builder.CreateICmpNE(
           condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
-    }
     Function *theFunction = builder.GetInsertBlock()->getParent();
     BasicBlock *thenBB = BasicBlock::Create(context, "then", theFunction);
     BasicBlock *elseBB = BasicBlock::Create(context, "else", theFunction);
@@ -127,16 +122,14 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     builder.CreateCondBr(condVal, thenBB, elseBB);
     builder.SetInsertPoint(thenBB);
     bool thenTerminated = generateStatement(ifStmt->thenBranch);
-    if (!thenTerminated) {
+    if (!thenTerminated)
       builder.CreateBr(mergeBB);
-    }
     builder.SetInsertPoint(elseBB);
     bool elseTerminated = false;
     if (ifStmt->elseBranch)
       elseTerminated = generateStatement(ifStmt->elseBranch.value());
-    if (!elseTerminated) {
+    if (!elseTerminated)
       builder.CreateBr(mergeBB);
-    }
     builder.SetInsertPoint(mergeBB);
     return false;
   } else if (auto whileStmt = std::dynamic_pointer_cast<WhileStatement>(stmt)) {
@@ -148,16 +141,14 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
     Value *condVal = generateExpression(whileStmt->condition);
-    if (condVal->getType() != Type::getInt1Ty(context)) {
+    if (condVal->getType() != Type::getInt1Ty(context))
       condVal = builder.CreateICmpNE(
           condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
-    }
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(bodyBB);
     bool bodyTerminated = generateStatement(whileStmt->body);
-    if (!bodyTerminated) {
+    if (!bodyTerminated)
       builder.CreateBr(condBB);
-    }
     builder.SetInsertPoint(afterBB);
     return false;
   } else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
@@ -173,73 +164,100 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     Value *condVal = nullptr;
     if (forStmt->condition) {
       condVal = generateExpression(forStmt->condition);
-      if (condVal->getType() != Type::getInt1Ty(context)) {
+      if (condVal->getType() != Type::getInt1Ty(context))
         condVal = builder.CreateICmpNE(
             condVal, ConstantInt::get(condVal->getType(), 0), "forcond");
-      }
     } else {
       condVal = ConstantInt::get(Type::getInt1Ty(context), 1);
     }
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(bodyBB);
     bool bodyTerminated = generateStatement(forStmt->body);
-    if (!bodyTerminated) {
+    if (!bodyTerminated)
       builder.CreateBr(incrBB);
-    }
     builder.SetInsertPoint(incrBB);
-    if (forStmt->increment) {
+    if (forStmt->increment)
       generateExpression(forStmt->increment);
-    }
     builder.CreateBr(condBB);
     builder.SetInsertPoint(afterBB);
     return false;
-  } else if (auto switchStmt =
-                 std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
+  }
+  // --- Switch-case Handling ---
+  else if (auto switchStmt = std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
+    // Generate the condition value.
     Value *condVal = generateExpression(switchStmt->expression);
-    if (!condVal->getType()->isIntegerTy()) {
+    if (!condVal->getType()->isIntegerTy())
       throw runtime_error(
           "CodeGenerator Error: Switch expression must be of integer type.");
-    }
     Function *theFunction = builder.GetInsertBlock()->getParent();
-    BasicBlock *defaultBB =
-        BasicBlock::Create(context, "switch.default", theFunction);
+
+    // Create a merge block for when the switch is done.
+    BasicBlock *mergeBB =
+        BasicBlock::Create(context, "switch.merge", theFunction);
+
+    // Create one basic block per case clause in order.
+    vector<BasicBlock *> caseBBs;
+    for (size_t i = 0; i < switchStmt->cases.size(); i++) {
+      BasicBlock *bb = BasicBlock::Create(context, "switch.case", theFunction);
+      caseBBs.push_back(bb);
+    }
+
+    // Create a basic block for the default clause, if present; otherwise use
+    // merge.
+    BasicBlock *defaultBB = mergeBB;
+    if (switchStmt->defaultCase.has_value())
+      defaultBB = BasicBlock::Create(context, "switch.default", theFunction);
+
+    // Create the switch instruction.
     SwitchInst *switchInst =
         builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
-    for (auto &casePair : switchStmt->cases) {
-      if (!casePair.first.has_value())
+    // For each case clause, add its label and direct it to the corresponding
+    // block.
+    for (size_t i = 0; i < switchStmt->cases.size(); i++) {
+      if (!switchStmt->cases[i].first.has_value())
         throw runtime_error(
             "CodeGenerator Error: Case label missing in case clause.");
-      Value *caseVal = generateExpression(casePair.first.value());
+      Value *caseVal = generateExpression(switchStmt->cases[i].first.value());
       if (!isa<ConstantInt>(caseVal))
         throw runtime_error(
             "CodeGenerator Error: Case label must be a constant integer.");
-      BasicBlock *caseBB =
-          BasicBlock::Create(context, "switch.case", theFunction);
-      switchInst->addCase(cast<ConstantInt>(caseVal), caseBB);
-      builder.SetInsertPoint(caseBB);
-      bool terminated = generateStatement(casePair.second);
+      switchInst->addCase(cast<ConstantInt>(caseVal), caseBBs[i]);
+    }
+
+    // Generate code for each case clause in order.
+    for (size_t i = 0; i < caseBBs.size(); i++) {
+      builder.SetInsertPoint(caseBBs[i]);
+      // Generate the code for this case clause.
+      bool terminated = generateStatement(switchStmt->cases[i].second);
+      // If the case clause does not end with a terminator, fall through
+      // to the next block (or default if this is the last case).
       if (!terminated) {
-        builder.CreateBr(defaultBB);
+        if (i + 1 < caseBBs.size())
+          builder.CreateBr(caseBBs[i + 1]);
+        else
+          builder.CreateBr(defaultBB);
       }
     }
-    builder.SetInsertPoint(defaultBB);
+    // Generate code for the default clause (if present).
     if (switchStmt->defaultCase.has_value()) {
+      builder.SetInsertPoint(defaultBB);
       bool terminated = generateStatement(switchStmt->defaultCase.value());
-      if (!terminated) {
-        builder.CreateUnreachable();
-      }
-    } else {
-      builder.CreateUnreachable();
+      if (!terminated)
+        builder.CreateBr(mergeBB);
     }
+    // Set the insertion point to the merge block.
+    builder.SetInsertPoint(mergeBB);
     return false;
   }
-  // Handle DeclarationStatements that wrap an enum declaration.
+  // --- End of switch-case Handling ---
+
+  // Handle declaration statements that wrap an enum declaration.
   else if (auto declStmt =
                std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
     if (auto enumDecl =
             std::dynamic_pointer_cast<EnumDeclaration>(declStmt->declaration)) {
-      // Generate global constants for each enumerator (if not already
-      // generated).
+      // For each enumerator, generate a global constant if not already
+      // generated.
       for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
         string enumName = enumDecl->enumerators[i].first;
         int value = enumDecl->enumeratorValues[i];
@@ -274,7 +292,7 @@ void CodeGenerator::generateVariableDeclarationStatement(
       builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
   // Record the allocation in the current local scope.
   localVarStack.back()[varDeclStmt->name] = alloc;
-  // Also record the variable name in the declaredVarStack for later removal.
+  // Also record the variable name for later removal.
   declaredVarStack.back().insert(varDeclStmt->name);
   // Record the LLVM type and the original type string.
   declaredTypes[varDeclStmt->name] = varTy;

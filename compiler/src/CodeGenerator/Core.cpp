@@ -21,8 +21,7 @@ using std::vector;
 
 CodeGenerator::CodeGenerator()
     : builder(context),
-      module(std::make_unique<Module>("main_module", context)) {
-}
+      module(std::make_unique<Module>("main_module", context)) {}
 
 std::unique_ptr<Module>
 CodeGenerator::generateCode(const shared_ptr<Program> &program) {
