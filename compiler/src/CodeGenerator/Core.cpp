@@ -204,13 +204,15 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   else if (type.rfind("enum ", 0) == 0)
     return Type::getInt32Ty(context);
   else if (type.rfind("union ", 0) == 0) {
+    // Extract the tag (name) of the union.
     std::string tag = type.substr(6);
     auto it = unionRegistry.find(tag);
     if (it == unionRegistry.end()) {
       throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
-                          "'");
+                          "'.");
     }
     int maxSize = 0;
+    // Compute the maximum size among the union members.
     for (auto &member : it->second->members) {
       int memberSize = 0;
       if (member->type == "int")
@@ -235,13 +237,16 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
       if (memberSize > maxSize)
         maxSize = memberSize;
     }
+    // Ensure we never pass zero or negative size.
+    if (maxSize <= 0)
+      maxSize = 1;
     return ArrayType::get(Type::getInt8Ty(context), maxSize);
   } else if (type.rfind("struct ", 0) == 0) {
     std::string tag = type.substr(7);
     auto it = structRegistry.find(tag);
     if (it == structRegistry.end()) {
       throw runtime_error("CodeGenerator Error: Unknown struct type '" + type +
-                          "'");
+                          "'.");
     }
     auto structDecl = it->second;
     vector<Type *> memberTypes;

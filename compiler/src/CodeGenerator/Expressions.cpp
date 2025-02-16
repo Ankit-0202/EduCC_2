@@ -3,17 +3,111 @@
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/DerivedTypes.h> // Provides composite type definitions.
+#include <llvm/IR/DerivedTypes.h> // For composite types.
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 using namespace llvm;
 using std::runtime_error;
 using std::shared_ptr;
 using std::string;
+
+//
+// Helper: Recursively retrieve the top-level base variable name from a member
+// access chain. For example, given "rect.topLeft.x", returns "rect".
+//
+namespace {
+string getBaseVariableName(const ExpressionPtr &expr) {
+  if (auto id = std::dynamic_pointer_cast<Identifier>(expr))
+    return id->name;
+  if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr))
+    return getBaseVariableName(mem->base);
+  throw runtime_error(
+      "CodeGenerator Error: Base variable not found in member access chain.");
+}
+} // namespace
+
+//
+// Helper: Normalize a tag (struct or union name) by stripping any trailing
+// ".<number>". For example, "Point.1" becomes "Point".
+//
+namespace {
+string normalizeTag(const string &tag) {
+  size_t pos = tag.find('.');
+  if (pos != string::npos)
+    return tag.substr(0, pos);
+  return tag;
+}
+} // namespace
+
+//
+// Helper: Recursively resolve the declared LLVM type for a member access chain.
+// Uses both the declaredTypes and declaredTypeStrings maps from the
+// CodeGenerator, as well as the global registries (structRegistry and
+// unionRegistry).
+//
+namespace {
+llvm::Type *resolveFullMemberType(const ExpressionPtr &expr,
+                                  CodeGenerator &CG) {
+  // If expr is an identifier, look it up in declaredTypes.
+  if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+    auto it = CG.declaredTypes.find(id->name);
+    if (it == CG.declaredTypes.end())
+      throw runtime_error("CodeGenerator Error: Declared type for variable '" +
+                          id->name + "' not found.");
+    return it->second;
+  }
+  // If expr is a member access, resolve its base first.
+  if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+    llvm::Type *baseType = resolveFullMemberType(mem->base, CG);
+    // Retrieve the original declared type string for the base variable.
+    string baseName = getBaseVariableName(mem->base);
+    auto tsIt = CG.declaredTypeStrings.find(baseName);
+    if (tsIt == CG.declaredTypeStrings.end())
+      throw runtime_error(
+          "CodeGenerator Error: Declared type string for variable '" +
+          baseName + "' not found.");
+    string origType = tsIt->second;
+    // If the base was declared as a union, look it up in unionRegistry.
+    if (origType.rfind("union ", 0) == 0) {
+      string tag = origType.substr(6);
+      tag = normalizeTag(tag);
+      auto uit = unionRegistry.find(tag);
+      if (uit == unionRegistry.end())
+        throw runtime_error("CodeGenerator Error: Unknown union type '" + tag +
+                            "'.");
+      for (auto &member : uit->second->members) {
+        if (member->name == mem->member)
+          return CG.getLLVMType(member->type);
+      }
+      throw runtime_error("CodeGenerator Error: Union type '" + tag +
+                          "' does not contain member '" + mem->member + "'.");
+    }
+    // Otherwise, assume the base is a struct.
+    if (!baseType->isStructTy())
+      throw runtime_error("CodeGenerator Error: Base type is not a struct in "
+                          "member access chain.");
+    StructType *structType = cast<StructType>(baseType);
+    string tag = normalizeTag(structType->getName().str());
+    auto sit = structRegistry.find(tag);
+    if (sit == structRegistry.end())
+      throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
+                          "'.");
+    for (auto &member : sit->second->members) {
+      if (member->name == mem->member)
+        return CG.getLLVMType(member->type);
+    }
+    throw runtime_error("CodeGenerator Error: Struct type '" + tag +
+                        "' does not contain member '" + mem->member + "'.");
+  }
+  throw runtime_error("CodeGenerator Error: Cannot resolve full member type.");
+}
+} // namespace
 
 llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
@@ -26,46 +120,64 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "' in lvalue generation.");
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+    // Get the base variable name.
+    string baseName = getBaseVariableName(mem->base);
+    // Look up its declared original type string.
+    auto tsIt = declaredTypeStrings.find(baseName);
+    if (tsIt == declaredTypeStrings.end())
+      throw runtime_error(
+          "CodeGenerator Error: Declared type string for variable '" +
+          baseName + "' not found.");
+    string origType = tsIt->second;
     llvm::Value *basePtr = generateLValue(mem->base);
-    // Look up the declared type for the base variable from our declaredTypes
-    // map.
-    llvm::Type *baseElemType = nullptr;
-    if (auto baseId = std::dynamic_pointer_cast<Identifier>(mem->base)) {
-      auto it = declaredTypes.find(baseId->name);
-      if (it != declaredTypes.end())
-        baseElemType = it->second;
+    // If the base was declared as a union, generate an lvalue via bitcast.
+    if (origType.rfind("union ", 0) == 0) {
+      string tag = origType.substr(6);
+      tag = normalizeTag(tag);
+      auto uit = unionRegistry.find(tag);
+      if (uit == unionRegistry.end())
+        throw runtime_error("CodeGenerator Error: Unknown union type '" + tag +
+                            "'.");
+      llvm::Type *memberType = nullptr;
+      for (auto &member : uit->second->members) {
+        if (member->name == mem->member) {
+          memberType = getLLVMType(member->type);
+          break;
+        }
+      }
+      if (!memberType)
+        throw runtime_error("CodeGenerator Error: Union type '" + tag +
+                            "' does not contain member '" + mem->member + "'.");
+      return builder.CreateBitCast(basePtr, PointerType::getUnqual(memberType));
     }
-    if (!baseElemType)
-      throw runtime_error("CodeGenerator Error: Declared type for base not "
-                          "found in member access.");
-    if (isa<StructType>(baseElemType)) {
-      auto *structType = cast<StructType>(baseElemType);
-      std::string tag = structType->getName().str();
-      auto it = structRegistry.find(tag);
-      if (it == structRegistry.end())
-        throw runtime_error("CodeGenerator Error: Unknown struct type: " + tag);
-      auto structDecl = it->second;
+    // Otherwise, assume a struct.
+    llvm::Type *baseElemType = resolveFullMemberType(mem->base, *this);
+    if (baseElemType->isStructTy()) {
+      StructType *structType = cast<StructType>(baseElemType);
+      string tag = normalizeTag(structType->getName().str());
+      auto sit = structRegistry.find(tag);
+      if (sit == structRegistry.end())
+        throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
+                            "'.");
       size_t index = 0;
       bool found = false;
-      for (size_t i = 0; i < structDecl->members.size(); i++) {
-        if (structDecl->members[i]->name == mem->member) {
+      for (size_t i = 0; i < sit->second->members.size(); i++) {
+        if (sit->second->members[i]->name == mem->member) {
           index = i;
           found = true;
           break;
         }
       }
       if (!found)
-        throw runtime_error("CodeGenerator Error: Struct type " + tag +
-                            " does not contain member " + mem->member);
+        throw runtime_error("CodeGenerator Error: Struct type '" + tag +
+                            "' does not contain member '" + mem->member + "'.");
       return builder.CreateStructGEP(structType, basePtr, index, mem->member);
     } else if (baseElemType->isArrayTy()) {
-      // For unions represented as an array, return a bitcast pointer.
       return builder.CreateBitCast(
           basePtr, PointerType::getUnqual(Type::getInt32Ty(context)));
-    } else {
-      throw runtime_error("CodeGenerator Error: Member access applied to "
-                          "non-struct/union type.");
     }
+    throw runtime_error(
+        "CodeGenerator Error: Member access applied to non-aggregate type.");
   } else {
     throw runtime_error(
         "CodeGenerator Error: Expression is not a valid lvalue.");
@@ -86,47 +198,47 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         throw runtime_error(
             "CodeGenerator Error: Incompatible types in binary expression.");
     }
-    if (binExpr->op == "+") {
+    if (binExpr->op == "+")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFAdd(lhs, rhs, "faddtmp")
                  : builder.CreateAdd(lhs, rhs, "addtmp");
-    } else if (binExpr->op == "-") {
+    else if (binExpr->op == "-")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFSub(lhs, rhs, "fsubtmp")
                  : builder.CreateSub(lhs, rhs, "subtmp");
-    } else if (binExpr->op == "*") {
+    else if (binExpr->op == "*")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFMul(lhs, rhs, "fmultmp")
                  : builder.CreateMul(lhs, rhs, "multmp");
-    } else if (binExpr->op == "/") {
+    else if (binExpr->op == "/")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFDiv(lhs, rhs, "fdivtmp")
                  : builder.CreateSDiv(lhs, rhs, "divtmp");
-    } else if (binExpr->op == "<=") {
+    else if (binExpr->op == "<=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOLE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSLE(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "<") {
+    else if (binExpr->op == "<")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOLT(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSLT(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == ">=") {
+    else if (binExpr->op == ">=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOGE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSGE(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == ">") {
+    else if (binExpr->op == ">")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOGT(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSGT(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "==") {
+    else if (binExpr->op == "==")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOEQ(lhs, rhs, "cmptmp")
                  : builder.CreateICmpEQ(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "!=") {
+    else if (binExpr->op == "!=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpONE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpNE(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "&&") {
+    else if (binExpr->op == "&&") {
       if (!lhs->getType()->isIntegerTy(1))
         lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0),
                                    "booltmp");
@@ -142,20 +254,19 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0),
                                    "booltmp");
       return builder.CreateOr(lhs, rhs, "ortmp");
-    } else if (binExpr->op == "&") {
+    } else if (binExpr->op == "&")
       return builder.CreateAnd(lhs, rhs, "bitandtmp");
-    } else if (binExpr->op == "^") {
+    else if (binExpr->op == "^")
       return builder.CreateXor(lhs, rhs, "bitxortmp");
-    } else if (binExpr->op == "|") {
+    else if (binExpr->op == "|")
       return builder.CreateOr(lhs, rhs, "bitor_tmp");
-    } else if (binExpr->op == "<<") {
+    else if (binExpr->op == "<<")
       return builder.CreateShl(lhs, rhs, "shltmp");
-    } else if (binExpr->op == ">>") {
+    else if (binExpr->op == ">>")
       return builder.CreateAShr(lhs, rhs, "shrtmp");
-    } else {
+    else
       throw runtime_error("CodeGenerator Error: Unsupported binary operator '" +
                           binExpr->op + "'.");
-    }
   } else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
     llvm::Value *operandVal = generateExpression(castExpr->operand);
     llvm::Type *targetType = getLLVMType(castExpr->castType);
@@ -197,51 +308,15 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       }
     }
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
-    if (gVar) {
+    if (gVar)
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
-    }
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "'.");
   }
   // Handle member access as an rvalue.
   else if (auto memberAccess = std::dynamic_pointer_cast<MemberAccess>(expr)) {
     llvm::Value *ptr = generateLValue(expr);
-    llvm::Type *loadType = nullptr;
-    // Look up the declared type of the base variable from our declaredTypes
-    // map.
-    if (auto baseId =
-            std::dynamic_pointer_cast<Identifier>(memberAccess->base)) {
-      auto it = declaredTypes.find(baseId->name);
-      if (it != declaredTypes.end()) {
-        // For unions, the declared type is an array, so load as int32.
-        if (it->second->isArrayTy())
-          loadType = Type::getInt32Ty(context);
-        // For structs, look up the member's type.
-        else if (it->second->isStructTy()) {
-          StructType *structType = cast<StructType>(it->second);
-          std::string tag = structType->getName().str();
-          auto sit = structRegistry.find(tag);
-          if (sit == structRegistry.end())
-            throw runtime_error("CodeGenerator Error: Unknown struct type '" +
-                                tag + "'.");
-          bool found = false;
-          for (auto &member : sit->second->members) {
-            if (member->name == memberAccess->member) {
-              loadType = getLLVMType(member->type);
-              found = true;
-              break;
-            }
-          }
-          if (!found)
-            throw runtime_error("CodeGenerator Error: Struct type '" + tag +
-                                "' does not contain member '" +
-                                memberAccess->member + "'.");
-        }
-      }
-    }
-    if (!loadType)
-      throw runtime_error(
-          "CodeGenerator Error: Could not determine type for member load.");
+    llvm::Type *loadType = resolveFullMemberType(expr, *this);
     return builder.CreateLoad(loadType, ptr, "memberload");
   } else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
     auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
@@ -268,18 +343,17 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       throw runtime_error(
           "CodeGenerator Error: Unsupported type for postfix operator.");
     llvm::Value *newVal = nullptr;
-    if (post->op == "++") {
+    if (post->op == "++")
       newVal = oldVal->getType()->isFloatingPointTy()
                    ? builder.CreateFAdd(oldVal, one, "postinc")
                    : builder.CreateAdd(oldVal, one, "postinc");
-    } else if (post->op == "--") {
+    else if (post->op == "--")
       newVal = oldVal->getType()->isFloatingPointTy()
                    ? builder.CreateFSub(oldVal, one, "postdec")
                    : builder.CreateSub(oldVal, one, "postdec");
-    } else {
+    else
       throw runtime_error("CodeGenerator Error: Unknown postfix operator '" +
                           post->op + "'.");
-    }
     builder.CreateStore(newVal, varPtr);
     return oldVal;
   } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {

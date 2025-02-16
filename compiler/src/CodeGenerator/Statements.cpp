@@ -7,6 +7,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/raw_ostream.h>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 using namespace llvm;
@@ -167,15 +168,13 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     SwitchInst *switchInst =
         builder.CreateSwitch(condVal, defaultBB, switchStmt->cases.size());
     for (auto &casePair : switchStmt->cases) {
-      if (!casePair.first.has_value()) {
+      if (!casePair.first.has_value())
         throw runtime_error(
             "CodeGenerator Error: Case label missing in case clause.");
-      }
       llvm::Value *caseVal = generateExpression(casePair.first.value());
-      if (!isa<ConstantInt>(caseVal)) {
+      if (!isa<ConstantInt>(caseVal))
         throw runtime_error(
             "CodeGenerator Error: Case label must be a constant integer.");
-      }
       llvm::BasicBlock *caseBB =
           llvm::BasicBlock::Create(context, "switch.case", theFunction);
       switchInst->addCase(cast<ConstantInt>(caseVal), caseBB);
@@ -206,8 +205,9 @@ void CodeGenerator::generateVariableDeclarationStatement(
   AllocaInst *alloc =
       builder.CreateAlloca(varTy, nullptr, varDeclStmt->name.c_str());
   localVariables[varDeclStmt->name] = alloc;
-  // Record the declared type.
+  // Store the LLVM type and the original type string.
   declaredTypes[varDeclStmt->name] = varTy;
+  declaredTypeStrings[varDeclStmt->name] = varDeclStmt->type;
 
   if (varDeclStmt->initializer) {
     llvm::Value *initVal = generateExpression(varDeclStmt->initializer.value());

@@ -24,6 +24,8 @@ public:
   void analyzeStatement(const StatementPtr &stmt);
   void analyzeExpression(const ExpressionPtr &expr);
 
+  const SymbolTable &getSymbolTable() const { return symbolTable; }
+
 private:
   SymbolTable symbolTable;
   std::vector<std::string> getParameterTypes(

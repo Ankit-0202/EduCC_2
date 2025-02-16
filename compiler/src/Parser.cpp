@@ -69,11 +69,9 @@ std::shared_ptr<Program> Parser::parse() {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-  // Handle struct declarations.
-  // If the current token is a keyword "struct" or an identifier whose lexeme is
-  // "struct"
-  if ((check(TokenType::KW_STRUCT)) ||
-      (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
+  // If the current token's lexeme is "struct", regardless of its token type,
+  // we treat this as a struct declaration.
+  if (peek().lexeme == "struct") {
     return parseStructDeclaration();
   }
   // Handle union declarations (both tagged and anonymous)
@@ -134,11 +132,9 @@ DeclarationPtr Parser::parseDeclaration() {
 }
 
 DeclarationPtr Parser::parseStructDeclaration() {
-  // Consume the "struct" keyword.
-  // It might be returned as KW_STRUCT or as an identifier with lexeme "struct"
-  if (check(TokenType::KW_STRUCT))
-    advance();
-  else if (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")
+  // Consume the "struct" keyword. (It might be a KW_STRUCT or an identifier
+  // with lexeme "struct".)
+  if (peek().lexeme == "struct")
     advance();
   else
     error("Expected 'struct' keyword");
@@ -154,11 +150,19 @@ DeclarationPtr Parser::parseStructDeclaration() {
             "Expected '{' to begin struct declaration");
     std::vector<std::shared_ptr<VariableDeclaration>> members;
     while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
-      // Parse a member declaration. We assume members are simple variable
-      // declarations. For simplicity, we only support basic types in struct
-      // members.
+      // Parse a member declaration.
       std::string memberType;
-      if (match(TokenType::KW_INT)) {
+      // Check if the member's type specifier starts with "struct"
+      if ((check(TokenType::KW_STRUCT)) ||
+          (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
+        // Consume the "struct" keyword.
+        advance();
+        if (!check(TokenType::IDENTIFIER)) {
+          error("Expected struct tag after 'struct' in member declaration");
+        }
+        std::string tag = advance().lexeme;
+        memberType = "struct " + tag;
+      } else if (match(TokenType::KW_INT)) {
         memberType = "int";
       } else if (match(TokenType::KW_FLOAT)) {
         memberType = "float";
@@ -186,9 +190,10 @@ DeclarationPtr Parser::parseStructDeclaration() {
             "Expected ';' after struct declaration");
     return std::make_shared<StructDeclaration>(tag, members);
   } else {
-    // No struct definition body; this is just a type specifier.
-    // Return a dummy declaration (or handle as needed by your design).
-    return nullptr; // For now, we return nullptr to indicate no definition.
+    // No struct definition body; treat as a type specifier.
+    // Depending on your design, you might want to return a forward declaration
+    // or error.
+    return nullptr;
   }
 }
 
@@ -219,11 +224,10 @@ DeclarationPtr Parser::parseVariableDeclaration() {
   } else if (match(TokenType::KW_STRUCT) ||
              (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
     // Handle struct type specifier.
-    // Consume the "struct" keyword.
-    if (check(TokenType::KW_STRUCT))
+    if (peek().lexeme == "struct")
       advance();
     else
-      advance(); // if it came as identifier "struct"
+      advance(); // consumed "struct"
     if (!check(TokenType::IDENTIFIER)) {
       error("Expected struct tag after 'struct' in variable declaration");
     }
@@ -550,11 +554,10 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     type = "union " + tag;
   } else if (match(TokenType::KW_STRUCT) ||
              (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
-    // Handle struct type specifier.
-    if (check(TokenType::KW_STRUCT))
+    if (peek().lexeme == "struct")
       advance();
     else
-      advance(); // consumed "struct" as identifier
+      advance(); // consumed "struct"
     if (!check(TokenType::IDENTIFIER)) {
       error("Expected struct tag after 'struct' in variable declaration");
     }

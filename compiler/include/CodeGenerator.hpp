@@ -57,8 +57,8 @@ public:
 
   // Map of local variable names to their alloca instructions.
   std::unordered_map<std::string, llvm::Value *> localVariables;
-  // NEW: Map of variable names to their declared (non-opaque) LLVM types.
   std::unordered_map<std::string, llvm::Type *> declaredTypes;
+  std::unordered_map<std::string, std::string> declaredTypeStrings;
 };
 
 #endif // CODE_GENERATOR_HPP
