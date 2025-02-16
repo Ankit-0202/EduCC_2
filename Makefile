@@ -53,11 +53,7 @@ MAIN_TARGET := $(BUILD_DIR)/educc
 # LLVM & GCC Settings for tests
 LLFILE     := output.ll
 OBJFILE    := output.o
-OUR_EXE    := our_executable
 NATIVE_CC  := gcc
-GCC_EXE    := gcc_executable
-OUR_OUTPUT := our_output.txt
-GCC_OUTPUT := gcc_output.txt
 
 # Determine if a directory filter was passed on the command line to test or test-verbose.
 FILTER := $(filter-out test test-verbose,$(MAKECMDGOALS))
@@ -69,7 +65,7 @@ TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
 # Build Everything
 ###############################################################################
 
-all: $(MAIN_TARGET)  ## 'all' builds the final executable (educc)
+all: $(MAIN_TARGET)
 
 ###############################################################################
 # Build Common Library
@@ -129,43 +125,52 @@ $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET
 
 create_test_output_dir:
 	@mkdir -p $(TEST_OUTPUT_DIR)
-	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
+	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs -n 1 mkdir -p
 
 # Standard Test Mode: Runs all .c tests (or only those in the given subdirectory)
 test: all create_test_output_dir
 	@clear
 	@echo "Running tests in $(TEST_SUBDIR)..."
-	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
-	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
-	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
-	    echo "-----------------------------------------------------" >> $$output_file; \
-	    echo "Testing $$testfile" >> $$output_file; \
-	    $(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
+	@find $(TEST_SUBDIR) -type f -name "*.c" -print0 | \
+	xargs -0 -n 1 -P 4 sh -c ' \
+	    testfile="$${1}"; \
+	    rel_path=$$(echo "$$testfile" | sed "s|^$(TEST_DIR)/||"); \
+	    out_dir="$(TEST_OUTPUT_DIR)/$$(dirname "$$rel_path")"; \
+	    mkdir -p "$$out_dir"; \
+	    output_file="$$out_dir/$$(basename "$$rel_path" .c).txt"; \
+	    echo "-----------------------------------------------------" >> "$$output_file"; \
+	    echo "Testing $$testfile" >> "$$output_file"; \
+	    $(MAIN_TARGET) "$$testfile" > /dev/null 2>&1; \
 	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
-	        continue; \
+	      echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a "$$output_file"; \
+	      exit 0; \
 	    fi; \
-	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
-	    clang $(OBJFILE) -o $(OUR_EXE); \
-	    ./$(OUR_EXE) > our_output.txt; \
+	    temp_ll=$$(mktemp -t output_ll.XXXXXX); \
+	    temp_obj=$$(mktemp -t output_obj.XXXXXX); \
+	    temp_our_exe=$$(mktemp -t our_exe.XXXXXX); \
+	    temp_gcc_exe=$$(mktemp -t gcc_exe.XXXXXX); \
+	    temp_our_out=$$(mktemp -t our_out.XXXXXX); \
+	    temp_gcc_out=$$(mktemp -t gcc_out.XXXXXX); \
+	    cp $(LLFILE) "$$temp_ll"; \
+	    llc "$$temp_ll" -filetype=obj -o "$$temp_obj"; \
+	    clang "$$temp_obj" -o "$$temp_our_exe"; \
+	    "$$temp_our_exe" > "$$temp_our_out"; \
 	    our_ret=$$?; \
-	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
-	    ./$(GCC_EXE) > gcc_output.txt; \
+	    $(NATIVE_CC) "$$testfile" -o "$$temp_gcc_exe"; \
+	    "$$temp_gcc_exe" > "$$temp_gcc_out"; \
 	    gcc_ret=$$?; \
-	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
+	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> "$$output_file"; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
-	        continue; \
+	      echo "[FAILED] $$testfile - Return code mismatch" | tee -a "$$output_file"; \
+	      exit 0; \
 	    fi; \
-	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
-	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
+	    if ! diff -u "$$temp_our_out" "$$temp_gcc_out" > /dev/null; then \
+	      echo "Output mismatch for $$testfile" | tee -a "$$output_file"; \
 	    else \
-	        echo "Test $$testfile passed." >> $$output_file; \
+	      echo "Test $$testfile passed." >> "$$output_file"; \
 	    fi; \
-	done
-	@echo "-----------------------------------------------------"; \
-	echo "All tests executed. Check $(TEST_OUTPUT_DIR) for results."
+	    rm -f "$$temp_ll" "$$temp_obj" "$$temp_our_exe" "$$temp_gcc_exe" "$$temp_our_out" "$$temp_gcc_out"' _
+
 
 # Verbose Test Mode: Prints output to stdout as well as saving test logs
 test-verbose: all create_test_output_dir
@@ -173,14 +178,13 @@ test-verbose: all create_test_output_dir
 	@echo "Running tests in verbose mode in $(TEST_SUBDIR)..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
-	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$testfile .c).txt"; \
+	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
 	    echo "-----------------------------------------------------"; \
 	    echo "Testing $$testfile"; \
-	    echo "-----------------------------------------------------" >> $$output_file; \
-	    echo "Testing $$testfile" >> $$output_file; \
+	    echo "-----------------------------------------------------" >> "$$output_file"; \
 	    $(MAIN_TARGET) $$testfile; \
 	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
+	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a "$$output_file"; \
 	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
 	        continue; \
 	    fi; \
@@ -193,21 +197,21 @@ test-verbose: all create_test_output_dir
 	    echo "Running GCC-compiled executable..."; \
 	    ./$(GCC_EXE) | tee $(GCC_OUTPUT); \
 	    gcc_ret=$$?; \
-	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" | tee -a $$output_file; \
+	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" | tee -a "$$output_file"; \
 	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
+	        echo "Return code mismatch for $$testfile" | tee -a "$$output_file"; \
 	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
 	        continue; \
 	    fi; \
 	    if ! diff -u our_output.txt gcc_output.txt; then \
-	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
+	        echo "Output mismatch for $$testfile" | tee -a "$$output_file"; \
 	        echo "[FAILED] $$testfile - Output mismatch" >&2; \
 	    else \
-	        echo "Test $$testfile passed." | tee -a $$output_file; \
+	        echo "Test $$testfile passed." | tee -a "$$output_file"; \
 	    fi; \
 	done
-	@echo "-----------------------------------------------------"; \
-	echo "All tests executed in verbose mode. Check $(TEST_OUTPUT_DIR) for results."
+	@echo "-----------------------------------------------------"
+	@echo "All tests executed in verbose mode. Check $(TEST_OUTPUT_DIR) for results."
 
 ###############################################################################
 # Run Compiler on a Single File
@@ -254,7 +258,7 @@ copy:
 
 clean:
 	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
-	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) $(OUR_OUTPUT) $(GCC_OUTPUT)
+	rm -f $(LLFILE) $(OBJFILE) $(OUR_OUTPUT) $(GCC_OUTPUT)
 
 ###############################################################################
 # Fix Linting Issues
