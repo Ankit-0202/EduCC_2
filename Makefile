@@ -60,10 +60,10 @@ OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
 # Determine if a directory filter was passed on the command line to test or test-verbose.
-FILTER := $(filter-out test test-verbose,$(MAKECMDGOALS))
+FILTER := $(filter-out test test-verbose test-write,$(MAKECMDGOALS))
 TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
 
-.PHONY: all clean test test-verbose run create_test_output_dir copy lint
+.PHONY: all clean test test-write test-verbose run create_test_output_dir copy lint
 
 ###############################################################################
 # Build Everything
@@ -131,10 +131,41 @@ create_test_output_dir:
 	@mkdir -p $(TEST_OUTPUT_DIR)
 	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
 
-# Standard Test Mode: Runs all .c tests (or only those in the given subdirectory)
-test: all create_test_output_dir
+# Run tests and print output to the terminal only (no file logging)
+test: all
 	@clear
 	@echo "Running tests in $(TEST_SUBDIR)..."
+	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
+	    $(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
+	    if [ ! -f $(LLFILE) ]; then \
+	        echo "Error: $(LLFILE) was not produced for $$testfile"; \
+	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
+	        continue; \
+	    fi; \
+	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
+	    clang $(OBJFILE) -o $(OUR_EXE); \
+	    our_output=$$(./$(OUR_EXE)); \
+	    our_ret=$$?; \
+	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
+	    gcc_output=$$(./$(GCC_EXE)); \
+	    gcc_ret=$$?; \
+	    if [ $$our_ret -ne $$gcc_ret ]; then \
+	        echo "[FAILED] $$testfile - Return code mismatch -- Ours: $$our_ret, GCC: $$gcc_ret" >&2; \
+	        continue; \
+	    fi; \
+	    if [ "$$our_output" != "$$gcc_output" ]; then \
+	        echo "Output mismatch for $$testfile"; \
+	        echo "Our output:"; echo "$$our_output"; \
+	        echo "GCC output:"; echo "$$gcc_output"; \
+	    fi; \
+	done
+	@echo "-----------------------------------------------------"; \
+	echo "All tests executed."
+
+# Renamed test target (now test-write): writes detailed logs to text files as before.
+test-write: all create_test_output_dir
+	@clear
+	@echo "Running tests in $(TEST_SUBDIR) with log files..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
 	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
 	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
