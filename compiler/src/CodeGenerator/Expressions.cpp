@@ -1,10 +1,9 @@
-// compiler/src/CodeGenerator/Expressions.cpp
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/DerivedTypes.h> // For composite types.
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
@@ -193,7 +192,15 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFDiv(lhs, rhs, "fdivtmp")
                  : builder.CreateSDiv(lhs, rhs, "divtmp");
-    else if (binExpr->op == "<=")
+    else if (binExpr->op == "%") {
+      if (lhs->getType()->isIntegerTy())
+        return builder.CreateSRem(lhs, rhs, "modtmp");
+      else if (lhs->getType()->isFloatingPointTy())
+        return builder.CreateFRem(lhs, rhs, "modtmp");
+      else
+        throw runtime_error("CodeGenerator Error: Unsupported operand types "
+                            "for modulo operator.");
+    } else if (binExpr->op == "<=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOLE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSLE(lhs, rhs, "cmptmp");

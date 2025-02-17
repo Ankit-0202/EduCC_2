@@ -226,6 +226,10 @@ Token Lexer::opOrDelim() {
     }
     break;
   }
+  case '%': {
+    token.type = TokenType::OP_MODULO;
+    break;
+  }
   case '*': {
     if (!isAtEnd() && peek() == '=') {
       get();

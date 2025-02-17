@@ -777,10 +777,12 @@ ExpressionPtr Parser::parseTerm() {
   return expr;
 }
 
-// Factor (multiplicative *, /)
+// Factor (multiplicative *, /, %)
+// --- Updated to support the modulo (module) operator ---
 ExpressionPtr Parser::parseFactor() {
   ExpressionPtr expr = parseUnary();
-  while (match(TokenType::OP_MULTIPLY) || match(TokenType::OP_DIVIDE)) {
+  while (match(TokenType::OP_MULTIPLY) || match(TokenType::OP_DIVIDE) ||
+         match(TokenType::OP_MODULO)) {
     Token oper = tokens[current - 1];
     std::string op = oper.lexeme;
     ExpressionPtr right = parseUnary();
