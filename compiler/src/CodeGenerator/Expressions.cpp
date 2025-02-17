@@ -62,16 +62,16 @@ string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
     } else if (baseType.rfind("struct ", 0) == 0) {
       string tag = baseType.substr(7);
       tag = normalizeTag(tag);
-    auto sit = structRegistry.find(tag);
-    if (sit == structRegistry.end())
-      throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
-                          "'.");
-    for (auto &member : sit->second->members) {
-      if (member->name == mem->member)
+      auto sit = structRegistry.find(tag);
+      if (sit == structRegistry.end())
+        throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
+                            "'.");
+      for (auto &member : sit->second->members) {
+        if (member->name == mem->member)
           return member->type;
-    }
-    throw runtime_error("CodeGenerator Error: Struct type '" + tag +
-                        "' does not contain member '" + mem->member + "'.");
+      }
+      throw runtime_error("CodeGenerator Error: Struct type '" + tag +
+                          "' does not contain member '" + mem->member + "'.");
     } else {
       throw runtime_error("CodeGenerator Error: Base expression type '" +
                           baseType + "' is not an aggregate type.");

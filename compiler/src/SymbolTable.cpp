@@ -60,3 +60,12 @@ llvm::Value *SymbolTable::get(const std::string &name) const {
 void SymbolTable::add(const std::string &name, llvm::Value *value) {
   namedValues[name] = value;
 }
+
+// New method: remove a symbol from the innermost scope that contains it.
+void SymbolTable::remove(const std::string &name) {
+  for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+    if (it->erase(name) > 0) {
+      return;
+    }
+  }
+}

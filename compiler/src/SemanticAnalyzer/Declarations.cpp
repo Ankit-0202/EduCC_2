@@ -10,9 +10,34 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
-SemanticAnalyzer::SemanticAnalyzer() { symbolTable.enterScope(); }
+SemanticAnalyzer::SemanticAnalyzer() {
+  // Create the global scope.
+  symbolTable.enterScope();
+}
 
 void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
+  // Pre-declare all function prototypes in the global scope.
+  for (const auto &decl : program->declarations) {
+    if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
+      const string &fnName = funcDecl->name;
+      const string &retType = funcDecl->returnType;
+      // Regardless of whether the function has a body, predeclare it as not
+      // defined.
+      bool predeclDefined = false;
+      vector<string> paramTypes = getParameterTypes(funcDecl->parameters);
+      auto existingOpt = symbolTable.lookup(fnName);
+      if (!existingOpt.has_value()) {
+        Symbol newFunc(fnName, retType, true, paramTypes, predeclDefined);
+        if (!symbolTable.declare(newFunc)) {
+          throw runtime_error(
+              "Semantic Analysis Error: Could not declare function '" + fnName +
+              "'.");
+        }
+      }
+    }
+  }
+
+  // Now analyze each declaration.
   for (const auto &decl : program->declarations) {
     analyzeDeclaration(decl);
   }
@@ -57,13 +82,14 @@ void SemanticAnalyzer::analyzeVariableDeclaration(
 
 void SemanticAnalyzer::analyzeFunctionDeclaration(
     const std::shared_ptr<FunctionDeclaration> &funcDecl) {
-  const std::string &fnName = funcDecl->name;
-  const std::string &retType = funcDecl->returnType;
+  const string &fnName = funcDecl->name;
+  const string &retType = funcDecl->returnType;
   bool hasBody = (funcDecl->body != nullptr);
-  vector<std::string> paramTypes = getParameterTypes(funcDecl->parameters);
+  vector<string> paramTypes = getParameterTypes(funcDecl->parameters);
 
   auto existingOpt = symbolTable.lookup(fnName);
   if (!existingOpt.has_value()) {
+    // This case should not occur because of the pre-declaration pass.
     Symbol newFunc(fnName, retType, true, paramTypes, hasBody);
     if (!symbolTable.declare(newFunc)) {
       throw runtime_error(
@@ -87,8 +113,8 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(
       throw runtime_error("Semantic Analysis Error: Function '" + fnName +
                           "' is already defined.");
     } else if (!existingSym.isDefined && hasBody) {
-      symbolTable.exitScope();
-      symbolTable.enterScope();
+      // Update the existing function symbol to mark it as defined.
+      symbolTable.remove(fnName);
       Symbol newSym(fnName, retType, true, paramTypes, true);
       if (!symbolTable.declare(newSym)) {
         throw runtime_error("Semantic Analysis Error: Could not update the "

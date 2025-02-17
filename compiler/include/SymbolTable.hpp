@@ -1,8 +1,6 @@
 #ifndef SYMBOL_TABLE_HPP
 #define SYMBOL_TABLE_HPP
 
-// IMPORTANT: Ensure your compile flags include the correct LLVM include path,
-// for example: -I/opt/homebrew/opt/llvm/include
 #include <llvm/IR/Value.h>
 
 #include <optional>
@@ -46,31 +44,33 @@ class SymbolTable {
 public:
   SymbolTable();
 
-  // Enter a new scope
+  // Scope management.
   void enterScope();
-
-  // Exit the current scope
   void exitScope();
 
-  // Declare a new symbol in the current scope.
-  // Returns false if a symbol with the same name already exists in this scope.
+  // Declare a new symbol in the current (innermost) scope.
   bool declare(const Symbol &symbol);
 
-  // Lookup a symbol starting from the current scope up to global
+  // Look up a symbol by name from innermost to outermost scope.
   std::optional<Symbol> lookup(const std::string &name) const;
 
-  // Check if a symbol exists (search all scopes)
+  // Check if a symbol exists (in any scope).
   bool contains(const std::string &name) const;
 
-  // Get or set the LLVM Value associated with a symbol
+  // Get the LLVM Value associated with a symbol.
   llvm::Value *get(const std::string &name) const;
+
+  // Add an LLVM Value to the symbol table.
   void add(const std::string &name, llvm::Value *value);
 
+  // Remove a symbol from the innermost scope that contains it.
+  void remove(const std::string &name);
+
 private:
-  // Each scope is a map from symbol name -> Symbol
+  // Each scope is a mapping from symbol name to Symbol.
   std::vector<std::unordered_map<std::string, Symbol>> scopes;
 
-  // Map to hold LLVM Values for variables
+  // Mapping for LLVM Values associated with symbols.
   std::unordered_map<std::string, llvm::Value *> namedValues;
 };
 
