@@ -18,28 +18,8 @@ using std::runtime_error;
 using std::shared_ptr;
 using std::string;
 
-extern std::unordered_map<std::string, int>
-    enumRegistry; // Global map for enum constants
-
-//
-// Helper: Recursively retrieve the top-level base variable name from a member
-// access chain. For example, given "rect.topLeft.x", returns "rect".
-//
-namespace {
-string getBaseVariableName(const ExpressionPtr &expr) {
-  if (auto id = std::dynamic_pointer_cast<Identifier>(expr))
-    return id->name;
-  if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr))
-    return getBaseVariableName(mem->base);
-  throw runtime_error(
-      "CodeGenerator Error: Base variable not found in member access chain.");
-}
-} // namespace
-
-//
 // Helper: Normalize a tag (struct or union name) by stripping any trailing
-// ".<number>". For example, "Point.1" becomes "Point".
-//
+// ".<number>".
 namespace {
 string normalizeTag(const string &tag) {
   size_t pos = tag.find('.');
@@ -49,37 +29,25 @@ string normalizeTag(const string &tag) {
 }
 } // namespace
 
-//
-// Helper: Recursively resolve the declared LLVM type for a member access chain.
-// Uses both the declaredTypes and declaredTypeStrings maps from the
-// CodeGenerator, as well as the global registries (structRegistry and
-// unionRegistry).
-//
+// New helper: Recursively compute the effective type of an expression based on
+// the AST. For an identifier, we use the declared type stored in
+// CodeGenerator::declaredTypeStrings. For a member access, we recursively
+// compute the effective type of its base and then look up the member's type
+// from the corresponding union or struct registry.
 namespace {
-llvm::Type *resolveFullMemberType(const ExpressionPtr &expr,
-                                  CodeGenerator &CG) {
-  // If expr is an identifier, look it up in declaredTypes.
+string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    auto it = CG.declaredTypes.find(id->name);
-    if (it == CG.declaredTypes.end())
+    auto it = CG.declaredTypeStrings.find(id->name);
+    if (it == CG.declaredTypeStrings.end())
       throw runtime_error("CodeGenerator Error: Declared type for variable '" +
                           id->name + "' not found.");
     return it->second;
   }
   // If expr is a member access, resolve its base first.
   if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    llvm::Type *baseType = resolveFullMemberType(mem->base, CG);
-    // Retrieve the original declared type string for the base variable.
-    string baseName = getBaseVariableName(mem->base);
-    auto tsIt = CG.declaredTypeStrings.find(baseName);
-    if (tsIt == CG.declaredTypeStrings.end())
-      throw runtime_error(
-          "CodeGenerator Error: Declared type string for variable '" +
-          baseName + "' not found.");
-    string origType = tsIt->second;
-    // If the base was declared as a union, look it up in unionRegistry.
-    if (origType.rfind("union ", 0) == 0) {
-      string tag = origType.substr(6);
+    string baseType = getEffectiveType(CG, mem->base);
+    if (baseType.rfind("union ", 0) == 0) {
+      string tag = baseType.substr(6);
       tag = normalizeTag(tag);
       auto uit = unionRegistry.find(tag);
       if (uit == unionRegistry.end())
@@ -87,29 +55,30 @@ llvm::Type *resolveFullMemberType(const ExpressionPtr &expr,
                             "'.");
       for (auto &member : uit->second->members) {
         if (member->name == mem->member)
-          return CG.getLLVMType(member->type);
+          return member->type;
       }
       throw runtime_error("CodeGenerator Error: Union type '" + tag +
                           "' does not contain member '" + mem->member + "'.");
-    }
-    // Otherwise, assume the base is a struct.
-    if (!baseType->isStructTy())
-      throw runtime_error("CodeGenerator Error: Base type is not a struct in "
-                          "member access chain.");
-    StructType *structType = cast<StructType>(baseType);
-    string tag = normalizeTag(structType->getName().str());
+    } else if (baseType.rfind("struct ", 0) == 0) {
+      string tag = baseType.substr(7);
+      tag = normalizeTag(tag);
     auto sit = structRegistry.find(tag);
     if (sit == structRegistry.end())
       throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
                           "'.");
     for (auto &member : sit->second->members) {
       if (member->name == mem->member)
-        return CG.getLLVMType(member->type);
+          return member->type;
     }
     throw runtime_error("CodeGenerator Error: Struct type '" + tag +
                         "' does not contain member '" + mem->member + "'.");
+    } else {
+      throw runtime_error("CodeGenerator Error: Base expression type '" +
+                          baseType + "' is not an aggregate type.");
+    }
   }
-  throw runtime_error("CodeGenerator Error: Cannot resolve full member type.");
+  throw runtime_error("CodeGenerator Error: Unable to determine effective type "
+                      "for expression.");
 }
 } // namespace
 
@@ -134,19 +103,13 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "'.");
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    // Get the base variable name.
-    string baseName = getBaseVariableName(mem->base);
-    // Look up its declared original type string.
-    auto tsIt = declaredTypeStrings.find(baseName);
-    if (tsIt == declaredTypeStrings.end())
-      throw runtime_error(
-          "CodeGenerator Error: Declared type string for variable '" +
-          baseName + "' not found.");
-    string origType = tsIt->second;
+    // Compute the effective type of the base expression.
+    string baseEffectiveType = getEffectiveType(*this, mem->base);
     llvm::Value *basePtr = generateLValue(mem->base);
-    // If the base was declared as a union, generate an lvalue via bitcast.
-    if (origType.rfind("union ", 0) == 0) {
-      string tag = origType.substr(6);
+    // If the effective type of the base is a union, look up the member in the
+    // union.
+    if (baseEffectiveType.rfind("union ", 0) == 0) {
+      string tag = baseEffectiveType.substr(6);
       tag = normalizeTag(tag);
       auto uit = unionRegistry.find(tag);
       if (uit == unionRegistry.end())
@@ -164,11 +127,11 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
                             "' does not contain member '" + mem->member + "'.");
       return builder.CreateBitCast(basePtr, PointerType::getUnqual(memberType));
     }
-    // Otherwise, assume a struct.
-    llvm::Type *baseElemType = resolveFullMemberType(mem->base, *this);
-    if (baseElemType->isStructTy()) {
-      StructType *structType = cast<StructType>(baseElemType);
-      string tag = normalizeTag(structType->getName().str());
+    // If the effective type of the base is a struct, use the struct registry to
+    // determine the member index.
+    else if (baseEffectiveType.rfind("struct ", 0) == 0) {
+      string tag = baseEffectiveType.substr(7);
+      tag = normalizeTag(tag);
       auto sit = structRegistry.find(tag);
       if (sit == structRegistry.end())
         throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
@@ -185,10 +148,8 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
       if (!found)
         throw runtime_error("CodeGenerator Error: Struct type '" + tag +
                             "' does not contain member '" + mem->member + "'.");
-      return builder.CreateStructGEP(structType, basePtr, index, mem->member);
-    } else if (baseElemType->isArrayTy()) {
-      return builder.CreateBitCast(
-          basePtr, PointerType::getUnqual(Type::getInt32Ty(context)));
+      llvm::Type *structTy = getLLVMType("struct " + tag);
+      return builder.CreateStructGEP(structTy, basePtr, index, mem->member);
     }
     throw runtime_error(
         "CodeGenerator Error: Member access applied to non-aggregate type.");
@@ -343,7 +304,11 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   } else if (auto memberAccess =
                  std::dynamic_pointer_cast<MemberAccess>(expr)) {
     llvm::Value *ptr = generateLValue(expr);
-    llvm::Type *loadType = resolveFullMemberType(expr, *this);
+    // Instead of calling resolveFullMemberType (which is no longer defined),
+    // compute the effective type of the member access and then get its LLVM
+    // type.
+    string effType = getEffectiveType(*this, expr);
+    llvm::Type *loadType = getLLVMType(effType);
     return builder.CreateLoad(loadType, ptr, "memberload");
   } else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
     auto id = std::dynamic_pointer_cast<Identifier>(post->operand);

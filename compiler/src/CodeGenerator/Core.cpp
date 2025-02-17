@@ -21,7 +21,10 @@ using std::vector;
 
 CodeGenerator::CodeGenerator()
     : builder(context),
-      module(std::make_unique<Module>("main_module", context)) {}
+      module(std::make_unique<Module>("main_module", context)) {
+  // Set a default data layout for the module.
+  module->setDataLayout("e-m:o-i64:64-f80:128-n8:16:32:64-S128");
+}
 
 std::unique_ptr<Module>
 CodeGenerator::generateCode(const shared_ptr<Program> &program) {
@@ -207,6 +210,8 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
                           "'.");
     }
     int maxSize = 0;
+    // Initialize DataLayout using a pointer to the module.
+    DataLayout dl(module.get());
     // Compute the maximum size among the union members.
     for (auto &member : it->second->members) {
       int memberSize = 0;
@@ -225,7 +230,11 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
       else if (member->type.rfind("union ", 0) == 0)
         throw runtime_error(
             "CodeGenerator Error: Nested unions not supported.");
-      else
+      else if (member->type.rfind("struct ", 0) == 0) {
+        llvm::Type *structTy = getLLVMType(member->type);
+        uint64_t size = dl.getTypeAllocSize(structTy);
+        memberSize = static_cast<int>(size);
+      } else
         throw runtime_error(
             "CodeGenerator Error: Unsupported union member type '" +
             member->type + "'.");

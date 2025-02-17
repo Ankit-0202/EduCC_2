@@ -417,7 +417,13 @@ DeclarationPtr Parser::parseEnumDeclaration() {
 std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
   // Parse a union member declaration.
   std::string type;
-  if (match(TokenType::KW_INT)) {
+  if (peek().lexeme == "struct") {
+    advance(); // consume "struct"
+    if (!check(TokenType::IDENTIFIER))
+      error("Expected struct tag after 'struct' in union member declaration");
+    std::string tag = advance().lexeme;
+    type = "struct " + tag;
+  } else if (match(TokenType::KW_INT)) {
     type = "int";
   } else if (match(TokenType::KW_FLOAT)) {
     type = "float";
