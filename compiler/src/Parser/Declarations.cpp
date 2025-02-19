@@ -52,6 +52,14 @@ DeclarationPtr Parser::parseDeclaration() {
     }
     if (check(TokenType::IDENTIFIER)) {
       Token identifier = advance();
+      // NEW: Parse any array dimensions following the identifier.
+      vector<ExpressionPtr> dimensions;
+      while (match(TokenType::DELIM_LBRACKET)) {
+        ExpressionPtr dimExpr = parseExpression();
+        consume(TokenType::DELIM_RBRACKET,
+                "Expected ']' after array dimension");
+        dimensions.push_back(dimExpr);
+      }
       if (check(TokenType::DELIM_LPAREN)) {
         current = save;
         return parseFunctionDeclaration();
@@ -68,8 +76,7 @@ DeclarationPtr Parser::parseDeclaration() {
 }
 
 DeclarationPtr Parser::parseStructDeclaration() {
-  // Consume the "struct" keyword. (It might be a KW_STRUCT or an identifier
-  // with lexeme "struct".)
+  // Consume the "struct" keyword.
   if (peek().lexeme == "struct")
     advance();
   else
@@ -121,10 +128,18 @@ DeclarationPtr Parser::parseStructDeclaration() {
         error("Expected member name in struct declaration");
       }
       string memberName = advance().lexeme;
+      // NEW: Parse possible array dimensions for struct members.
+      vector<ExpressionPtr> dimensions;
+      while (match(TokenType::DELIM_LBRACKET)) {
+        ExpressionPtr dimExpr = parseExpression();
+        consume(TokenType::DELIM_RBRACKET,
+                "Expected ']' after array dimension");
+        dimensions.push_back(dimExpr);
+      }
       consume(TokenType::DELIM_SEMICOLON,
               "Expected ';' after struct member declaration");
       members.push_back(std::make_shared<VariableDeclaration>(
-          memberType, memberName, std::nullopt));
+          memberType, memberName, std::nullopt, dimensions));
     }
     consume(TokenType::DELIM_RBRACE,
             "Expected '}' to close struct declaration");
@@ -188,12 +203,19 @@ DeclarationPtr Parser::parseVariableDeclaration() {
     }
     Token varNameToken = advance();
     string varName = varNameToken.lexeme;
+    // NEW: Parse any array dimensions.
+    vector<ExpressionPtr> dimensions;
+    while (match(TokenType::DELIM_LBRACKET)) {
+      ExpressionPtr dimExpr = parseExpression();
+      consume(TokenType::DELIM_RBRACKET, "Expected ']' after array dimension");
+      dimensions.push_back(dimExpr);
+    }
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
       initializer = parseExpression();
     }
-    decls.push_back(
-        std::make_shared<VariableDeclaration>(type, varName, initializer));
+    decls.push_back(std::make_shared<VariableDeclaration>(
+        type, varName, initializer, dimensions));
   } while (match(TokenType::DELIM_COMMA));
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");

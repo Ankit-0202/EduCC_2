@@ -1,5 +1,6 @@
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
+#include "CodeGenerator/Helpers.hpp" // for getEffectiveType and normalizeTag
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 #include <llvm/IR/Constants.h>
@@ -11,102 +12,35 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 using namespace llvm;
 using std::runtime_error;
 using std::shared_ptr;
 using std::string;
+using std::vector;
 
-// Helper: Normalize a tag (struct or union name) by stripping any trailing
-// ".<number>".
-namespace {
-string normalizeTag(const string &tag) {
-  size_t pos = tag.find('.');
-  if (pos != string::npos)
-    return tag.substr(0, pos);
-  return tag;
-}
-} // namespace
-
-// New helper: Recursively compute the effective type of an expression based on
-// the AST. For an identifier, we use the declared type stored in
-// CodeGenerator::declaredTypeStrings. For a member access, we recursively
-// compute the effective type of its base and then look up the member's type
-// from the corresponding union or struct registry.
-namespace {
-string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
-  if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    auto it = CG.declaredTypeStrings.find(id->name);
-    if (it == CG.declaredTypeStrings.end())
-      throw runtime_error("CodeGenerator Error: Declared type for variable '" +
-                          id->name + "' not found.");
-    return it->second;
-  }
-  // If expr is a member access, resolve its base first.
-  if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    string baseType = getEffectiveType(CG, mem->base);
-    if (baseType.rfind("union ", 0) == 0) {
-      string tag = baseType.substr(6);
-      tag = normalizeTag(tag);
-      auto uit = unionRegistry.find(tag);
-      if (uit == unionRegistry.end())
-        throw runtime_error("CodeGenerator Error: Unknown union type '" + tag +
-                            "'.");
-      for (auto &member : uit->second->members) {
-        if (member->name == mem->member)
-          return member->type;
-      }
-      throw runtime_error("CodeGenerator Error: Union type '" + tag +
-                          "' does not contain member '" + mem->member + "'.");
-    } else if (baseType.rfind("struct ", 0) == 0) {
-      string tag = baseType.substr(7);
-      tag = normalizeTag(tag);
-      auto sit = structRegistry.find(tag);
-      if (sit == structRegistry.end())
-        throw runtime_error("CodeGenerator Error: Unknown struct type '" + tag +
-                            "'.");
-      for (auto &member : sit->second->members) {
-        if (member->name == mem->member)
-          return member->type;
-      }
-      throw runtime_error("CodeGenerator Error: Struct type '" + tag +
-                          "' does not contain member '" + mem->member + "'.");
-    } else {
-      throw runtime_error("CodeGenerator Error: Base expression type '" +
-                          baseType + "' is not an aggregate type.");
-    }
-  }
-  throw runtime_error("CodeGenerator Error: Unable to determine effective type "
-                      "for expression.");
-}
-} // namespace
-
+// Implementation of generateLValue (only defined here)
 llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    // Look up the identifier in the local variable stack.
     llvm::Value *v = lookupLocalVar(id->name);
     if (v)
       return v;
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar) {
-      // If the global variable is constant and has an initializer (as with
-      // enums), return the initializer directly.
       if (gVar->isConstant() && gVar->hasInitializer())
         return gVar->getInitializer();
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     }
-    // Check for an enum constant in the global enumRegistry.
     auto ecIt = enumRegistry.find(id->name);
     if (ecIt != enumRegistry.end())
       return ConstantInt::get(Type::getInt32Ty(context), ecIt->second);
     throw runtime_error("CodeGenerator Error: Undefined variable '" + id->name +
                         "'.");
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    // Compute the effective type of the base expression.
+    // Use helper function to get effective type.
     string baseEffectiveType = getEffectiveType(*this, mem->base);
     llvm::Value *basePtr = generateLValue(mem->base);
-    // If the effective type of the base is a union, look up the member in the
-    // union.
     if (baseEffectiveType.rfind("union ", 0) == 0) {
       string tag = baseEffectiveType.substr(6);
       tag = normalizeTag(tag);
@@ -125,10 +59,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         throw runtime_error("CodeGenerator Error: Union type '" + tag +
                             "' does not contain member '" + mem->member + "'.");
       return builder.CreateBitCast(basePtr, PointerType::getUnqual(memberType));
-    }
-    // If the effective type of the base is a struct, use the struct registry to
-    // determine the member index.
-    else if (baseEffectiveType.rfind("struct ", 0) == 0) {
+    } else if (baseEffectiveType.rfind("struct ", 0) == 0) {
       string tag = baseEffectiveType.substr(7);
       tag = normalizeTag(tag);
       auto sit = structRegistry.find(tag);
@@ -152,16 +83,25 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
     }
     throw runtime_error(
         "CodeGenerator Error: Member access applied to non-aggregate type.");
+  } else if (auto arr = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
+    llvm::Value *basePtr = generateLValue(arr->base);
+    llvm::Value *indexVal = generateExpression(arr->index);
+    if (!indexVal->getType()->isIntegerTy(32))
+      indexVal = builder.CreateIntCast(indexVal, Type::getInt32Ty(context),
+                                       true, "arrayidxcast");
+    vector<llvm::Value *> indices;
+    indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+    indices.push_back(indexVal);
+    // Use getArrayElementType() instead of getElementType()
+    PointerType *ptrTy = static_cast<PointerType *>(basePtr->getType());
+    return builder.CreateGEP(ptrTy->getArrayElementType(), basePtr, indices,
+                             "arrayidx");
   } else {
     throw runtime_error(
         "CodeGenerator Error: Expression is not a valid lvalue.");
   }
 }
 
-//
-// generateExpression - Generates code for an expression.
-// Parameter is now taken as a const reference to match the header.
-//
 llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     llvm::Value *lhs = generateExpression(binExpr->left);
@@ -282,7 +222,6 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     else if (lit->type == Literal::LiteralType::Double)
       return ConstantFP::get(Type::getDoubleTy(context), lit->doubleValue);
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    // Use lookupLocalVar to find the variable declared in the current scope(s).
     llvm::Value *v = lookupLocalVar(id->name);
     if (v) {
       if (auto allocaInst = dyn_cast<AllocaInst>(v)) {
@@ -293,16 +232,12 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
                             "' is not an alloca instruction.");
       }
     }
-    // Then check for global variable.
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar) {
-      // If this global is constant (e.g. an enum constant), return its
-      // initializer.
       if (gVar->isConstant() && gVar->hasInitializer())
         return gVar->getInitializer();
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
     }
-    // Finally, check for an enum constant.
     auto ecIt = enumRegistry.find(id->name);
     if (ecIt != enumRegistry.end())
       return ConstantInt::get(Type::getInt32Ty(context), ecIt->second);
@@ -311,9 +246,6 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   } else if (auto memberAccess =
                  std::dynamic_pointer_cast<MemberAccess>(expr)) {
     llvm::Value *ptr = generateLValue(expr);
-    // Instead of calling resolveFullMemberType (which is no longer defined),
-    // compute the effective type of the member access and then get its LLVM
-    // type.
     string effType = getEffectiveType(*this, expr);
     llvm::Type *loadType = getLLVMType(effType);
     return builder.CreateLoad(loadType, ptr, "memberload");
@@ -359,12 +291,16 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     llvm::Value *rhsVal = generateExpression(assign->rhs);
     builder.CreateStore(rhsVal, ptr);
     return rhsVal;
+  } else if (auto arr = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
+    llvm::Value *ptr = generateLValue(arr);
+    llvm::Type *elemType = ptr->getType()->getArrayElementType();
+    return builder.CreateLoad(elemType, ptr, "arrayload");
   } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
     llvm::Function *callee = module->getFunction(funcCall->functionName);
     if (!callee)
       throw runtime_error("CodeGenerator Error: Undefined function '" +
                           funcCall->functionName + "' in IR.");
-    std::vector<llvm::Value *> args;
+    vector<llvm::Value *> args;
     for (auto &argExpr : funcCall->arguments)
       args.push_back(generateExpression(argExpr));
     return builder.CreateCall(callee, args, "calltmp");

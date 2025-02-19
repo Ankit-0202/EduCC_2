@@ -49,23 +49,15 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
   } else if (auto varDeclStmt =
                  std::dynamic_pointer_cast<VariableDeclarationStatement>(
                      stmt)) {
-    // Create a temporary VariableDeclaration and analyze it.
-    auto tempVarDecl = std::make_shared<VariableDeclaration>(
-        varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer);
-    analyzeVariableDeclaration(tempVarDecl);
+    analyzeVariableDeclaration(varDeclStmt->varDecl);
   } else if (auto multiVarDeclStmt =
                  std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
                      stmt)) {
-    for (const auto &singleDeclStmt : multiVarDeclStmt->declarations) {
-      auto tempVarDecl = std::make_shared<VariableDeclaration>(
-          singleDeclStmt->type, singleDeclStmt->name,
-          singleDeclStmt->initializer);
-      analyzeVariableDeclaration(tempVarDecl);
+    for (const auto &singleDecl : multiVarDeclStmt->declarations) {
+      analyzeVariableDeclaration(singleDecl);
     }
   } else if (auto declStmt =
                  std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
-    // New branch: analyze declarations embedded in statements (e.g. local
-    // enums)
     analyzeDeclaration(declStmt->declaration);
   } else {
     throw runtime_error(

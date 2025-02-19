@@ -193,6 +193,12 @@ ExpressionPtr Parser::parsePostfix() {
       Token memberToken = advance();
       string memberName = memberToken.lexeme;
       expr = std::make_shared<MemberAccess>(expr, memberName);
+    }
+    // NEW: Array indexing support: parse '[' expression ']'
+    else if (match(TokenType::DELIM_LBRACKET)) {
+      ExpressionPtr indexExpr = parseExpression();
+      consume(TokenType::DELIM_RBRACKET, "Expected ']' after array index");
+      expr = std::make_shared<ArrayAccess>(expr, indexExpr);
     } else if (current + 1 < tokens.size() &&
                tokens[current].type == TokenType::OP_PLUS &&
                tokens[current + 1].type == TokenType::OP_PLUS) {

@@ -21,8 +21,6 @@ void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
       const string &fnName = funcDecl->name;
       const string &retType = funcDecl->returnType;
-      // Regardless of whether the function has a body, predeclare it as not
-      // defined.
       bool predeclDefined = false;
       vector<string> paramTypes = getParameterTypes(funcDecl->parameters);
       auto existingOpt = symbolTable.lookup(fnName);
@@ -75,6 +73,20 @@ void SemanticAnalyzer::analyzeVariableDeclaration(
     throw runtime_error("Semantic Analysis Error: Variable '" + varDecl->name +
                         "' is already declared in this scope.");
   }
+  // Analyze each array dimension and ensure it is a constant integer.
+  for (auto &dimExpr : varDecl->dimensions) {
+    analyzeExpression(dimExpr);
+    if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
+      if (lit->type != Literal::LiteralType::Int) {
+        throw runtime_error("Semantic Analysis Error: Array dimension for '" +
+                            varDecl->name + "' must be an integer literal.");
+      }
+    } else {
+      throw runtime_error("Semantic Analysis Error: Array dimension for '" +
+                          varDecl->name +
+                          "' must be a constant integer literal.");
+    }
+  }
   if (varDecl->initializer) {
     analyzeExpression(varDecl->initializer.value());
   }
@@ -89,7 +101,6 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(
 
   auto existingOpt = symbolTable.lookup(fnName);
   if (!existingOpt.has_value()) {
-    // This case should not occur because of the pre-declaration pass.
     Symbol newFunc(fnName, retType, true, paramTypes, hasBody);
     if (!symbolTable.declare(newFunc)) {
       throw runtime_error(
@@ -113,7 +124,7 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(
       throw runtime_error("Semantic Analysis Error: Function '" + fnName +
                           "' is already defined.");
     } else if (!existingSym.isDefined && hasBody) {
-      // Update the existing function symbol to mark it as defined.
+      // Update the function definition.
       symbolTable.remove(fnName);
       Symbol newSym(fnName, retType, true, paramTypes, true);
       if (!symbolTable.declare(newSym)) {
@@ -171,6 +182,9 @@ void SemanticAnalyzer::analyzeEnumDeclaration(
       throw runtime_error("Semantic Analysis Error: Enumerator '" +
                           enumerator.first + "' has already been declared.");
     }
+    // Also record the enumerator in the global enum registry so code generation
+    // finds it.
+    enumRegistry[enumerator.first] = value;
   }
 }
 
@@ -194,9 +208,9 @@ void SemanticAnalyzer::analyzeStructDeclaration(
   }
 }
 
-vector<std::string> SemanticAnalyzer::getParameterTypes(
-    const std::vector<std::pair<std::string, std::string>> &parameters) {
-  vector<std::string> types;
+vector<string> SemanticAnalyzer::getParameterTypes(
+    const std::vector<std::pair<string, string>> &parameters) {
+  vector<string> types;
   for (const auto &param : parameters) {
     types.push_back(param.first);
   }
@@ -204,8 +218,8 @@ vector<std::string> SemanticAnalyzer::getParameterTypes(
 }
 
 bool SemanticAnalyzer::isFunctionSignatureCompatible(
-    const Symbol &existing, const std::string &returnType,
-    const std::vector<std::string> &paramTypes) const {
+    const Symbol &existing, const string &returnType,
+    const vector<string> &paramTypes) const {
   if (existing.type != returnType) {
     return false;
   }

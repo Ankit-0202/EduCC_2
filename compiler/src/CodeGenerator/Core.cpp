@@ -32,6 +32,19 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
   for (const auto &decl : program->declarations) {
     if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
       llvm::Type *varType = getLLVMType(varDecl->type);
+      // NEW: If there are array dimensions, wrap the base type.
+      if (!varDecl->dimensions.empty()) {
+        for (auto it = varDecl->dimensions.rbegin();
+             it != varDecl->dimensions.rend(); ++it) {
+          llvm::Value *dimVal = generateExpression(*it);
+          ConstantInt *constDim = dyn_cast<ConstantInt>(dimVal);
+          if (!constDim)
+            throw runtime_error("CodeGenerator Error: Array dimension must be "
+                                "a constant integer.");
+          uint64_t arraySize = constDim->getZExtValue();
+          varType = ArrayType::get(varType, arraySize);
+        }
+      }
       GlobalVariable *gVar = new GlobalVariable(*module, varType, false,
                                                 GlobalValue::ExternalLinkage,
                                                 nullptr, varDecl->name);
@@ -98,6 +111,18 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                    std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
       for (const auto &singleDecl : multiDecl->declarations) {
         llvm::Type *varType = getLLVMType(singleDecl->type);
+        if (!singleDecl->dimensions.empty()) {
+          for (auto it = singleDecl->dimensions.rbegin();
+               it != singleDecl->dimensions.rend(); ++it) {
+            llvm::Value *dimVal = generateExpression(*it);
+            ConstantInt *constDim = dyn_cast<ConstantInt>(dimVal);
+            if (!constDim)
+              throw runtime_error("CodeGenerator Error: Array dimension must "
+                                  "be a constant integer.");
+            uint64_t arraySize = constDim->getZExtValue();
+            varType = ArrayType::get(varType, arraySize);
+          }
+        }
         GlobalVariable *gVar = new GlobalVariable(*module, varType, false,
                                                   GlobalValue::ExternalLinkage,
                                                   nullptr, singleDecl->name);

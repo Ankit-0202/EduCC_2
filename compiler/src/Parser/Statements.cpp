@@ -39,11 +39,11 @@ StatementPtr Parser::parseStatement() {
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     } else {
-      current = save;
+      current = save; // reset so that the KW_ENUM branch below can run
     }
-
-    // Otherwise, check if this is a declaration statement.
   }
+
+  // Otherwise, if the next token is a type specifier…
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
       check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
@@ -175,17 +175,19 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   } else if (match(TokenType::KW_BOOL)) {
     type = "bool";
   } else if (match(TokenType::KW_ENUM)) {
+    // Note: match() already advances past 'enum'
+    size_t save = current;
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current--;
+      current = save;
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     } else {
       if (!check(TokenType::IDENTIFIER))
         error("Expected enum tag after 'enum' in variable declaration");
-      string tag = advance().lexeme;
+      string tag = advance().lexeme; // consume the tag (e.g. "Color")
       type = "enum " + tag;
     }
   } else if (match(TokenType::KW_UNION)) {
@@ -214,12 +216,18 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     }
     Token varNameToken = advance();
     string varName = varNameToken.lexeme;
+    vector<ExpressionPtr> dimensions;
+    while (match(TokenType::DELIM_LBRACKET)) {
+      ExpressionPtr dimExpr = parseExpression();
+      consume(TokenType::DELIM_RBRACKET, "Expected ']' after array dimension");
+      dimensions.push_back(dimExpr);
+    }
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
       initializer = parseExpression();
     }
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
-        type, varName, initializer));
+        type, varName, initializer, dimensions));
   } while (match(TokenType::DELIM_COMMA));
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");

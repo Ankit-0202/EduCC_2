@@ -53,6 +53,8 @@ enum class TokenType {
   DELIM_LBRACE,
   DELIM_RBRACE,
   DELIM_COLON,
+  DELIM_LBRACKET,
+  DELIM_RBRACKET,
   DOT,
   // Literals
   LITERAL_INT,

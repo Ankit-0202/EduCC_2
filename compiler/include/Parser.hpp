@@ -3,6 +3,7 @@
 
 #include "AST.hpp"
 #include "Lexer.hpp"
+#include "Token.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,11 +47,10 @@ private:
   StatementPtr parseForStatement();
   StatementPtr parseSwitchStatement();
   StatementPtr parseReturnStatement();
-  // (Break support removed)
   StatementPtr parseExpressionStatement();
   StatementPtr parseVariableDeclarationStatement();
 
-  // Expression parsing
+  // Expression parsing functions
   ExpressionPtr parseExpression();
   ExpressionPtr parseAssignment();
   ExpressionPtr parseLogicalOr();
