@@ -10,6 +10,7 @@ enum class TokenType {
   KW_CHAR,
   KW_DOUBLE,
   KW_BOOL,
+  KW_VOID,
   KW_RETURN,
   KW_IF,
   KW_ELSE,
