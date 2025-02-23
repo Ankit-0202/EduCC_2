@@ -1,8 +1,7 @@
-// compiler/src/CodeGenerator/Core.cpp
-
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
+#include "SystemHeadersLinker.hpp" // NEW: for linking system headers
 #include "TypeRegistry.hpp"
 
 #include <llvm/IR/BasicBlock.h>
@@ -27,13 +26,11 @@ CodeGenerator::CodeGenerator()
       module(std::make_unique<Module>("main_module", context)) {
   // Set a default data layout for the module.
   module->setDataLayout("e-m:o-i64:64-f80:128-n8:16:32:64-S128");
-  // NOTE: Opaque pointers are enabled by default in LLVM 15+.
-  // To call getElementType(), your LLVM must disable opaque pointers.
 }
 
 std::unique_ptr<Module>
 CodeGenerator::generateCode(const shared_ptr<Program> &program) {
-  // Process global declarations first.
+  // Process global declarations.
   for (const auto &decl : program->declarations) {
     if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
       // e.g. int x;   or   int array[10];
@@ -51,10 +48,9 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           varType = ArrayType::get(varType, arraySize);
         }
       }
-      // Create the global
-      GlobalVariable *gVar = new GlobalVariable(
-          *module, varType, /*isConstant=*/false, GlobalValue::ExternalLinkage,
-          nullptr, varDecl->name);
+      GlobalVariable *gVar = new GlobalVariable(*module, varType, false,
+                                                GlobalValue::ExternalLinkage,
+                                                nullptr, varDecl->name);
 
       // If it has an initializer
       if (varDecl->initializer) {
@@ -160,10 +156,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                               "var declaration.");
         gVar->setInitializer(defaultVal);
       }
-    }
-
-    else if (auto multiDecl =
-                 std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
+    } else if (auto multiDecl =
+                   std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
       // e.g. int x=1, y=2, z[10];
       for (const auto &singleDecl : multiDecl->declarations) {
         llvm::Type *varType = getLLVMType(singleDecl->type);
@@ -284,9 +278,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           gVar->setInitializer(defaultVal);
         }
       }
-    }
-
-    else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(decl)) {
+    } else if (auto enumDecl =
+                   std::dynamic_pointer_cast<EnumDeclaration>(decl)) {
       for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
         string enumName = enumDecl->enumerators[i].first;
         int value = enumDecl->enumeratorValues[i];
@@ -298,14 +291,24 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
     }
   }
 
-  // 2) Then handle function declarations
+  // Process function declarations.
   for (const auto &decl : program->declarations) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
       generateFunction(funcDecl);
     }
   }
 
-  // verify
+  // Link in the system headers module.
+  // Assumes that "system_headers.bc" is available in the current directory.
+  std::string systemHeadersPath = "system_headers.bc";
+  std::unique_ptr<Module> linkedModule =
+      linkSystemHeaders(std::move(module), systemHeadersPath);
+  if (!linkedModule) {
+    throw runtime_error("CodeGenerator Error: Failed to link system headers.");
+  }
+  module = std::move(linkedModule);
+
+  // Verify the final module.
   if (verifyModule(*module, &errs()))
     throw runtime_error("CodeGenerator Error: Module verification failed.");
   return std::move(module);

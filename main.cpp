@@ -14,6 +14,7 @@
 #include <system_error>
 #include <vector>
 
+// A helper to convert token types to strings (used only for debugging/logging)
 static std::string tokenTypeToString(TokenType type) {
   switch (type) {
   case TokenType::KW_INT:
@@ -141,7 +142,12 @@ int main(int argc, char *argv[]) {
   /*
    * Step 1: Preprocessing
    */
-  std::vector<std::string> systemPaths = {"/usr/include", "/usr/local/include"};
+  // Update systemPaths to include the Xcode SDK header path.
+  std::vector<std::string> systemPaths = {
+      "/usr/include", "/usr/local/include",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/"
+      "Developer/SDKs/MacOSX.sdk/usr/include" // <- using Xcode SDK path
+  };
   std::vector<std::string> userPaths = {"."};
 
   Preprocessor preprocessor(systemPaths, userPaths);

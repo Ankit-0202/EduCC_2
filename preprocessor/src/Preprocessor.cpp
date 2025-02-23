@@ -3,7 +3,8 @@
 #include "IncludeProcessor.hpp"
 #include "MacroExpander.hpp"
 #include <filesystem>
-#include <fstream> // Added to provide std::ifstream
+#include <fstream>  // Provides std::ifstream
+#include <iostream> // For debug printing
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -13,8 +14,7 @@ namespace fs = std::filesystem;
 Preprocessor::Preprocessor(const std::vector<std::string> &sysPaths,
                            const std::vector<std::string> &userPaths)
     : systemIncludePaths(sysPaths), userIncludePaths(userPaths) {
-  // (You might store these for use in IncludeProcessor in a more advanced
-  // design.)
+  // These paths are now set via the constructor.
 }
 
 std::string Preprocessor::readFile(const std::string &path) {
@@ -49,7 +49,8 @@ std::string Preprocessor::processIncludes(const std::string &source,
       // Build a list of directories to search.
       std::vector<std::string> searchDirs;
       if (isSystem) {
-        searchDirs = {"/usr/include", "/usr/local/include"};
+        // Use the system include paths passed in via the constructor.
+        searchDirs = systemIncludePaths;
       } else {
         // For quoted includes, first search the directory of the current file…
         fs::path currentDir = fs::path(currentFile).parent_path();
@@ -59,12 +60,20 @@ std::string Preprocessor::processIncludes(const std::string &source,
         searchDirs.push_back(".");
       }
 
+      // Debug: print directories being searched.
+      for (const auto &dir : searchDirs) {
+        std::cerr << "Searching for header " << headerName
+                  << " in directory: " << dir << "\n";
+      }
+
       // Look for the header in the search directories.
       std::optional<std::string> headerPath;
       for (const auto &dir : searchDirs) {
         fs::path trial = fs::path(dir) / headerName;
         if (fs::exists(trial) && fs::is_regular_file(trial)) {
           headerPath = fs::absolute(trial).string();
+          std::cerr << "Found header " << headerName
+                    << " at: " << headerPath.value() << "\n";
           break;
         }
       }
@@ -72,8 +81,16 @@ std::string Preprocessor::processIncludes(const std::string &source,
         throw std::runtime_error("Preprocessor Error: Cannot locate header: " +
                                  headerName);
 
-      std::string headerContents = processFile(headerPath.value());
-      oss << headerContents << "\n";
+      if (isSystem) {
+        // For system headers we now skip processing their contents.
+        // (We assume they will be provided later as precompiled LLVM bitcode.)
+        std::cerr << "Skipping system header " << headerName << "\n";
+        // You could output a comment marker if desired:
+        oss << "/* skipped system header: " << headerName << " */\n";
+      } else {
+        std::string headerContents = processFile(headerPath.value());
+        oss << headerContents << "\n";
+      }
     } else {
       oss << line << "\n";
     }
@@ -95,8 +112,7 @@ std::string Preprocessor::processConditionals(const std::string &source) {
 
 std::string Preprocessor::processMacros(const std::string &source) {
   MacroExpander expander;
-  // First, run through the source to let the expander process all macro
-  // directives.
+  // First, process macro directives.
   std::istringstream iss(source);
   std::ostringstream withoutDirectives;
   std::string line;
@@ -110,7 +126,7 @@ std::string Preprocessor::processMacros(const std::string &source) {
     }
     withoutDirectives << line << "\n";
   }
-  // Now expand macros in the rest of the source.
+  // Now expand macros.
   return expander.expand(withoutDirectives.str());
 }
 
@@ -120,11 +136,11 @@ std::string Preprocessor::processFile(const std::string &path) {
     return fileCache[path];
 
   std::string source = readFile(path);
-  // First, process includes.
+  // Process includes.
   std::string included = processIncludes(source, path);
-  // Then process conditionals.
+  // Process conditionals.
   std::string conditioned = processConditionals(included);
-  // Finally, process macros.
+  // Process macros.
   std::string expanded = processMacros(conditioned);
 
   fileCache[path] = expanded;
