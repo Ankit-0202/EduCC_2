@@ -48,20 +48,21 @@ public:
   DeclarationPtr parseDeclaration();
   DeclarationPtr parseStructDeclaration();
   DeclarationPtr parseVariableDeclaration();
+  DeclarationPtr parseVariableDeclarationWithType(const std::string &givenType);
   DeclarationPtr parseFunctionDeclaration();
+  DeclarationPtr parseFunctionDeclarationWithType(const std::string &givenType);
   std::vector<std::pair<std::string, std::string>> parseParameters();
   DeclarationPtr parseEnumDeclaration();
   DeclarationPtr parseUnionDeclaration();
   std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
-
-private:
   std::vector<Token> tokens;
+
   size_t current;
 
   // Utility parsing methods.
+  Token advance();
   bool match(TokenType type);
   bool check(TokenType type) const;
-  Token advance();
   Token peek() const;
   bool isAtEnd() const;
   void consume(TokenType type, const std::string &errorMessage);

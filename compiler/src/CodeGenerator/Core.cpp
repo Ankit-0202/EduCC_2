@@ -302,6 +302,18 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
 }
 
 llvm::Type *CodeGenerator::getLLVMType(const string &type) {
+  // New: support for pointer types
+  if (type.find("*") != string::npos) {
+    // Remove trailing '*' characters and any whitespace.
+    string baseType = type;
+    while (!baseType.empty() &&
+           (baseType.back() == ' ' || baseType.back() == '*'))
+      baseType.pop_back();
+    while (!baseType.empty() && baseType.front() == ' ')
+      baseType.erase(baseType.begin());
+    llvm::Type *baseLLVM = getLLVMType(baseType);
+    return PointerType::getUnqual(baseLLVM);
+  }
   if (type == "int")
     return Type::getInt32Ty(context);
   else if (type == "float")

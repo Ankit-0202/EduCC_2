@@ -151,8 +151,22 @@ ExpressionPtr Parser::parseFactor() {
   return expr;
 }
 
-// Modified parseUnary() to support cast expressions.
+// Modified parseUnary() to support cast expressions, address-of ('&'), and
+// dereference ('*') operators.
 ExpressionPtr Parser::parseUnary() {
+  // Handle address-of operator '&'
+  if (!isAtEnd() && peek().lexeme == "&") {
+    advance();
+    ExpressionPtr operand = parseUnary();
+    return std::make_shared<UnaryExpression>("&", operand);
+  }
+  // Handle dereference operator '*'
+  if (!isAtEnd() && peek().lexeme == "*") {
+    advance();
+    ExpressionPtr operand = parseUnary();
+    return std::make_shared<UnaryExpression>("*", operand);
+  }
+  // Check for cast expression.
   if (match(TokenType::DELIM_LPAREN)) {
     // Check if this is a cast expression: ( type ) cast-expression
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
@@ -194,7 +208,7 @@ ExpressionPtr Parser::parsePostfix() {
       string memberName = memberToken.lexeme;
       expr = std::make_shared<MemberAccess>(expr, memberName);
     }
-    // NEW: Array indexing support: parse '[' expression ']'
+    // Array indexing support: parse '[' expression ']'
     else if (match(TokenType::DELIM_LBRACKET)) {
       ExpressionPtr indexExpr = parseExpression();
       consume(TokenType::DELIM_RBRACKET, "Expected ']' after array index");
