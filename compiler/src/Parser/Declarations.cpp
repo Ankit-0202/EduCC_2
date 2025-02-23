@@ -212,7 +212,11 @@ DeclarationPtr Parser::parseVariableDeclaration() {
     }
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
-      initializer = parseExpression();
+      if (check(TokenType::DELIM_LBRACE)) {
+        initializer = parseInitializerList();
+      } else {
+        initializer = parseExpression();
+      }
     }
     decls.push_back(std::make_shared<VariableDeclaration>(
         type, varName, initializer, dimensions));
@@ -378,4 +382,20 @@ DeclarationPtr Parser::parseUnionDeclaration() {
   consume(TokenType::DELIM_RBRACE, "Expected '}' to close union declaration");
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after union declaration");
   return std::make_shared<UnionDeclaration>(tag, members);
+}
+
+// NEW: parseInitializerList
+ExpressionPtr Parser::parseInitializerList() {
+  consume(TokenType::DELIM_LBRACE, "Expected '{' to start initializer list");
+  vector<ExpressionPtr> elems;
+  if (!check(TokenType::DELIM_RBRACE)) {
+    elems.push_back(parseExpression());
+    while (match(TokenType::DELIM_COMMA)) {
+      if (check(TokenType::DELIM_RBRACE))
+        break;
+      elems.push_back(parseExpression());
+    }
+  }
+  consume(TokenType::DELIM_RBRACE, "Expected '}' to end initializer list");
+  return std::make_shared<InitializerList>(elems);
 }

@@ -12,7 +12,7 @@ using std::string;
 // It uses the analyzer's symbol table via the public getter, and the global
 // unionRegistry and structRegistry.
 namespace {
-string inferExpressionType(const ExpressionPtr &expr,
+string inferExpressionType(const std::shared_ptr<Expression> &expr,
                            const SemanticAnalyzer &analyzer) {
   // For a literal, return its type.
   if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
@@ -89,9 +89,20 @@ string inferExpressionType(const ExpressionPtr &expr,
 }
 } // namespace
 
-void SemanticAnalyzer::analyzeExpression(const ExpressionPtr &expr) {
+void SemanticAnalyzer::analyzeExpression(
+    const std::shared_ptr<Expression> &expr) {
   if (!expr)
     return;
+
+  // NEW: If the expression is an initializer list (used for array
+  // initializers), analyze each element in the list.
+  if (auto initList = std::dynamic_pointer_cast<InitializerList>(expr)) {
+    for (const auto &elem : initList->elements) {
+      analyzeExpression(elem);
+    }
+    return;
+  }
+
   if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     analyzeExpression(binExpr->left);
     analyzeExpression(binExpr->right);
@@ -143,6 +154,11 @@ void SemanticAnalyzer::analyzeExpression(const ExpressionPtr &expr) {
       throw runtime_error("Semantic Analysis Error: Base expression type '" +
                           baseType + "' is not an aggregate type.");
     }
+  }
+  // NEW: Handle array access expressions.
+  else if (auto arrAccess = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
+    analyzeExpression(arrAccess->base);
+    analyzeExpression(arrAccess->index);
   } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     // No analysis needed for literals.
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {

@@ -2,7 +2,6 @@
 #define PARSER_HPP
 
 #include "AST.hpp"
-#include "Lexer.hpp"
 #include "Token.hpp"
 #include <memory>
 #include <string>
@@ -10,47 +9,13 @@
 
 class Parser {
 public:
+  // Constructor: takes the token stream.
   Parser(const std::vector<Token> &tokens);
 
-  // Returns the root AST node (the Program)
+  // Main entry point to start parsing.
   std::shared_ptr<Program> parse();
 
-private:
-  std::vector<Token> tokens;
-  size_t current;
-
-  // Basic helper functions
-  bool isAtEnd() const;
-  Token peek() const;
-  Token advance();
-  bool match(TokenType type);
-  bool check(TokenType type) const;
-  void consume(TokenType type, const std::string &errorMessage);
-  void error(const std::string &message) const;
-
-  // Declaration parsing
-  DeclarationPtr parseDeclaration();
-  DeclarationPtr parseVariableDeclaration();
-  DeclarationPtr parseFunctionDeclaration();
-  DeclarationPtr parseEnumDeclaration();
-  DeclarationPtr parseUnionDeclaration();
-  DeclarationPtr parseStructDeclaration();
-  std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
-
-  std::vector<std::pair<std::string, std::string>> parseParameters();
-
-  // Statement parsing
-  std::shared_ptr<CompoundStatement> parseCompoundStatement();
-  StatementPtr parseStatement();
-  StatementPtr parseIfStatement();
-  StatementPtr parseWhileStatement();
-  StatementPtr parseForStatement();
-  StatementPtr parseSwitchStatement();
-  StatementPtr parseReturnStatement();
-  StatementPtr parseExpressionStatement();
-  StatementPtr parseVariableDeclarationStatement();
-
-  // Expression parsing functions
+  // Expression parsing methods.
   ExpressionPtr parseExpression();
   ExpressionPtr parseAssignment();
   ExpressionPtr parseLogicalOr();
@@ -66,6 +31,41 @@ private:
   ExpressionPtr parseUnary();
   ExpressionPtr parsePostfix();
   ExpressionPtr parsePrimary();
+  ExpressionPtr parseInitializerList();
+
+  // Statement parsing methods.
+  StatementPtr parseStatement();
+  std::shared_ptr<CompoundStatement> parseCompoundStatement();
+  StatementPtr parseIfStatement();
+  StatementPtr parseWhileStatement();
+  StatementPtr parseForStatement();
+  StatementPtr parseSwitchStatement();
+  StatementPtr parseReturnStatement();
+  StatementPtr parseExpressionStatement();
+  StatementPtr parseVariableDeclarationStatement();
+
+  // Declaration parsing methods.
+  DeclarationPtr parseDeclaration();
+  DeclarationPtr parseStructDeclaration();
+  DeclarationPtr parseVariableDeclaration();
+  DeclarationPtr parseFunctionDeclaration();
+  std::vector<std::pair<std::string, std::string>> parseParameters();
+  DeclarationPtr parseEnumDeclaration();
+  DeclarationPtr parseUnionDeclaration();
+  std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
+
+private:
+  std::vector<Token> tokens;
+  size_t current;
+
+  // Utility parsing methods.
+  bool match(TokenType type);
+  bool check(TokenType type) const;
+  Token advance();
+  Token peek() const;
+  bool isAtEnd() const;
+  void consume(TokenType type, const std::string &errorMessage);
+  void error(const std::string &message) const;
 };
 
 #endif // PARSER_HPP

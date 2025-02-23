@@ -1,7 +1,10 @@
+// compiler/src/CodeGenerator/Core.cpp
+
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -24,6 +27,10 @@ CodeGenerator::CodeGenerator()
       module(std::make_unique<Module>("main_module", context)) {
   // Set a default data layout for the module.
   module->setDataLayout("e-m:o-i64:64-f80:128-n8:16:32:64-S128");
+  // NOTE: Opaque pointers are enabled by default in LLVM 15+.
+  // To use getElementType() as in this code, you must build LLVM with
+  // opaque pointers disabled (for example, by defining
+  // LLVM_ENABLE_OPAQUE_POINTERS=0).
 }
 
 std::unique_ptr<Module>
@@ -32,7 +39,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
   for (const auto &decl : program->declarations) {
     if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
       llvm::Type *varType = getLLVMType(varDecl->type);
-      // NEW: If there are array dimensions, wrap the base type.
+      // If there are array dimensions, wrap the base type.
       if (!varDecl->dimensions.empty()) {
         for (auto it = varDecl->dimensions.rbegin();
              it != varDecl->dimensions.rend(); ++it) {
@@ -49,8 +56,50 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                                                 GlobalValue::ExternalLinkage,
                                                 nullptr, varDecl->name);
       if (varDecl->initializer) {
-        if (auto lit = std::dynamic_pointer_cast<Literal>(
+        if (auto initList = std::dynamic_pointer_cast<InitializerList>(
                 varDecl->initializer.value())) {
+          // Handle initializer list for arrays.
+          auto arrayTy = dyn_cast<ArrayType>(varType);
+          if (!arrayTy)
+            throw runtime_error("CodeGenerator Error: Initializer list used "
+                                "for non-array variable.");
+          uint64_t arraySize = arrayTy->getNumElements();
+          vector<Constant *> elems;
+          for (uint64_t i = 0; i < arraySize; i++) {
+            Constant *elemConst = nullptr;
+            if (i < initList->elements.size()) {
+              auto lit =
+                  std::dynamic_pointer_cast<Literal>(initList->elements[i]);
+              if (!lit)
+                throw runtime_error("CodeGenerator Error: Global initializer "
+                                    "list must contain literals.");
+              if (lit->type == Literal::LiteralType::Int)
+                elemConst =
+                    ConstantInt::get(Type::getInt32Ty(context), lit->intValue);
+              else if (lit->type == Literal::LiteralType::Float)
+                elemConst =
+                    ConstantFP::get(Type::getFloatTy(context), lit->floatValue);
+              else if (lit->type == Literal::LiteralType::Double)
+                elemConst = ConstantFP::get(Type::getDoubleTy(context),
+                                            lit->doubleValue);
+              else if (lit->type == Literal::LiteralType::Char)
+                elemConst =
+                    ConstantInt::get(Type::getInt8Ty(context), lit->charValue);
+              else if (lit->type == Literal::LiteralType::Bool)
+                elemConst =
+                    ConstantInt::get(Type::getInt1Ty(context), lit->boolValue);
+              else
+                throw runtime_error("CodeGenerator Error: Unsupported literal "
+                                    "type in global initializer.");
+            } else {
+              elemConst = Constant::getNullValue(arrayTy->getElementType());
+            }
+            elems.push_back(elemConst);
+          }
+          Constant *arrayInit = ConstantArray::get(arrayTy, elems);
+          gVar->setInitializer(arrayInit);
+        } else if (auto lit = std::dynamic_pointer_cast<Literal>(
+                       varDecl->initializer.value())) {
           Constant *initVal = nullptr;
           if (lit->type == Literal::LiteralType::Int)
             initVal =
@@ -70,7 +119,6 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           else
             throw runtime_error("CodeGenerator Error: Unsupported literal type "
                                 "in global initializer.");
-
           if (initVal->getType() != varType) {
             if (initVal->getType()->isFloatingPointTy() &&
                 varType->isFloatingPointTy()) {
@@ -87,8 +135,9 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           }
           gVar->setInitializer(initVal);
         } else {
-          throw runtime_error("CodeGenerator Error: Global variable "
-                              "initializer must be a literal.");
+          throw runtime_error(
+              "CodeGenerator Error: Global variable initializer must be a "
+              "literal or initializer list.");
         }
       } else {
         Constant *defaultVal = nullptr;
@@ -127,8 +176,49 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                                                   GlobalValue::ExternalLinkage,
                                                   nullptr, singleDecl->name);
         if (singleDecl->initializer) {
-          if (auto lit = std::dynamic_pointer_cast<Literal>(
+          if (auto initList = std::dynamic_pointer_cast<InitializerList>(
                   singleDecl->initializer.value())) {
+            auto arrayTy = dyn_cast<ArrayType>(varType);
+            if (!arrayTy)
+              throw runtime_error("CodeGenerator Error: Initializer list used "
+                                  "for non-array variable.");
+            uint64_t arraySize = arrayTy->getNumElements();
+            vector<Constant *> elems;
+            for (uint64_t i = 0; i < arraySize; i++) {
+              Constant *elemConst = nullptr;
+              if (i < initList->elements.size()) {
+                auto lit =
+                    std::dynamic_pointer_cast<Literal>(initList->elements[i]);
+                if (!lit)
+                  throw runtime_error("CodeGenerator Error: Global initializer "
+                                      "list must contain literals.");
+                if (lit->type == Literal::LiteralType::Int)
+                  elemConst = ConstantInt::get(Type::getInt32Ty(context),
+                                               lit->intValue);
+                else if (lit->type == Literal::LiteralType::Float)
+                  elemConst = ConstantFP::get(Type::getFloatTy(context),
+                                              lit->floatValue);
+                else if (lit->type == Literal::LiteralType::Double)
+                  elemConst = ConstantFP::get(Type::getDoubleTy(context),
+                                              lit->doubleValue);
+                else if (lit->type == Literal::LiteralType::Char)
+                  elemConst = ConstantInt::get(Type::getInt8Ty(context),
+                                               lit->charValue);
+                else if (lit->type == Literal::LiteralType::Bool)
+                  elemConst = ConstantInt::get(Type::getInt1Ty(context),
+                                               lit->boolValue);
+                else
+                  throw runtime_error("CodeGenerator Error: Unsupported "
+                                      "literal type in global initializer.");
+              } else {
+                elemConst = Constant::getNullValue(arrayTy->getElementType());
+              }
+              elems.push_back(elemConst);
+            }
+            Constant *arrayInit = ConstantArray::get(arrayTy, elems);
+            gVar->setInitializer(arrayInit);
+          } else if (auto lit = std::dynamic_pointer_cast<Literal>(
+                         singleDecl->initializer.value())) {
             Constant *initVal = nullptr;
             if (lit->type == Literal::LiteralType::Int)
               initVal =
@@ -164,8 +254,9 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
             }
             gVar->setInitializer(initVal);
           } else {
-            throw runtime_error("CodeGenerator Error: Global variable "
-                                "initializer must be a literal.");
+            throw runtime_error(
+                "CodeGenerator Error: Global variable initializer must be a "
+                "literal or initializer list.");
           }
         } else {
           Constant *defaultVal = nullptr;
@@ -205,9 +296,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
     }
   }
 
-  if (verifyModule(*module, &errs())) {
+  if (verifyModule(*module, &errs()))
     throw runtime_error("CodeGenerator Error: Module verification failed.");
-  }
   return std::move(module);
 }
 
@@ -228,16 +318,13 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     return Type::getInt32Ty(context);
   else if (type.rfind("union ", 0) == 0) {
     // Extract the tag (name) of the union.
-    std::string tag = type.substr(6);
+    string tag = type.substr(6);
     auto it = unionRegistry.find(tag);
-    if (it == unionRegistry.end()) {
+    if (it == unionRegistry.end())
       throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
                           "'.");
-    }
     int maxSize = 0;
-    // Initialize DataLayout using a pointer to the module.
     DataLayout dl(module.get());
-    // Compute the maximum size among the union members.
     for (auto &member : it->second->members) {
       int memberSize = 0;
       if (member->type == "int")
@@ -266,17 +353,15 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
       if (memberSize > maxSize)
         maxSize = memberSize;
     }
-    // Ensure we never pass zero or negative size.
     if (maxSize <= 0)
       maxSize = 1;
     return ArrayType::get(Type::getInt8Ty(context), maxSize);
   } else if (type.rfind("struct ", 0) == 0) {
-    std::string tag = type.substr(7);
+    string tag = type.substr(7);
     auto it = structRegistry.find(tag);
-    if (it == structRegistry.end()) {
+    if (it == structRegistry.end())
       throw runtime_error("CodeGenerator Error: Unknown struct type '" + type +
                           "'.");
-    }
     vector<Type *> memberTypes;
     for (auto &member : it->second->members) {
       memberTypes.push_back(getLLVMType(member->type));
@@ -308,15 +393,13 @@ llvm::Function *CodeGenerator::getOrCreateFunctionInModule(
   FunctionType *fType = FunctionType::get(returnType, paramTypes, false);
   if (Function *existingFn = module->getFunction(name)) {
     FunctionType *existingType = existingFn->getFunctionType();
-    if (!functionSignaturesMatch(existingType, fType)) {
+    if (!functionSignaturesMatch(existingType, fType))
       throw runtime_error(
           "CodeGenerator Error: Conflicting function signature for '" + name +
           "'.");
-    }
-    if (isDefinition && !existingFn->empty()) {
+    if (isDefinition && !existingFn->empty())
       throw runtime_error("CodeGenerator Error: Function '" + name +
                           "' is already defined.");
-    }
     return existingFn;
   }
   Function *newFn =
@@ -352,9 +435,7 @@ llvm::Function *CodeGenerator::generateFunction(
       AllocaInst *alloc =
           builder.CreateAlloca(arg.getType(), nullptr, paramName);
       builder.CreateStore(&arg, alloc);
-      // Store in the current local scope.
       localVarStack.back()[paramName] = alloc;
-      // Record the declared type.
       declaredTypes[paramName] = arg.getType();
       i++;
     }
@@ -362,30 +443,27 @@ llvm::Function *CodeGenerator::generateFunction(
     // Generate code for the function body.
     auto compound =
         std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body);
-    if (!compound) {
+    if (!compound)
       throw runtime_error(
           "CodeGenerator Error: Function body is not a CompoundStatement.");
-    }
     generateStatement(compound);
 
-    // If the current basic block is not terminated, add an appropriate return.
     if (!builder.GetInsertBlock()->getTerminator()) {
-      if (funcDecl->returnType == "void") {
+      if (funcDecl->returnType == "void")
         builder.CreateRetVoid();
-      } else if (funcDecl->returnType == "int") {
+      else if (funcDecl->returnType == "int")
         builder.CreateRet(ConstantInt::get(Type::getInt32Ty(context), 0));
-      } else if (funcDecl->returnType == "float") {
+      else if (funcDecl->returnType == "float")
         builder.CreateRet(ConstantFP::get(Type::getFloatTy(context), 0.0f));
-      } else if (funcDecl->returnType == "double") {
+      else if (funcDecl->returnType == "double")
         builder.CreateRet(ConstantFP::get(Type::getDoubleTy(context), 0.0));
-      } else if (funcDecl->returnType == "char") {
+      else if (funcDecl->returnType == "char")
         builder.CreateRet(ConstantInt::get(Type::getInt8Ty(context), 0));
-      } else if (funcDecl->returnType == "bool") {
+      else if (funcDecl->returnType == "bool")
         builder.CreateRet(ConstantInt::get(Type::getInt1Ty(context), 0));
-      } else {
+      else
         throw runtime_error("CodeGenerator Error: Unsupported return type '" +
                             funcDecl->returnType + "'.");
-      }
     }
     return function;
   } else {

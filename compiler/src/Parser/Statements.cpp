@@ -161,6 +161,7 @@ StatementPtr Parser::parseExpressionStatement() {
   return std::make_shared<ExpressionStatement>(expr);
 }
 
+// NEW: parseVariableDeclarationStatement for local declarations
 StatementPtr Parser::parseVariableDeclarationStatement() {
   string type;
   // Allow "enum", "union", and "struct" as type specifiers.
@@ -224,7 +225,11 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     }
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
-      initializer = parseExpression();
+      if (check(TokenType::DELIM_LBRACE)) {
+        initializer = parseInitializerList();
+      } else {
+        initializer = parseExpression();
+      }
     }
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
         type, varName, initializer, dimensions));

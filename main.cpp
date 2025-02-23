@@ -86,6 +86,10 @@ static std::string tokenTypeToString(TokenType type) {
     return "DELIM_LBRACE";
   case TokenType::DELIM_RBRACE:
     return "DELIM_RBRACE";
+  case TokenType::DELIM_LBRACKET:
+    return "DELIM_LBRACKET";
+  case TokenType::DELIM_RBRACKET:
+    return "DELIM_RBRACKET";
   case TokenType::DELIM_COLON:
     return "DELIM_COLON";
   case TokenType::DOT:

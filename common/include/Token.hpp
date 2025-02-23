@@ -21,6 +21,7 @@ enum class TokenType {
   KW_ENUM,
   KW_UNION,
   KW_STRUCT,
+
   // Operators
   OP_PLUS,
   OP_MINUS,
@@ -45,6 +46,7 @@ enum class TokenType {
   OP_BITWISE_XOR,
   OP_LEFT_SHIFT,
   OP_RIGHT_SHIFT,
+
   // Delimiters
   DELIM_SEMICOLON,
   DELIM_COMMA,
@@ -53,15 +55,17 @@ enum class TokenType {
   DELIM_LBRACE,
   DELIM_RBRACE,
   DELIM_COLON,
-  DELIM_LBRACKET,
-  DELIM_RBRACKET,
+  DELIM_LBRACKET, // new token for '['
+  DELIM_RBRACKET, // new token for ']'
   DOT,
+
   // Literals
   LITERAL_INT,
   LITERAL_FLOAT,
   LITERAL_DOUBLE,
   LITERAL_CHAR,
-  // Identifiers, end-of-file, unknown.
+
+  // Identifiers and others
   IDENTIFIER,
   EOF_TOKEN,
   UNKNOWN

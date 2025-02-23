@@ -347,6 +347,13 @@ Token Lexer::opOrDelim() {
     token.type = TokenType::DOT; // dot operator
     break;
   }
+  // NEW: Add support for '[' and ']'
+  case '[':
+    token.type = TokenType::DELIM_LBRACKET;
+    break;
+  case ']':
+    token.type = TokenType::DELIM_RBRACKET;
+    break;
   case '\'':
     // If we encounter a single quote here, backtrack and let character() handle
     // it.

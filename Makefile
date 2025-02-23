@@ -7,7 +7,7 @@ CXX      := clang++
 LLVM_CXXFLAGS := $(shell llvm-config --cxxflags)
 LLVM_LIBS     := $(shell llvm-config --libs)
 LLVM_LIBDIR   := $(shell llvm-config --libdir)
-CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -g $(LLVM_CXXFLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -g $(LLVM_CXXFLAGS) -DLLVM_ENABLE_OPAQUE_POINTERS=0
 
 # Archiver
 AR       := ar

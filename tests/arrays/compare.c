@@ -8,7 +8,6 @@ int main() {
   for (int i = 0; i < 3; i++) {
     if (arr1[i] != arr2[i]) {
       result = 0; // Failure
-      break;
     }
   }
 

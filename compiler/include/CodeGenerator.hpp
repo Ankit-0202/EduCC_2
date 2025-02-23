@@ -19,6 +19,9 @@ class CodeGenerator {
 public:
   CodeGenerator();
 
+  llvm::Value *
+  generateArrayElementPointer(const std::shared_ptr<ArrayAccess> &arr);
+
   // Generate LLVM IR for the given AST.
   std::unique_ptr<llvm::Module>
   generateCode(const std::shared_ptr<Program> &program);

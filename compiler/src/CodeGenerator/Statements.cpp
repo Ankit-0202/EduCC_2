@@ -46,11 +46,6 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
   return nullptr;
 }
 
-// Note: Do NOT define generateLValue here. Its unique definition is in
-// Expressions.cpp.
-
-// generateVariableDeclaration and generateStatement implementations remain as
-// before.
 void CodeGenerator::generateVariableDeclaration(
     const shared_ptr<VariableDeclaration> &varDecl) {
   llvm::Type *baseType = getLLVMType(varDecl->type);
@@ -74,21 +69,46 @@ void CodeGenerator::generateVariableDeclaration(
   declaredTypes[varDecl->name] = varTy;
   declaredTypeStrings[varDecl->name] = varDecl->type;
   if (varDecl->initializer) {
-    llvm::Value *initVal = generateExpression(varDecl->initializer.value());
-    if (initVal->getType() != varTy) {
-      if (initVal->getType()->isFloatingPointTy() &&
-          varTy->isFloatingPointTy()) {
-        if (initVal->getType()->getFPMantissaWidth() >
-            varTy->getFPMantissaWidth())
-          initVal = builder.CreateFPTrunc(initVal, varTy, "fptrunc");
-        else
-          initVal = builder.CreateFPExt(initVal, varTy, "fpext");
-      } else {
-        throw runtime_error("CodeGenerator Error: Incompatible initializer "
-                            "type in local variable declaration.");
+    if (auto initList = std::dynamic_pointer_cast<InitializerList>(
+            varDecl->initializer.value())) {
+      // Local array initializer list
+      auto arrayTy = dyn_cast<ArrayType>(varTy);
+      if (!arrayTy)
+        throw runtime_error(
+            "CodeGenerator Error: Initializer list used for non-array variable "
+            "in local variable declaration.");
+      uint64_t arraySize = arrayTy->getNumElements();
+      for (uint64_t i = 0; i < arraySize; i++) {
+        llvm::Value *elemVal = nullptr;
+        if (i < initList->elements.size()) {
+          elemVal = generateExpression(initList->elements[i]);
+        } else {
+          elemVal = Constant::getNullValue(arrayTy->getElementType());
+        }
+        vector<llvm::Value *> indices;
+        indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+        indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
+        llvm::Value *elemPtr = builder.CreateGEP(
+            alloc->getAllocatedType(), alloc, indices, varDecl->name + "_idx");
+        builder.CreateStore(elemVal, elemPtr);
       }
+    } else {
+      llvm::Value *initVal = generateExpression(varDecl->initializer.value());
+      if (initVal->getType() != varTy) {
+        if (initVal->getType()->isFloatingPointTy() &&
+            varTy->isFloatingPointTy()) {
+          if (initVal->getType()->getFPMantissaWidth() >
+              varTy->getFPMantissaWidth())
+            initVal = builder.CreateFPTrunc(initVal, varTy, "fptrunc");
+          else
+            initVal = builder.CreateFPExt(initVal, varTy, "fpext");
+        } else {
+          throw runtime_error("CodeGenerator Error: Incompatible initializer "
+                              "type in local variable declaration.");
+        }
+      }
+      builder.CreateStore(initVal, alloc);
     }
-    builder.CreateStore(initVal, alloc);
   }
 }
 
@@ -114,13 +134,21 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
   } else if (auto varDeclStmt =
                  std::dynamic_pointer_cast<VariableDeclarationStatement>(
                      stmt)) {
-    generateVariableDeclaration(varDeclStmt->varDecl);
+    // For local variable declarations, wrap the declaration in a
+    // VariableDeclaration node.
+    auto varDecl = std::make_shared<VariableDeclaration>(
+        varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer,
+        varDeclStmt->dimensions);
+    generateVariableDeclaration(varDecl);
     return false;
   } else if (auto multiVarDeclStmt =
                  std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
                      stmt)) {
     for (auto &singleDecl : multiVarDeclStmt->declarations) {
-      generateVariableDeclaration(singleDecl);
+      auto varDecl = std::make_shared<VariableDeclaration>(
+          singleDecl->type, singleDecl->name, singleDecl->initializer,
+          singleDecl->dimensions);
+      generateVariableDeclaration(varDecl);
     }
     return false;
   } else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {

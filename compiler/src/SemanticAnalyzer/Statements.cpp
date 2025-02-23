@@ -49,12 +49,20 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
   } else if (auto varDeclStmt =
                  std::dynamic_pointer_cast<VariableDeclarationStatement>(
                      stmt)) {
-    analyzeVariableDeclaration(varDeclStmt->varDecl);
+    // Convert the local variable declaration statement into a
+    // VariableDeclaration node.
+    auto varDecl = std::make_shared<VariableDeclaration>(
+        varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer,
+        varDeclStmt->dimensions);
+    analyzeVariableDeclaration(varDecl);
   } else if (auto multiVarDeclStmt =
                  std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
                      stmt)) {
     for (const auto &singleDecl : multiVarDeclStmt->declarations) {
-      analyzeVariableDeclaration(singleDecl);
+      auto varDecl = std::make_shared<VariableDeclaration>(
+          singleDecl->type, singleDecl->name, singleDecl->initializer,
+          singleDecl->dimensions);
+      analyzeVariableDeclaration(varDecl);
     }
   } else if (auto declStmt =
                  std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
