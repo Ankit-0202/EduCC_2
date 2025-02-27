@@ -28,7 +28,7 @@ StatementPtr Parser::parseStatement() {
   }
 
   // Check for a local enum definition in statement context.
-  // e.g. `enum { RED, GREEN } col;`
+  // e.g. enum { RED, GREEN } col;
   if (check(TokenType::KW_ENUM)) {
     size_t save = current;
     advance(); // consume KW_ENUM
@@ -42,7 +42,7 @@ StatementPtr Parser::parseStatement() {
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     } else {
-      // not an inline definition => e.g. `enum Color col;`
+      // not an inline definition => e.g. enum Color col;
       current = save; // revert pointer to handle in variable-decl logic below
     }
   }
@@ -183,22 +183,17 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
 
   // Or match enum
   else if (match(TokenType::KW_ENUM)) {
-    // We already advanced once with match(), so we are at the token after
-    // 'enum'
+    size_t save = current;
+    advance(); // consume KW_ENUM
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      // inline enum definition in a local statement
+      current = save; // revert
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     } else {
-      // e.g. "enum Color" => we must read the identifier for the tag
-      if (!check(TokenType::IDENTIFIER)) {
-        error("Expected enum tag after 'enum' in variable declaration");
-      }
-      string tag = advance().lexeme; // e.g. 'Color'
-      type = "enum " + tag;
+      current = save; // revert pointer to handle in variable-decl logic below
     }
   }
 
@@ -213,7 +208,6 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   // Or match struct
   else if (match(TokenType::KW_STRUCT) ||
            (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
-    // we consumed either 'KW_STRUCT' or the 'IDENTIFIER' that says 'struct'
     if (peek().lexeme == "struct")
       advance(); // consume the literal "struct"
     if (!check(TokenType::IDENTIFIER)) {
@@ -221,10 +215,7 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     }
     string tag = advance().lexeme;
     type = "struct " + tag;
-  }
-
-  // else error
-  else {
+  } else {
     error("Expected type specifier in variable declaration");
   }
 
@@ -246,9 +237,15 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     // check for array dimensions
     vector<ExpressionPtr> dimensions;
     while (match(TokenType::DELIM_LBRACKET)) {
-      ExpressionPtr dimExpr = parseExpression();
-      consume(TokenType::DELIM_RBRACKET, "Expected ']' after array dimension");
-      dimensions.push_back(dimExpr);
+      if (check(TokenType::DELIM_RBRACKET)) {
+        // unsized array; consume the closing bracket without an expression.
+        advance();
+      } else {
+        ExpressionPtr dimExpr = parseExpression();
+        consume(TokenType::DELIM_RBRACKET,
+                "Expected ']' after array dimension");
+        dimensions.push_back(dimExpr);
+      }
     }
 
     // optional initializer
@@ -261,13 +258,11 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
       }
     }
 
-    // store one var decl
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
         type, varName, initializer, dimensions));
 
-  } while (match(TokenType::DELIM_COMMA)); // multiple declarations in one line?
+  } while (match(TokenType::DELIM_COMMA));
 
-  // finally require a semicolon
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");
 

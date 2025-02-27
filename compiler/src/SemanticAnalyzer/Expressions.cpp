@@ -8,12 +8,32 @@
 using std::runtime_error;
 using std::string;
 
-// Free helper function to infer the type (as a string) of an expression.
+namespace {
+// Helper function to infer the type (as a string) of an expression.
 // It uses the analyzer's symbol table via the public getter, and the global
 // unionRegistry and structRegistry.
-namespace {
 string inferExpressionType(const std::shared_ptr<Expression> &expr,
                            const SemanticAnalyzer &analyzer) {
+  // NEW: Handle binary expressions for pointer arithmetic.
+  if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
+    if (binExpr->op == "+" || binExpr->op == "-") {
+      string leftType = inferExpressionType(binExpr->left, analyzer);
+      string rightType = inferExpressionType(binExpr->right, analyzer);
+      // If one operand is a pointer (ends with '*') and the other is int.
+      if (!leftType.empty() && leftType.back() == '*' && rightType == "int")
+        return leftType;
+      if (binExpr->op == "+" && !rightType.empty() && rightType.back() == '*' &&
+          leftType == "int")
+        return rightType;
+      // Pointer subtraction: both pointers yields an int (ptrdiff_t)
+      if (!leftType.empty() && leftType.back() == '*' && !rightType.empty() &&
+          rightType.back() == '*' && binExpr->op == "-")
+        return "int";
+    }
+    // For other binary expressions, assume type is that of the left operand.
+    return inferExpressionType(binExpr->left, analyzer);
+  }
+
   // For a literal, return its type.
   if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     switch (lit->type) {
@@ -95,7 +115,7 @@ void SemanticAnalyzer::analyzeExpression(
     return;
 
   // NEW: If the expression is an initializer list (used for array
-  // initializers), analyze each element in the list.
+  // initializers), analyze each element.
   if (auto initList = std::dynamic_pointer_cast<InitializerList>(expr)) {
     for (const auto &elem : initList->elements) {
       analyzeExpression(elem);

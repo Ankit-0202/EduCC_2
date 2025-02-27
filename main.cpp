@@ -58,6 +58,14 @@ static std::string tokenTypeToString(TokenType type) {
     return "OP_DIVIDE";
   case TokenType::OP_ASSIGN:
     return "OP_ASSIGN";
+  case TokenType::OP_PLUS_ASSIGN:
+    return "OP_PLUS_ASSIGN";
+  case TokenType::OP_MINUS_ASSIGN:
+    return "OP_MINUS_ASSIGN";
+  case TokenType::OP_MULTIPLY_ASSIGN:
+    return "OP_MULTIPLY_ASSIGN";
+  case TokenType::OP_DIVIDE_ASSIGN:
+    return "OP_DIVIDE_ASSIGN";
   case TokenType::OP_EQUAL:
     return "OP_EQUAL";
   case TokenType::OP_NOT_EQUAL:

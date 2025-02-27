@@ -226,10 +226,6 @@ Token Lexer::opOrDelim() {
     }
     break;
   }
-  case '%': {
-    token.type = TokenType::OP_MODULO;
-    break;
-  }
   case '*': {
     if (!isAtEnd() && peek() == '=') {
       get();
@@ -248,6 +244,10 @@ Token Lexer::opOrDelim() {
     } else {
       token.type = TokenType::OP_DIVIDE;
     }
+    break;
+  }
+  case '%': {
+    token.type = TokenType::OP_MODULO;
     break;
   }
   case '=': {
@@ -344,10 +344,9 @@ Token Lexer::opOrDelim() {
     token.type = TokenType::DELIM_COLON;
     break;
   case '.': {
-    token.type = TokenType::DOT; // dot operator
+    token.type = TokenType::DOT;
     break;
   }
-  // NEW: Add support for '[' and ']'
   case '[':
     token.type = TokenType::DELIM_LBRACKET;
     break;
@@ -355,8 +354,7 @@ Token Lexer::opOrDelim() {
     token.type = TokenType::DELIM_RBRACKET;
     break;
   case '\'':
-    // If we encounter a single quote here, backtrack and let character() handle
-    // it.
+    // Backtrack and let character() handle it.
     currentPos--;
     column--;
     return character();

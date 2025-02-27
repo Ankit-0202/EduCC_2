@@ -4,27 +4,41 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Forward declarations
-struct Expression;
+class Expression;
+class Statement;
+class Declaration;
+
 using ExpressionPtr = std::shared_ptr<Expression>;
-
-struct Statement;
 using StatementPtr = std::shared_ptr<Statement>;
-
-struct Declaration;
 using DeclarationPtr = std::shared_ptr<Declaration>;
 
-struct Program;
+//--------------------//
+//    Program Class   //
+//--------------------//
 
-// Base Expression class
-struct Expression {
+class Program {
+public:
+  std::vector<DeclarationPtr> declarations;
+  void addDeclaration(const DeclarationPtr &decl) {
+    declarations.push_back(decl);
+  }
+};
+
+//--------------------//
+//   Expression Base  //
+//--------------------//
+
+class Expression {
+public:
   virtual ~Expression() = default;
 };
 
-// Literal expression
-struct Literal : public Expression {
+class Literal : public Expression {
+public:
   enum class LiteralType { Int, Float, Double, Char, Bool };
   LiteralType type;
   int intValue;
@@ -32,258 +46,264 @@ struct Literal : public Expression {
   double doubleValue;
   char charValue;
   bool boolValue;
-  Literal(int v) : type(LiteralType::Int), intValue(v) {}
-  Literal(float v) : type(LiteralType::Float), floatValue(v) {}
-  Literal(double v) : type(LiteralType::Double), doubleValue(v) {}
-  Literal(char v) : type(LiteralType::Char), charValue(v) {}
-  Literal(bool v) : type(LiteralType::Bool), boolValue(v) {}
+
+  Literal(int value) : type(LiteralType::Int), intValue(value) {}
+  Literal(float value) : type(LiteralType::Float), floatValue(value) {}
+  Literal(double value) : type(LiteralType::Double), doubleValue(value) {}
+  Literal(char value) : type(LiteralType::Char), charValue(value) {}
+  Literal(bool value) : type(LiteralType::Bool), boolValue(value) {}
 };
 
-// Identifier expression
-struct Identifier : public Expression {
+class Identifier : public Expression {
+public:
   std::string name;
   Identifier(const std::string &n) : name(n) {}
 };
 
-// Binary expression
-struct BinaryExpression : public Expression {
+class BinaryExpression : public Expression {
+public:
   std::string op;
   ExpressionPtr left;
   ExpressionPtr right;
-  BinaryExpression(const std::string &o, ExpressionPtr l, ExpressionPtr r)
-      : op(o), left(l), right(r) {}
+  BinaryExpression(const std::string &op, ExpressionPtr left,
+                   ExpressionPtr right)
+      : op(op), left(left), right(right) {}
 };
 
-// Unary expression
-struct UnaryExpression : public Expression {
+class UnaryExpression : public Expression {
+public:
   std::string op;
   ExpressionPtr operand;
-  UnaryExpression(const std::string &o, ExpressionPtr expr)
-      : op(o), operand(expr) {}
+  UnaryExpression(const std::string &op, ExpressionPtr operand)
+      : op(op), operand(operand) {}
 };
 
-// Cast expression
-struct CastExpression : public Expression {
-  std::string castType;
-  ExpressionPtr operand;
-  CastExpression(const std::string &ct, ExpressionPtr expr)
-      : castType(ct), operand(expr) {}
-};
-
-// Postfix expression (e.g., i++, i--)
-struct PostfixExpression : public Expression {
-  ExpressionPtr operand;
-  std::string op; // "++" or "--"
-  PostfixExpression(ExpressionPtr expr, const std::string &o)
-      : operand(expr), op(o) {}
-};
-
-// NEW: Assignment expression (e.g., a = b)
-struct Assignment : public Expression {
+class Assignment : public Expression {
+public:
   ExpressionPtr lhs;
   ExpressionPtr rhs;
-  Assignment(ExpressionPtr l, ExpressionPtr r) : lhs(l), rhs(r) {}
+  Assignment(ExpressionPtr lhs, ExpressionPtr rhs) : lhs(lhs), rhs(rhs) {}
 };
 
-// Member access (e.g., a.b)
-struct MemberAccess : public Expression {
-  ExpressionPtr base;
-  std::string member;
-  MemberAccess(ExpressionPtr b, const std::string &m) : base(b), member(m) {}
-};
-
-// Array access (e.g., a[i])
-struct ArrayAccess : public Expression {
+class ArrayAccess : public Expression {
+public:
   ExpressionPtr base;
   ExpressionPtr index;
-  ArrayAccess(ExpressionPtr b, ExpressionPtr i) : base(b), index(i) {}
+  ArrayAccess(ExpressionPtr base, ExpressionPtr index)
+      : base(base), index(index) {}
 };
 
-// Function call (e.g., foo(a, b))
-struct FunctionCall : public Expression {
+class MemberAccess : public Expression {
+public:
+  ExpressionPtr base;
+  std::string member;
+  MemberAccess(ExpressionPtr base, const std::string &member)
+      : base(base), member(member) {}
+};
+
+class FunctionCall : public Expression {
+public:
   std::string functionName;
   std::vector<ExpressionPtr> arguments;
   FunctionCall(const std::string &name, const std::vector<ExpressionPtr> &args)
       : functionName(name), arguments(args) {}
 };
 
-// Initializer list expression (for array or struct initializers)
-struct InitializerList : public Expression {
+class CastExpression : public Expression {
+public:
+  std::string castType;
+  ExpressionPtr operand;
+  CastExpression(const std::string &castType, ExpressionPtr operand)
+      : castType(castType), operand(operand) {}
+};
+
+class PostfixExpression : public Expression {
+public:
+  ExpressionPtr operand;
+  std::string op; // "++" or "--"
+  PostfixExpression(ExpressionPtr operand, const std::string &op)
+      : operand(operand), op(op) {}
+};
+
+class InitializerList : public Expression {
+public:
   std::vector<ExpressionPtr> elements;
   InitializerList(const std::vector<ExpressionPtr> &elems) : elements(elems) {}
 };
 
-// Base Statement class
-struct Statement {
+//--------------------//
+//   Statement Base   //
+//--------------------//
+
+class Statement {
+public:
   virtual ~Statement() = default;
 };
 
-// Expression statement
-struct ExpressionStatement : public Statement {
+class ExpressionStatement : public Statement {
+public:
   ExpressionPtr expression;
   ExpressionStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
-// Compound statement (block)
-struct CompoundStatement : public Statement {
-  std::vector<StatementPtr> statements;
-  void addStatement(const StatementPtr &stmt) { statements.push_back(stmt); }
+class DeclarationStatement : public Statement {
+public:
+  DeclarationPtr declaration;
+  DeclarationStatement(DeclarationPtr decl) : declaration(decl) {}
 };
 
-// If statement
-struct IfStatement : public Statement {
+class CompoundStatement : public Statement {
+public:
+  std::vector<StatementPtr> statements;
+  void addStatement(StatementPtr stmt) { statements.push_back(stmt); }
+};
+
+class IfStatement : public Statement {
+public:
   ExpressionPtr condition;
   StatementPtr thenBranch;
   std::optional<StatementPtr> elseBranch;
-  IfStatement(ExpressionPtr cond, StatementPtr thenBr,
-              std::optional<StatementPtr> elseBr)
-      : condition(cond), thenBranch(thenBr), elseBranch(elseBr) {}
+  IfStatement(ExpressionPtr condition, StatementPtr thenBranch,
+              std::optional<StatementPtr> elseBranch)
+      : condition(condition), thenBranch(thenBranch), elseBranch(elseBranch) {}
 };
 
-// While statement
-struct WhileStatement : public Statement {
+class WhileStatement : public Statement {
+public:
   ExpressionPtr condition;
   StatementPtr body;
-  WhileStatement(ExpressionPtr cond, StatementPtr b)
-      : condition(cond), body(b) {}
+  WhileStatement(ExpressionPtr condition, StatementPtr body)
+      : condition(condition), body(body) {}
 };
 
-// For statement
-struct ForStatement : public Statement {
+class ForStatement : public Statement {
+public:
   StatementPtr initializer;
   ExpressionPtr condition;
   ExpressionPtr increment;
   StatementPtr body;
-  ForStatement(StatementPtr init, ExpressionPtr cond, ExpressionPtr incr,
-               StatementPtr b)
-      : initializer(init), condition(cond), increment(incr), body(b) {}
+  ForStatement(StatementPtr initializer, ExpressionPtr condition,
+               ExpressionPtr increment, StatementPtr body)
+      : initializer(initializer), condition(condition), increment(increment),
+        body(body) {}
 };
 
-// Switch statement
-struct SwitchStatement : public Statement {
+class SwitchStatement : public Statement {
+public:
   ExpressionPtr expression;
   std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>> cases;
   std::optional<StatementPtr> defaultCase;
   SwitchStatement(
       ExpressionPtr expr,
       const std::vector<std::pair<std::optional<ExpressionPtr>, StatementPtr>>
-          &cs,
-      std::optional<StatementPtr> defCase)
-      : expression(expr), cases(cs), defaultCase(defCase) {}
+          &cases,
+      std::optional<StatementPtr> defaultCase)
+      : expression(expr), cases(cases), defaultCase(defaultCase) {}
 };
 
-// Return statement
-struct ReturnStatement : public Statement {
+class ReturnStatement : public Statement {
+public:
   ExpressionPtr expression;
   ReturnStatement(ExpressionPtr expr) : expression(expr) {}
 };
 
-// Declaration statement (for declarations within statements)
-struct DeclarationStatement : public Statement {
-  DeclarationPtr declaration;
-  DeclarationStatement(DeclarationPtr decl) : declaration(decl) {}
-};
-
-// Local variable declaration statement
-struct VariableDeclarationStatement : public Statement {
+// For local variable declarations (statements)
+class VariableDeclarationStatement : public Statement {
+public:
   std::string type;
   std::string name;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
-  VariableDeclarationStatement(const std::string &t, const std::string &n,
-                               std::optional<ExpressionPtr> init,
-                               const std::vector<ExpressionPtr> &dims)
-      : type(t), name(n), initializer(init), dimensions(dims) {}
+  VariableDeclarationStatement(const std::string &type, const std::string &name,
+                               std::optional<ExpressionPtr> initializer,
+                               const std::vector<ExpressionPtr> &dimensions)
+      : type(type), name(name), initializer(initializer),
+        dimensions(dimensions) {}
 };
 
-// Multi-variable declaration statement (for local declarations, e.g. int a, b,
-// c;)
-struct MultiVariableDeclarationStatement : public Statement {
+class MultiVariableDeclarationStatement : public Statement {
+public:
   std::vector<std::shared_ptr<VariableDeclarationStatement>> declarations;
   MultiVariableDeclarationStatement(
       const std::vector<std::shared_ptr<VariableDeclarationStatement>> &decls)
       : declarations(decls) {}
 };
 
-// Declarations
+//--------------------//
+//  Declaration Base  //
+//--------------------//
 
-// Base Declaration class
-struct Declaration {
+class Declaration {
+public:
   virtual ~Declaration() = default;
 };
 
-// Global variable declaration
-struct VariableDeclaration : public Declaration {
+class VariableDeclaration : public Declaration {
+public:
   std::string type;
   std::string name;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
-  VariableDeclaration(const std::string &t, const std::string &n,
-                      std::optional<ExpressionPtr> init,
-                      const std::vector<ExpressionPtr> &dims)
-      : type(t), name(n), initializer(init), dimensions(dims) {}
-  // NEW: Overload for declarations without explicit dimensions.
-  VariableDeclaration(const std::string &t, const std::string &n,
-                      std::optional<ExpressionPtr> init)
-      : type(t), name(n), initializer(init), dimensions() {}
+  VariableDeclaration(const std::string &type, const std::string &name,
+                      std::optional<ExpressionPtr> initializer = std::nullopt,
+                      const std::vector<ExpressionPtr> &dimensions = {})
+      : type(type), name(name), initializer(initializer),
+        dimensions(dimensions) {}
 };
 
-// NEW: Global multi-variable declaration (for declarations with multiple
-// variables)
-struct MultiVariableDeclaration : public Declaration {
+// NEW: Multiple variable declarations in a single declaration.
+class MultiVariableDeclaration : public Declaration {
+public:
   std::vector<std::shared_ptr<VariableDeclaration>> declarations;
   MultiVariableDeclaration(
       const std::vector<std::shared_ptr<VariableDeclaration>> &decls)
       : declarations(decls) {}
 };
 
-// Function declaration
-struct FunctionDeclaration : public Declaration {
+class FunctionDeclaration : public Declaration {
+public:
   std::string returnType;
   std::string name;
-  std::vector<std::pair<std::string, std::string>> parameters; // type, name
-  StatementPtr body; // nullptr for prototypes
+  // Each parameter: pair of (type, name)
+  std::vector<std::pair<std::string, std::string>> parameters;
+  StatementPtr body; // if nullptr, it's a forward declaration
   FunctionDeclaration(
-      const std::string &ret, const std::string &n,
+      const std::string &retType, const std::string &name,
       const std::vector<std::pair<std::string, std::string>> &params,
-      StatementPtr b)
-      : returnType(ret), name(n), parameters(params), body(b) {}
+      StatementPtr body)
+      : returnType(retType), name(name), parameters(params), body(body) {}
 };
 
-// Enum declaration
-struct EnumDeclaration : public Declaration {
+class StructDeclaration : public Declaration {
+public:
+  std::optional<std::string> tag;
+  std::vector<std::shared_ptr<VariableDeclaration>> members;
+  StructDeclaration(
+      std::optional<std::string> tag,
+      const std::vector<std::shared_ptr<VariableDeclaration>> &members)
+      : tag(tag), members(members) {}
+};
+
+class UnionDeclaration : public Declaration {
+public:
+  std::optional<std::string> tag;
+  std::vector<std::shared_ptr<VariableDeclaration>> members;
+  UnionDeclaration(
+      std::optional<std::string> tag,
+      const std::vector<std::shared_ptr<VariableDeclaration>> &members)
+      : tag(tag), members(members) {}
+};
+
+class EnumDeclaration : public Declaration {
+public:
   std::optional<std::string> tag;
   std::vector<std::pair<std::string, std::optional<ExpressionPtr>>> enumerators;
   std::vector<int> enumeratorValues;
   EnumDeclaration(
-      std::optional<std::string> t,
+      std::optional<std::string> tag,
       const std::vector<std::pair<std::string, std::optional<ExpressionPtr>>>
-          &enums)
-      : tag(t), enumerators(enums) {}
-};
-
-// Struct declaration
-struct StructDeclaration : public Declaration {
-  std::optional<std::string> tag;
-  std::vector<std::shared_ptr<VariableDeclaration>> members;
-  StructDeclaration(std::optional<std::string> t,
-                    const std::vector<std::shared_ptr<VariableDeclaration>> &m)
-      : tag(t), members(m) {}
-};
-
-// Union declaration
-struct UnionDeclaration : public Declaration {
-  std::optional<std::string> tag;
-  std::vector<std::shared_ptr<VariableDeclaration>> members;
-  UnionDeclaration(std::optional<std::string> t,
-                   const std::vector<std::shared_ptr<VariableDeclaration>> &m)
-      : tag(t), members(m) {}
-};
-
-// Program node
-struct Program {
-  std::vector<DeclarationPtr> declarations;
-  void addDeclaration(DeclarationPtr decl) { declarations.push_back(decl); }
+          &enumerators)
+      : tag(tag), enumerators(enumerators) {}
 };
 
 #endif // AST_HPP

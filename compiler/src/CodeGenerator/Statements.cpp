@@ -20,7 +20,9 @@ using std::unordered_map;
 using std::unordered_set;
 using std::vector;
 
+//
 // Local Scope Management
+//
 void CodeGenerator::pushLocalScope() {
   localVarStack.push_back(unordered_map<string, Value *>());
   declaredVarStack.push_back(unordered_set<string>());
@@ -46,9 +48,19 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
   return nullptr;
 }
 
+//
+// generateVariableDeclaration
+//
+// --- UPDATED ---
+// If the declaration has no explicit dimensions but its initializer is an
+// InitializerList (as in unsized array declarations like "int arr[] = { ...
+// };"), we infer the array size from the initializer list.
 void CodeGenerator::generateVariableDeclaration(
     const shared_ptr<VariableDeclaration> &varDecl) {
   llvm::Type *baseType = getLLVMType(varDecl->type);
+  llvm::Type *varType = baseType;
+
+  // If dimensions were provided, treat as an array variable.
   if (!varDecl->dimensions.empty()) {
     for (auto it = varDecl->dimensions.rbegin();
          it != varDecl->dimensions.rend(); ++it) {
@@ -58,50 +70,69 @@ void CodeGenerator::generateVariableDeclaration(
         throw runtime_error(
             "CodeGenerator Error: Array dimension must be a constant integer.");
       uint64_t arraySize = constDim->getZExtValue();
-      baseType = ArrayType::get(baseType, arraySize);
+      varType = ArrayType::get(varType, arraySize);
     }
   }
-  llvm::Type *varTy = baseType;
-  AllocaInst *alloc =
-      builder.CreateAlloca(varTy, nullptr, varDecl->name.c_str());
-  localVarStack.back()[varDecl->name] = alloc;
-  declaredVarStack.back().insert(varDecl->name);
-  declaredTypes[varDecl->name] = varTy;
-  declaredTypeStrings[varDecl->name] = varDecl->type;
-  if (varDecl->initializer) {
+  // Otherwise, if there is an initializer list, infer the array size from it.
+  else if (varDecl->initializer) {
     if (auto initList = std::dynamic_pointer_cast<InitializerList>(
             varDecl->initializer.value())) {
-      // Local array initializer list
-      auto arrayTy = dyn_cast<ArrayType>(varTy);
-      if (!arrayTy)
-        throw runtime_error(
-            "CodeGenerator Error: Initializer list used for non-array variable "
-            "in local variable declaration.");
-      uint64_t arraySize = arrayTy->getNumElements();
-      for (uint64_t i = 0; i < arraySize; i++) {
-        llvm::Value *elemVal = nullptr;
-        if (i < initList->elements.size()) {
-          elemVal = generateExpression(initList->elements[i]);
-        } else {
-          elemVal = Constant::getNullValue(arrayTy->getElementType());
+      uint64_t arraySize = initList->elements.size();
+      varType = ArrayType::get(baseType, arraySize);
+    }
+  }
+
+  AllocaInst *alloc =
+      builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+  localVarStack.back()[varDecl->name] = alloc;
+  declaredVarStack.back().insert(varDecl->name);
+  declaredTypes[varDecl->name] = varType;
+  declaredTypeStrings[varDecl->name] = varDecl->type;
+
+  if (varDecl->initializer) {
+    // If this is an array initializer (either with explicit dimensions or
+    // inferred unsized)
+    if (!varDecl->dimensions.empty() ||
+        std::dynamic_pointer_cast<InitializerList>(
+            varDecl->initializer.value())) {
+      if (auto initList = std::dynamic_pointer_cast<InitializerList>(
+              varDecl->initializer.value())) {
+        auto arrayTy = dyn_cast<ArrayType>(varType);
+        if (!arrayTy)
+          throw runtime_error(
+              "CodeGenerator Error: Initializer list used for non-array "
+              "variable in local variable declaration.");
+        uint64_t arraySize = arrayTy->getNumElements();
+        for (uint64_t i = 0; i < arraySize; i++) {
+          llvm::Value *elemVal = nullptr;
+          if (i < initList->elements.size()) {
+            elemVal = generateExpression(initList->elements[i]);
+          } else {
+            elemVal = Constant::getNullValue(arrayTy->getElementType());
+          }
+          vector<llvm::Value *> indices;
+          indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+          indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
+          llvm::Value *elemPtr =
+              builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
+                                varDecl->name + "_idx");
+          builder.CreateStore(elemVal, elemPtr);
         }
-        vector<llvm::Value *> indices;
-        indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
-        indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
-        llvm::Value *elemPtr = builder.CreateGEP(
-            alloc->getAllocatedType(), alloc, indices, varDecl->name + "_idx");
-        builder.CreateStore(elemVal, elemPtr);
+      } else {
+        throw runtime_error("CodeGenerator Error: Array initializer must be an "
+                            "initializer list.");
       }
     } else {
+      // Scalar variable: simply generate the initializer expression.
       llvm::Value *initVal = generateExpression(varDecl->initializer.value());
-      if (initVal->getType() != varTy) {
+      if (initVal->getType() != varType) {
         if (initVal->getType()->isFloatingPointTy() &&
-            varTy->isFloatingPointTy()) {
+            varType->isFloatingPointTy()) {
           if (initVal->getType()->getFPMantissaWidth() >
-              varTy->getFPMantissaWidth())
-            initVal = builder.CreateFPTrunc(initVal, varTy, "fptrunc");
+              varType->getFPMantissaWidth())
+            initVal = builder.CreateFPTrunc(initVal, varType, "fptrunc");
           else
-            initVal = builder.CreateFPExt(initVal, varTy, "fpext");
+            initVal = builder.CreateFPExt(initVal, varType, "fpext");
         } else {
           throw runtime_error("CodeGenerator Error: Incompatible initializer "
                               "type in local variable declaration.");
