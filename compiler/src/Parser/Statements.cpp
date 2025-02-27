@@ -183,18 +183,21 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
 
   // Or match enum
   else if (match(TokenType::KW_ENUM)) {
-    size_t save = current;
-    advance(); // consume KW_ENUM
+    // If this is an inline enum definition, revert and parse the enum
+    // declaration.
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current = save; // revert
+      current--; // Revert the consumption of 'enum'
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
-    } else {
-      current = save; // revert pointer to handle in variable-decl logic below
     }
+    // Otherwise, forward–declared enum: consume the tag token.
+    string tag = "";
+    if (check(TokenType::IDENTIFIER))
+      tag = advance().lexeme; // Consume the enum tag (e.g. "Color")
+    type = "enum " + tag;
   }
 
   // Or match union
