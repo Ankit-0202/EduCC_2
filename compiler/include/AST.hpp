@@ -39,6 +39,12 @@ struct Literal : public Expression {
   Literal(bool v) : type(LiteralType::Bool), boolValue(v) {}
 };
 
+// Our custom string literal expression
+struct ASTStringLiteral : public Expression {
+  std::string value;
+  ASTStringLiteral(const std::string &v) : value(v) {}
+};
+
 // Identifier expression
 struct Identifier : public Expression {
   std::string name;
@@ -78,7 +84,7 @@ struct PostfixExpression : public Expression {
       : operand(expr), op(o) {}
 };
 
-// NEW: Assignment expression (e.g., a = b)
+// Assignment expression (e.g., a = b)
 struct Assignment : public Expression {
   ExpressionPtr lhs;
   ExpressionPtr rhs;
@@ -222,14 +228,13 @@ struct VariableDeclaration : public Declaration {
                       std::optional<ExpressionPtr> init,
                       const std::vector<ExpressionPtr> &dims)
       : type(t), name(n), initializer(init), dimensions(dims) {}
-  // NEW: Overload for declarations without explicit dimensions.
+  // Overload for declarations without explicit dimensions.
   VariableDeclaration(const std::string &t, const std::string &n,
                       std::optional<ExpressionPtr> init)
       : type(t), name(n), initializer(init), dimensions() {}
 };
 
-// NEW: Global multi-variable declaration (for declarations with multiple
-// variables)
+// Global multi-variable declaration (for declarations with multiple variables)
 struct MultiVariableDeclaration : public Declaration {
   std::vector<std::shared_ptr<VariableDeclaration>> declarations;
   MultiVariableDeclaration(

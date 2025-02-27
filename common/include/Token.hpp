@@ -56,8 +56,8 @@ enum class TokenType {
   DELIM_LBRACE,
   DELIM_RBRACE,
   DELIM_COLON,
-  DELIM_LBRACKET, // new token for '['
-  DELIM_RBRACKET, // new token for ']'
+  DELIM_LBRACKET,
+  DELIM_RBRACKET,
   DOT,
 
   // Literals
@@ -65,6 +65,7 @@ enum class TokenType {
   LITERAL_FLOAT,
   LITERAL_DOUBLE,
   LITERAL_CHAR,
+  LITERAL_STRING,
 
   // Identifiers and others
   IDENTIFIER,

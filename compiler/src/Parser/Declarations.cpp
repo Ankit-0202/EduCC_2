@@ -1,6 +1,7 @@
 #include "AST.hpp"
 #include "Parser.hpp"
-#include <iostream> // For debug printing if needed
+#include "TokenUtils.hpp" // For tokenTypeToString
+#include <iostream>       // For debug printing
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,13 +15,12 @@ using std::vector;
 // Helper: consume any "*" tokens that immediately follow a type specifier.
 static string consumePointerTokens(Parser &parser, const string &baseType) {
   string newType = baseType;
+  // Debug: print current token before consuming pointers.
   while (!parser.isAtEnd()) {
     auto token = parser.peek();
-    // Debug printing if needed:
-    // std::cerr << "consumePointerTokens: peek token lexeme='" << token.lexeme
-    //           << "' type=" << static_cast<int>(token.type) << "\n";
+    // Only consume if the token is an asterisk.
     if (token.type == TokenType::OP_MULTIPLY && token.lexeme == "*") {
-      parser.advance();
+      parser.advance(); // consume the '*' token
       newType += "*";
     } else {
       break;
@@ -29,18 +29,26 @@ static string consumePointerTokens(Parser &parser, const string &baseType) {
   return newType;
 }
 
-// parseVariableDeclarationWithType:
-//   parses a variable declaration given an already-determined type name (like
-//   "int" or "void*").
 DeclarationPtr
 Parser::parseVariableDeclarationWithType(const string &givenType) {
   string type = givenType;
   vector<std::shared_ptr<VariableDeclaration>> decls;
   do {
+    // Before checking for an identifier, output debug info.
+    if (isAtEnd()) {
+      error("Unexpected end of tokens when expecting an identifier");
+    }
+    auto currToken = peek();
+    // std::cerr << "DEBUG: Expected identifier at index " << current
+    //           << ", token type: " << tokenTypeToString(currToken.type)
+    //           << ", lexeme: '" << currToken.lexeme
+    //           << "', line: " << currToken.line
+    //           << ", column: " << currToken.column << "\n";
     if (!check(TokenType::IDENTIFIER)) {
       error("Expected identifier after type/pointer specifiers");
     }
-    string varName = advance().lexeme; // variable name
+    string varName = advance().lexeme; // e.g. 'main'
+
     vector<ExpressionPtr> dimensions;
     while (match(TokenType::DELIM_LBRACKET)) {
       ExpressionPtr dimExpr = parseExpression();
@@ -56,7 +64,7 @@ Parser::parseVariableDeclarationWithType(const string &givenType) {
     }
     decls.push_back(std::make_shared<VariableDeclaration>(
         type, varName, initializer, dimensions));
-  } while (match(TokenType::DELIM_COMMA));
+  } while (match(TokenType::DELIM_COMMA)); // multiple declarations in one line?
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");
   if (decls.size() == 1)
@@ -65,10 +73,6 @@ Parser::parseVariableDeclarationWithType(const string &givenType) {
     return std::make_shared<MultiVariableDeclaration>(decls);
 }
 
-// parseFunctionDeclarationWithType:
-//   when we already have e.g. "int" or "void*" as the base type, parse a
-//   function name (identifier), then the parameter list, then either a function
-//   body or semicolon.
 DeclarationPtr
 Parser::parseFunctionDeclarationWithType(const string &givenType) {
   string returnType = givenType;
@@ -80,10 +84,9 @@ Parser::parseFunctionDeclarationWithType(const string &givenType) {
   consume(TokenType::DELIM_RPAREN, "Expected ')' after parameter list");
 
   // If next is a semicolon => forward-decl
-  if (match(TokenType::DELIM_SEMICOLON)) {
+  if (match(TokenType::DELIM_SEMICOLON))
     return std::make_shared<FunctionDeclaration>(returnType, funcName,
                                                  parameters, nullptr);
-  }
 
   // Otherwise parse the function body
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin function body");
@@ -93,6 +96,10 @@ Parser::parseFunctionDeclarationWithType(const string &givenType) {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
+  // NEW: If we've reached the end of tokens, return nullptr.
+  if (isAtEnd())
+    return nullptr;
+
   // 1) Check for struct / union / enum definitions
   if (peek().lexeme == "struct") {
     return parseStructDeclaration();
@@ -115,12 +122,10 @@ DeclarationPtr Parser::parseDeclaration() {
   }
 
   // 2) Otherwise, if the next token is a recognized type specifier:
-  //    (int, float, char, double, bool, or "void" or user-defined "ident
-  //    struct"? etc.)
+  //    (int, float, char, double, bool)
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
       check(TokenType::KW_BOOL)) {
-    // e.g. int main(...) or int x; ...
     size_t save = current;
     string baseType;
     if (match(TokenType::KW_INT))
@@ -133,48 +138,42 @@ DeclarationPtr Parser::parseDeclaration() {
       baseType = "double";
     else if (match(TokenType::KW_BOOL))
       baseType = "bool";
-    // consume any pointer tokens
-    string type = consumePointerTokens(*this, baseType);
 
-    // Now see if next is an identifier => function or variable
+    string typeStr = consumePointerTokens(*this, baseType);
+    // Debug: print token info before checking for identifier.
+    if (isAtEnd()) {
+      error("Unexpected end of tokens when expecting function/variable name");
+    }
+    auto nextToken = peek();
+    std::cerr << "DEBUG: After consuming type, expecting identifier; index "
+              << current << ", token: " << tokenTypeToString(nextToken.type)
+              << " ('" << nextToken.lexeme << "')\n";
     if (!check(TokenType::IDENTIFIER))
       error("Expected identifier after type/pointer specifiers");
-
-    // If next+1 is '(' => function
     if (current + 1 < tokens.size() &&
         tokens[current + 1].type == TokenType::DELIM_LPAREN) {
-      return parseFunctionDeclarationWithType(type);
+      return parseFunctionDeclarationWithType(typeStr);
     } else {
-      return parseVariableDeclarationWithType(type);
+      return parseVariableDeclarationWithType(typeStr);
     }
   }
 
-  // 3) Possibly "void" as a type (recognized as IDENTIFIER in the token stream)
-  //    We handle it as a special case if (peek().lexeme == "void")
+  // 3) Possibly "void" as a type
   if (!isAtEnd() && peek().lexeme == "void") {
-    // treat it as type "void"
-    advance(); // consume the "void" token (which is currently IDENTIFIER type)
+    advance(); // consume "void"
     string baseType = "void";
-
-    // consume pointer tokens: e.g. "void*"
     baseType = consumePointerTokens(*this, baseType);
-
-    // Now must see an identifier => function name or variable name
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!check(TokenType::IDENTIFIER))
       error("Expected function or variable name after 'void'");
-    }
-    // If next+1 is '(' => function
     if (current + 1 < tokens.size() &&
         tokens[current + 1].type == TokenType::DELIM_LPAREN) {
       return parseFunctionDeclarationWithType(baseType);
     } else {
-      // e.g. "void var;" is not valid in standard C unless we do "void *var;"
-      // but we'll parse anyway:
       return parseVariableDeclarationWithType(baseType);
     }
   }
 
-  // 4) Possibly "struct" or "union" or "enum" typed
+  // 4) Possibly "struct", "union", or "enum" typed
   if (peek().lexeme == "struct") {
     return parseStructDeclaration();
   }
@@ -185,7 +184,6 @@ DeclarationPtr Parser::parseDeclaration() {
     return parseEnumDeclaration();
   }
 
-  // Otherwise, we do not recognize the next token as a declaration
   error("Expected declaration");
   return nullptr;
 }

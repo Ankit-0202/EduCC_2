@@ -14,7 +14,10 @@ static std::string tokensToString(const std::vector<Token> &tokens) {
   for (const auto &tok : tokens) {
     oss << tok.lexeme << " ";
   }
-  return oss.str();
+  std::string result = oss.str();
+  if (!result.empty() && result.back() == ' ')
+    result.pop_back(); // remove trailing space
+  return result;
 }
 
 MacroExpander::MacroExpander() : currentFile("<unknown>") {

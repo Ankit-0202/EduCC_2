@@ -4,8 +4,6 @@
 
 // --- Basic Parser utilities and the overall parse() method ---
 
-Parser::Parser(const std::vector<Token> &tokens) : tokens(tokens), current(0) {}
-
 bool Parser::match(TokenType type) {
   if (check(type)) {
     advance();

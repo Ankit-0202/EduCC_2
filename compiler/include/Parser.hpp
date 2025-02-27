@@ -2,20 +2,49 @@
 #define PARSER_HPP
 
 #include "AST.hpp"
+#include "Lexer.hpp"
 #include "Token.hpp"
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
+// The Parser class converts a token stream into an AST.
 class Parser {
 public:
-  // Constructor: takes the token stream.
-  Parser(const std::vector<Token> &tokens);
+  // Constructor: takes a vector of tokens.
+  Parser(const std::vector<Token> &tokens) : tokens(tokens), current(0) {}
 
-  // Main entry point to start parsing.
+  // Parse the tokens and return the AST representing the program.
   std::shared_ptr<Program> parse();
 
-  // Expression parsing methods.
+  // Utility functions:
+  // If the next token matches the given type, consume it and return true.
+  bool match(TokenType type);
+
+  // Check if the next token is of the given type.
+  bool check(TokenType type) const;
+
+  // Consume and return the next token.
+  Token advance();
+
+  // Return the next token without consuming it.
+  Token peek() const;
+
+  // Return true if we have consumed all tokens.
+  bool isAtEnd() const;
+
+  // NEW: Return the last token that was consumed.
+  Token previous() const { return tokens[current - 1]; }
+
+  // Consume the next token if it matches the given type; otherwise, throw an
+  // error.
+  void consume(TokenType type, const std::string &errorMessage);
+
+  // Report an error with a given message.
+  void error(const std::string &message) const;
+
+  // Expression parsing functions:
   ExpressionPtr parseExpression();
   ExpressionPtr parseAssignment();
   ExpressionPtr parseLogicalOr();
@@ -58,15 +87,6 @@ public:
   std::vector<Token> tokens;
 
   size_t current;
-
-  // Utility parsing methods.
-  Token advance();
-  bool match(TokenType type);
-  bool check(TokenType type) const;
-  Token peek() const;
-  bool isAtEnd() const;
-  void consume(TokenType type, const std::string &errorMessage);
-  void error(const std::string &message) const;
 };
 
 #endif // PARSER_HPP

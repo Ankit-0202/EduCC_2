@@ -9,6 +9,8 @@
 class SemanticAnalyzer {
 public:
   SemanticAnalyzer();
+
+  // Analyze the given program.
   void analyze(const std::shared_ptr<Program> &program);
   void analyzeDeclaration(const DeclarationPtr &decl);
   void analyzeVariableDeclaration(
@@ -22,9 +24,13 @@ public:
   void analyzeStructDeclaration(
       const std::shared_ptr<StructDeclaration> &structDecl);
   void analyzeStatement(const StatementPtr &stmt);
-  void analyzeExpression(const ExpressionPtr &expr);
+  void analyzeExpression(const std::shared_ptr<Expression> &expr);
 
   const SymbolTable &getSymbolTable() const { return symbolTable; }
+  // Analyze an expression.
+  // Updated: Return a non-const reference to the symbol table so that
+  // functions like declare() can be called.
+  SymbolTable &getSymbolTable() { return symbolTable; }
 
 private:
   SymbolTable symbolTable;

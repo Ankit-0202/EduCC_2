@@ -139,20 +139,51 @@ Token Lexer::number() {
     lexeme.push_back(get());
   }
   Token token;
-  if (!sawDot) {
+  if (!sawDot)
     token.type = TokenType::LITERAL_INT;
-  } else if (isFloatLiteral) {
+  else if (isFloatLiteral)
     token.type = TokenType::LITERAL_FLOAT;
-  } else {
+  else
     token.type = TokenType::LITERAL_DOUBLE;
-  }
   token.lexeme = lexeme;
   token.line = startLine;
   token.column = startColumn;
   return token;
 }
 
-// Updated character() function to handle escape sequences and include quotes.
+// NEW: Helper for scanning string literals.
+Token Lexer::stringLiteral() {
+  int startLine = line;
+  int startColumn = column;
+  std::string lexeme;
+  // Consume the opening double quote.
+  char openingQuote = get();
+  lexeme.push_back(openingQuote);
+  while (!isAtEnd()) {
+    char c = peek();
+    if (c == '\"') {
+      lexeme.push_back(get()); // Consume the closing quote.
+      Token token;
+      token.type = TokenType::LITERAL_STRING;
+      token.lexeme = lexeme;
+      token.line = startLine;
+      token.column = startColumn;
+      return token;
+    }
+    // Handle escape sequences.
+    if (c == '\\') {
+      lexeme.push_back(get()); // Consume backslash.
+      if (!isAtEnd()) {
+        lexeme.push_back(get());
+      }
+    } else {
+      lexeme.push_back(get());
+    }
+  }
+  throw std::runtime_error("Lexer Error: Unterminated string literal at line " +
+                           std::to_string(line));
+}
+
 Token Lexer::character() {
   int startLine = line;
   int startColumn = column;
@@ -189,7 +220,6 @@ Token Lexer::character() {
   // Expect closing single quote.
   if (isAtEnd() || get() != '\'')
     throw std::runtime_error("Lexer Error: Unterminated char literal");
-  // Build lexeme including the quotes.
   lexeme = "'" + std::string(1, ch) + "'";
   Token token;
   token.type = TokenType::LITERAL_CHAR;
@@ -344,22 +374,16 @@ Token Lexer::opOrDelim() {
     token.type = TokenType::DELIM_COLON;
     break;
   case '.': {
-    token.type = TokenType::DOT; // dot operator
+    token.type = TokenType::DOT;
     break;
   }
-  // NEW: Add support for '[' and ']'
+  // Support for '[' and ']'
   case '[':
     token.type = TokenType::DELIM_LBRACKET;
     break;
   case ']':
     token.type = TokenType::DELIM_RBRACKET;
     break;
-  case '\'':
-    // If we encounter a single quote here, backtrack and let character() handle
-    // it.
-    currentPos--;
-    column--;
-    return character();
   default:
     token.type = TokenType::UNKNOWN;
     break;
@@ -377,7 +401,10 @@ std::vector<Token> Lexer::tokenize() {
     if (isAtEnd())
       break;
     char c = peek();
-    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+    // Check for string literal first.
+    if (c == '\"') {
+      tokens.push_back(stringLiteral());
+    } else if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
       tokens.push_back(identifier());
     } else if (std::isdigit(static_cast<unsigned char>(c))) {
       tokens.push_back(number());

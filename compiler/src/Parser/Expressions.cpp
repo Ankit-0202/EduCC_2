@@ -234,24 +234,40 @@ ExpressionPtr Parser::parsePostfix() {
 
 // Primary (literals, identifiers, grouping)
 ExpressionPtr Parser::parsePrimary() {
+  // Handle numeric and character literals.
   if (match(TokenType::LITERAL_INT)) {
-    int value = std::stoi(tokens[current - 1].lexeme);
+    int value = std::stoi(previous().lexeme);
     return std::make_shared<Literal>(value);
   }
   if (match(TokenType::LITERAL_FLOAT)) {
-    float value = std::stof(tokens[current - 1].lexeme);
+    float value = std::stof(previous().lexeme);
     return std::make_shared<Literal>(value);
   }
   if (match(TokenType::LITERAL_DOUBLE)) {
-    double value = std::stod(tokens[current - 1].lexeme);
+    double value = std::stod(previous().lexeme);
     return std::make_shared<Literal>(value);
   }
   if (match(TokenType::LITERAL_CHAR)) {
-    char value = tokens[current - 1].lexeme[0];
-    return std::make_shared<Literal>(value);
+    // Assuming a char literal token already contains the quotes.
+    // Here we simply extract the character between the quotes.
+    string lex = previous().lexeme;
+    if (lex.length() >= 3)
+      return std::make_shared<Literal>(lex[1]);
+    else
+      throw runtime_error("Invalid char literal");
   }
+  // NEW: Handle string literals.
+  if (match(TokenType::LITERAL_STRING)) {
+    // Remove the surrounding quotes.
+    string lex = previous().lexeme;
+    if (lex.size() >= 2)
+      return std::make_shared<ASTStringLiteral>(lex.substr(1, lex.size() - 2));
+    else
+      return std::make_shared<ASTStringLiteral>("");
+  }
+  // Handle identifiers (or function calls).
   if (match(TokenType::IDENTIFIER)) {
-    string name = tokens[current - 1].lexeme;
+    string name = previous().lexeme;
     if (name == "true") {
       return std::make_shared<Literal>(true);
     }

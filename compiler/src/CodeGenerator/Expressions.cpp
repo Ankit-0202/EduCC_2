@@ -213,109 +213,97 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     llvm::Value *lhs = generateExpression(binExpr->left);
     llvm::Value *rhs = generateExpression(binExpr->right);
 
-    // If needed, do int->float or float->int conversions
+    // Perform conversions if types differ.
     if (lhs->getType() != rhs->getType()) {
-      if (lhs->getType()->isIntegerTy() &&
-          rhs->getType()->isFloatingPointTy()) {
+      if (lhs->getType()->isIntegerTy() && rhs->getType()->isFloatingPointTy())
         lhs = builder.CreateSIToFP(lhs, rhs->getType(), "sitofp");
-      } else if (lhs->getType()->isFloatingPointTy() &&
-                 rhs->getType()->isIntegerTy()) {
+      else if (lhs->getType()->isFloatingPointTy() &&
+               rhs->getType()->isIntegerTy())
         rhs = builder.CreateSIToFP(rhs, lhs->getType(), "sitofp");
-      } else {
+      else
         throw runtime_error("Incompatible types in binary expression.");
-      }
     }
 
-    if (binExpr->op == "+") {
+    if (binExpr->op == "+")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFAdd(lhs, rhs, "faddtmp")
                  : builder.CreateAdd(lhs, rhs, "addtmp");
-    } else if (binExpr->op == "-") {
+    else if (binExpr->op == "-")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFSub(lhs, rhs, "fsubtmp")
                  : builder.CreateSub(lhs, rhs, "subtmp");
-    } else if (binExpr->op == "*") {
+    else if (binExpr->op == "*")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFMul(lhs, rhs, "fmultmp")
                  : builder.CreateMul(lhs, rhs, "multmp");
-    } else if (binExpr->op == "/") {
+    else if (binExpr->op == "/")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFDiv(lhs, rhs, "fdivtmp")
                  : builder.CreateSDiv(lhs, rhs, "divtmp");
-    } else if (binExpr->op == "%") {
-      if (lhs->getType()->isIntegerTy()) {
+    else if (binExpr->op == "%") {
+      if (lhs->getType()->isIntegerTy())
         return builder.CreateSRem(lhs, rhs, "modtmp");
-      } else if (lhs->getType()->isFloatingPointTy()) {
+      else if (lhs->getType()->isFloatingPointTy())
         return builder.CreateFRem(lhs, rhs, "modtmp");
-      } else {
+      else
         throw runtime_error("Unsupported types for modulo operator.");
-      }
-    } else if (binExpr->op == "<=") {
+    } else if (binExpr->op == "<=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOLE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSLE(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "<") {
+    else if (binExpr->op == "<")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOLT(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSLT(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == ">=") {
+    else if (binExpr->op == ">=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOGE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSGE(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == ">") {
+    else if (binExpr->op == ">")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOGT(lhs, rhs, "cmptmp")
                  : builder.CreateICmpSGT(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "==") {
+    else if (binExpr->op == "==")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpOEQ(lhs, rhs, "cmptmp")
                  : builder.CreateICmpEQ(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "!=") {
+    else if (binExpr->op == "!=")
       return lhs->getType()->isFloatingPointTy()
                  ? builder.CreateFCmpONE(lhs, rhs, "cmptmp")
                  : builder.CreateICmpNE(lhs, rhs, "cmptmp");
-    } else if (binExpr->op == "&&") {
-      if (!lhs->getType()->isIntegerTy(1)) {
+    else if (binExpr->op == "&&") {
+      if (!lhs->getType()->isIntegerTy(1))
         lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0),
                                    "booltmp");
-      }
-      if (!rhs->getType()->isIntegerTy(1)) {
+      if (!rhs->getType()->isIntegerTy(1))
         rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0),
                                    "booltmp");
-      }
       return builder.CreateAnd(lhs, rhs, "andtmp");
     } else if (binExpr->op == "||") {
-      if (!lhs->getType()->isIntegerTy(1)) {
+      if (!lhs->getType()->isIntegerTy(1))
         lhs = builder.CreateICmpNE(lhs, ConstantInt::get(lhs->getType(), 0),
                                    "booltmp");
-      }
-      if (!rhs->getType()->isIntegerTy(1)) {
+      if (!rhs->getType()->isIntegerTy(1))
         rhs = builder.CreateICmpNE(rhs, ConstantInt::get(rhs->getType(), 0),
                                    "booltmp");
-      }
       return builder.CreateOr(lhs, rhs, "ortmp");
-    } else if (binExpr->op == "&") {
+    } else if (binExpr->op == "&")
       return builder.CreateAnd(lhs, rhs, "bitandtmp");
-    } else if (binExpr->op == "^") {
+    else if (binExpr->op == "^")
       return builder.CreateXor(lhs, rhs, "bitxortmp");
-    } else if (binExpr->op == "|") {
+    else if (binExpr->op == "|")
       return builder.CreateOr(lhs, rhs, "bitor_tmp");
-    } else if (binExpr->op == "<<") {
+    else if (binExpr->op == "<<")
       return builder.CreateShl(lhs, rhs, "shltmp");
-    } else if (binExpr->op == ">>") {
+    else if (binExpr->op == ">>")
       return builder.CreateAShr(lhs, rhs, "shrtmp");
-    }
     throw runtime_error("Unsupported binary operator: " + binExpr->op);
-  }
-
-  else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
+  } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
     llvm::Value *ptr = generateLValue(assign->lhs);
     llvm::Value *rhsVal = generateExpression(assign->rhs);
     builder.CreateStore(rhsVal, ptr);
     return rhsVal;
-  }
-
-  else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
+  } else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
     llvm::Value *operandVal = generateExpression(castExpr->operand);
     llvm::Type *targetType = getLLVMType(castExpr->castType);
     llvm::Type *operandType = operandVal->getType();
@@ -331,45 +319,49 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
              targetType->isFloatingPointTy())
       return builder.CreateFPCast(operandVal, targetType, "casttmp");
     throw runtime_error("Unsupported cast conversion.");
-  }
-
-  else if (auto unExpr = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
-    // e.g. *x, &x, -x, +x, !x
+  } else if (auto unExpr = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
     if (unExpr->op == "-") {
       llvm::Value *operand = generateExpression(unExpr->operand);
-      if (operand->getType()->isFloatingPointTy())
-        return builder.CreateFNeg(operand, "fnegtmp");
-      else
-        return builder.CreateNeg(operand, "negtmp");
+      return operand->getType()->isFloatingPointTy()
+                 ? builder.CreateFNeg(operand, "fnegtmp")
+                 : builder.CreateNeg(operand, "negtmp");
     } else if (unExpr->op == "+") {
       return generateExpression(unExpr->operand);
     } else if (unExpr->op == "!") {
       llvm::Value *operand = generateExpression(unExpr->operand);
-      if (!operand->getType()->isIntegerTy(1)) {
+      if (!operand->getType()->isIntegerTy(1))
         operand = builder.CreateICmpNE(
             operand, ConstantInt::get(operand->getType(), 0), "booltmp");
-      }
       return builder.CreateNot(operand, "nottmp");
     } else if (unExpr->op == "&") {
-      // Address-of => pointer to an lvalue
       return generateLValue(unExpr->operand);
     } else if (unExpr->op == "*") {
-      // Dereference => load
       llvm::Value *ptrVal = generateExpression(unExpr->operand);
       if (!ptrVal->getType()->isPointerTy())
         throw runtime_error("Dereference operator on non-pointer type.");
-      // figure out the underlying type from AST
       string baseType = getEffectiveType(*this, unExpr->operand);
-      if (!baseType.empty() && baseType.back() == '*') {
+      if (!baseType.empty() && baseType.back() == '*')
         baseType.pop_back();
-      }
       llvm::Type *pointeeTy = getLLVMType(baseType);
       return builder.CreateLoad(pointeeTy, ptrVal, "deref");
     }
     throw runtime_error("Unsupported unary operator: " + unExpr->op);
   }
-
-  else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+  // NEW: Handle string literal expressions.
+  else if (auto strLit = std::dynamic_pointer_cast<ASTStringLiteral>(expr)) {
+    std::string s = strLit->value;
+    Constant *strConstant = ConstantDataArray::getString(context, s, true);
+    static int stringCount = 0;
+    std::string varName = "str_literal_" + std::to_string(stringCount++);
+    GlobalVariable *strVar =
+        new GlobalVariable(*module, strConstant->getType(), true,
+                           GlobalValue::PrivateLinkage, strConstant, varName);
+    Constant *zero = ConstantInt::get(Type::getInt32Ty(context), 0);
+    vector<Constant *> indices = {zero, zero};
+    Constant *strPtr =
+        ConstantExpr::getGetElementPtr(strConstant->getType(), strVar, indices);
+    return strPtr;
+  } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     switch (lit->type) {
     case Literal::LiteralType::Int:
       return ConstantInt::get(Type::getInt32Ty(context), lit->intValue);
@@ -384,36 +376,26 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     default:
       throw runtime_error("Cannot infer type for literal.");
     }
-  }
-
-  else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    // maybe an enum constant?
+  } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
     auto enumIt = enumRegistry.find(id->name);
-    if (enumIt != enumRegistry.end()) {
+    if (enumIt != enumRegistry.end())
       return ConstantInt::get(Type::getInt32Ty(context), enumIt->second);
-    }
-    // otherwise local or global variable
     llvm::Value *v = lookupLocalVar(id->name);
     if (v) {
-      if (auto allocaInst = dyn_cast<AllocaInst>(v)) {
+      if (auto allocaInst = dyn_cast<AllocaInst>(v))
         return builder.CreateLoad(allocaInst->getAllocatedType(), v,
                                   id->name.c_str());
-      }
       return v;
     }
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
-    if (gVar) {
+    if (gVar)
       return builder.CreateLoad(gVar->getValueType(), gVar, id->name.c_str());
-    }
     throw runtime_error("Undefined identifier: " + id->name);
-  }
-
-  else if (auto arrAccess = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
+  } else if (auto arrAccess = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
     llvm::Value *elemPtr = generateArrayElementPointer(arrAccess);
     PointerType *ptrType = dyn_cast<PointerType>(elemPtr->getType());
     if (!ptrType)
       throw runtime_error("Array access did not return a pointer.");
-
     if (auto baseId = std::dynamic_pointer_cast<Identifier>(arrAccess->base)) {
       auto it = declaredTypes.find(baseId->name);
       if (it == declaredTypes.end())
@@ -428,41 +410,38 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     } else {
       throw runtime_error("Array access on non-identifier base not supported.");
     }
-  }
-
-  else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+  } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
     llvm::Value *ptr = generateLValue(expr);
     string effType = getEffectiveType(*this, expr);
     llvm::Type *loadType = getLLVMType(effType);
     return builder.CreateLoad(loadType, ptr, "memberload");
-  }
-
-  else if (auto call = std::dynamic_pointer_cast<FunctionCall>(expr)) {
-    // if function returns void => no named result
+  } else if (auto call = std::dynamic_pointer_cast<FunctionCall>(expr)) {
     llvm::Function *callee = module->getFunction(call->functionName);
     if (!callee) {
-      throw runtime_error("Undefined function in IR: " + call->functionName);
+      if (call->functionName == "printf") {
+        llvm::Type *int32Ty = Type::getInt32Ty(context);
+        llvm::Type *charPtrTy =
+            PointerType::getUnqual(Type::getInt8Ty(context));
+        vector<llvm::Type *> printfArgs = {charPtrTy};
+        llvm::FunctionType *printfType =
+            FunctionType::get(int32Ty, printfArgs, true);
+        callee = Function::Create(printfType, Function::ExternalLinkage,
+                                  "printf", module.get());
+      } else {
+        throw runtime_error("Undefined function in IR: " + call->functionName);
+      }
     }
     vector<llvm::Value *> args;
-    for (auto &argExpr : call->arguments) {
+    for (auto &argExpr : call->arguments)
       args.push_back(generateExpression(argExpr));
-    }
-    // Check if the callee is void => no result
     if (callee->getReturnType()->isVoidTy()) {
       builder.CreateCall(callee, args);
-      // Return a dummy int32 0 (or maybe "undef") so there's an Expression
-      // result
       return ConstantInt::get(Type::getInt32Ty(context), 0);
     } else {
-      // Non-void => we can name it "calltmp"
       return builder.CreateCall(callee, args, "calltmp");
     }
-  }
-
-  else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
-    // e.g. x++ as an rvalue => produce the old value
+  } else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
     return generateLValue(expr);
   }
-
   throw runtime_error("Unsupported expression type in generateExpression().");
 }

@@ -16,10 +16,12 @@ private:
   char peekNext() const;
   char get();
   void skipWhitespace();
+
   Token identifier();
   Token number();
   Token character();
   Token opOrDelim();
+  Token stringLiteral();
 
   std::string sourceCode;
   size_t currentPos;

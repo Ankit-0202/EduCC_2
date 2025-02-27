@@ -4,16 +4,18 @@
 #include "TypeRegistry.hpp"
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using std::runtime_error;
 using std::string;
+using std::vector;
 
 // Free helper function to infer the type (as a string) of an expression.
-// It uses the analyzer's symbol table via the public getter, and the global
+// It uses the analyzer's symbol table via its public interface, and the global
 // unionRegistry and structRegistry.
 namespace {
-string inferExpressionType(const std::shared_ptr<Expression> &expr,
-                           const SemanticAnalyzer &analyzer) {
+std::string inferExpressionType(const std::shared_ptr<Expression> &expr,
+                                SemanticAnalyzer &analyzer) {
   // For a literal, return its type.
   if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     switch (lit->type) {
@@ -28,15 +30,20 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
     case Literal::LiteralType::Bool:
       return "bool";
     default:
-      throw runtime_error("Cannot infer type for literal");
+      throw std::runtime_error("Cannot infer type for literal");
     }
   }
-  // For an identifier, look it up using the public getter.
+  // NEW: Handle string literal.
+  if (auto strLit = std::dynamic_pointer_cast<llvm::StringLiteral>(expr)) {
+    // We choose to treat string literals as "char*".
+    return "char*";
+  }
+  // For an identifier, look it up.
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
     auto symOpt = analyzer.getSymbolTable().lookup(id->name);
     if (!symOpt.has_value())
-      throw runtime_error("Semantic Analysis Error: Undefined variable '" +
-                          id->name + "'.");
+      throw std::runtime_error("Semantic Analysis Error: Undefined variable '" +
+                               id->name + "'.");
     return symOpt.value().type;
   }
   // For a member access, first infer the type of the base.
@@ -79,9 +86,31 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
   // For a function call, return the function's return type.
   if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
     auto symOpt = analyzer.getSymbolTable().lookup(funcCall->functionName);
-    if (!symOpt.has_value())
-      throw runtime_error("Semantic Analysis Error: Undefined function '" +
-                          funcCall->functionName + "'.");
+    // If the function is not found, allow external functions such as printf.
+    if (!symOpt.has_value() || !symOpt.value().isFunction) {
+      if (funcCall->functionName == "printf") {
+        // Declare an external function for printf with return type "int".
+        // (Note: printf is variadic, so we bypass the parameter count check
+        // below.)
+        Symbol externalFunc("printf", "int", true, vector<string>(), true);
+        analyzer.getSymbolTable().declare(externalFunc);
+        // Retrieve the newly declared symbol.
+        symOpt = analyzer.getSymbolTable().lookup("printf");
+      } else {
+        throw runtime_error("Semantic Analysis Error: Undefined function '" +
+                            funcCall->functionName + "'.");
+      }
+    }
+    // For printf, skip parameter count check (since it is variadic).
+    if (funcCall->functionName != "printf" &&
+        symOpt.value().parameterTypes.size() != funcCall->arguments.size()) {
+      throw runtime_error("Semantic Analysis Error: Function '" +
+                          funcCall->functionName +
+                          "' called with an incorrect number of arguments.");
+    }
+    for (const auto &arg : funcCall->arguments) {
+      analyzer.analyzeExpression(arg);
+    }
     return symOpt.value().type;
   }
   throw runtime_error(
@@ -89,17 +118,21 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
 }
 } // namespace
 
-void SemanticAnalyzer::analyzeExpression(
-    const std::shared_ptr<Expression> &expr) {
+void SemanticAnalyzer::analyzeExpression(const ExpressionPtr &expr) {
   if (!expr)
     return;
 
-  // NEW: If the expression is an initializer list (used for array
-  // initializers), analyze each element in the list.
+  // NEW: Handle initializer lists.
   if (auto initList = std::dynamic_pointer_cast<InitializerList>(expr)) {
     for (const auto &elem : initList->elements) {
       analyzeExpression(elem);
     }
+    return;
+  }
+
+  // NEW: Handle string literal expressions.
+  if (auto strLit = std::dynamic_pointer_cast<llvm::StringLiteral>(expr)) {
+    // No further analysis required.
     return;
   }
 
@@ -160,36 +193,22 @@ void SemanticAnalyzer::analyzeExpression(
     analyzeExpression(arrAccess->base);
     analyzeExpression(arrAccess->index);
   } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
-    // No analysis needed for literals.
+    // No analysis needed for numeric or char literals.
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
     if (!getSymbolTable().lookup(id->name).has_value()) {
-      throw runtime_error(
+      throw std::runtime_error(
           "Semantic Analysis Error: Undefined variable or function '" +
           id->name + "'.");
     }
   } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
-    // For assignments with member access targets, verify the left-hand side.
     if (auto mem = std::dynamic_pointer_cast<MemberAccess>(assign->lhs)) {
-      // Calling inferExpressionType ensures the member access is valid.
       inferExpressionType(assign->lhs, *this);
     }
     analyzeExpression(assign->rhs);
   } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
-    auto sym = getSymbolTable().lookup(funcCall->functionName);
-    if (!sym.has_value() || !sym->isFunction) {
-      throw runtime_error("Semantic Analysis Error: Undefined function '" +
-                          funcCall->functionName + "'.");
-    }
-    if (sym->parameterTypes.size() != funcCall->arguments.size()) {
-      throw runtime_error("Semantic Analysis Error: Function '" +
-                          funcCall->functionName +
-                          "' called with an incorrect number of arguments.");
-    }
-    for (const auto &arg : funcCall->arguments) {
-      analyzeExpression(arg);
-    }
+    (void)inferExpressionType(expr, *this); // triggers function lookup, etc.
   } else {
-    throw runtime_error(
+    throw std::runtime_error(
         "Semantic Analysis Error: Unsupported expression type encountered.");
   }
 }
