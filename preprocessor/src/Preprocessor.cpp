@@ -1,21 +1,19 @@
 #include "Preprocessor.hpp"
 #include "ConditionalProcessor.hpp"
-#include "IncludeProcessor.hpp"
 #include "MacroExpander.hpp"
 #include <filesystem>
-#include <fstream> // Added to provide std::ifstream
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
-#include <unordered_map>
 
 namespace fs = std::filesystem;
 
 Preprocessor::Preprocessor(const std::vector<std::string> &sysPaths,
                            const std::vector<std::string> &userPaths)
-    : systemIncludePaths(sysPaths), userIncludePaths(userPaths) {
-  // (You might store these for use in IncludeProcessor in a more advanced
-  // design.)
-}
+    : systemIncludePaths(sysPaths), userIncludePaths(userPaths),
+      includeProcessor(sysPaths,
+                       userPaths) // Initialize the IncludeProcessor member.
+{}
 
 std::string Preprocessor::readFile(const std::string &path) {
   std::ifstream in(path);
@@ -46,17 +44,20 @@ std::string Preprocessor::processIncludes(const std::string &source,
       std::string headerName = trimmed.substr(start + 1, end - start - 1);
       bool isSystem = (trimmed[start] == '<');
 
-      // Build a list of directories to search.
+      // Build the search directories.
+      // For system includes, use the configured systemIncludePaths.
+      // For quoted includes, automatically add the current file's directory,
+      // then all the userIncludePaths.
       std::vector<std::string> searchDirs;
       if (isSystem) {
-        searchDirs = {"/usr/include", "/usr/local/include"};
+        searchDirs = systemIncludePaths;
       } else {
         // For quoted includes, first search the directory of the current file…
         fs::path currentDir = fs::path(currentFile).parent_path();
         if (!currentDir.empty())
           searchDirs.push_back(currentDir.string());
-        // …then fall back to the current working directory.
-        searchDirs.push_back(".");
+        for (const auto &dir : userIncludePaths)
+          searchDirs.push_back(dir);
       }
 
       // Look for the header in the search directories.
@@ -120,7 +121,7 @@ std::string Preprocessor::processFile(const std::string &path) {
     return fileCache[path];
 
   std::string source = readFile(path);
-  // First, process includes.
+  // Process includes, then conditionals, then macros.
   std::string included = processIncludes(source, path);
   // Then process conditionals.
   std::string conditioned = processConditionals(included);

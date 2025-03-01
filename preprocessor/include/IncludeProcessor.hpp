@@ -3,16 +3,24 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 class IncludeProcessor {
 public:
-  // Given an include directive (e.g. #include "file.h" or <stdio.h>),
-  // return the absolute path of the file if found.
+  IncludeProcessor(const std::vector<std::string> &systemPaths,
+                   const std::vector<std::string> &userPaths);
+
+  // Given a header file name, return its full path if found.
+  // The 'isSystem' flag indicates whether to use system include directories.
   std::optional<std::string> locateHeader(const std::string &filename,
                                           bool isSystem);
 
-  // Read a file’s contents into a string.
+  // Reads the file content from a given path.
   std::string readFile(const std::string &path);
+
+private:
+  std::vector<std::string> m_systemPaths;
+  std::vector<std::string> m_userPaths;
 };
 
 #endif // INCLUDE_PROCESSOR_HPP

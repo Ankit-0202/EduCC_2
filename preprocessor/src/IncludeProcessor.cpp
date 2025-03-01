@@ -3,18 +3,21 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace fs = std::filesystem;
 
+IncludeProcessor::IncludeProcessor(const std::vector<std::string> &systemPaths,
+                                   const std::vector<std::string> &userPaths)
+    : m_systemPaths(systemPaths), m_userPaths(userPaths) {}
+
 std::optional<std::string>
 IncludeProcessor::locateHeader(const std::string &filename, bool isSystem) {
-  // For simplicity, we search in a fixed set of directories.
-  // In a full implementation, these would be configurable.
   std::vector<std::string> searchDirs;
   if (isSystem) {
-    searchDirs = {"/usr/include", "/usr/local/include"};
+    searchDirs = m_systemPaths;
   } else {
-    searchDirs = {"."};
+    searchDirs = m_userPaths;
   }
   for (const auto &dir : searchDirs) {
     fs::path trial = fs::path(dir) / filename;

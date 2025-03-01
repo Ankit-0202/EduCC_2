@@ -1,17 +1,15 @@
 #ifndef PREPROCESSOR_HPP
 #define PREPROCESSOR_HPP
 
-#include "ConditionalProcessor.hpp"
-#include "IncludeProcessor.hpp" // Include the full definition instead of a forward declaration
-#include "MacroExpander.hpp"
+#include "IncludeProcessor.hpp"
 #include <string>
-#include <unordered_map> // Added to provide std::unordered_map
+#include <unordered_map>
 #include <vector>
 
 class Preprocessor {
 public:
-  Preprocessor(const std::vector<std::string> &systemIncludePaths,
-               const std::vector<std::string> &userIncludePaths);
+  Preprocessor(const std::vector<std::string> &sysPaths,
+               const std::vector<std::string> &userPaths);
 
   // Preprocess the file at topLevelPath and return the fully expanded source.
   std::string preprocess(const std::string &topLevelPath);
@@ -40,8 +38,8 @@ private:
   // Helper: read file from disk.
   std::string readFile(const std::string &path);
 
-  // The include processor.
-  class IncludeProcessor includeProcessor;
+  // A configurable IncludeProcessor.
+  IncludeProcessor includeProcessor;
 };
 
 #endif // PREPROCESSOR_HPP
