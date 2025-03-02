@@ -42,7 +42,11 @@ void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
 }
 
 void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
-  if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
+  // NEW: Handle typedef declarations.
+  if (auto typedefDecl = std::dynamic_pointer_cast<TypedefDeclaration>(decl)) {
+    analyzeTypedefDeclaration(typedefDecl);
+  } else if (auto varDecl =
+                 std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
     analyzeVariableDeclaration(varDecl);
   } else if (auto funcDecl =
                  std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
@@ -64,6 +68,13 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
     throw runtime_error(
         "Semantic Analysis Error: Unknown declaration type encountered.");
   }
+}
+
+void SemanticAnalyzer::analyzeTypedefDeclaration(
+    const std::shared_ptr<TypedefDeclaration> &typedefDecl) {
+  // Register the typedef alias so that later type lookups resolve the
+  // underlying type.
+  typedefRegistry[typedefDecl->alias] = typedefDecl->originalType;
 }
 
 void SemanticAnalyzer::analyzeVariableDeclaration(
@@ -209,7 +220,7 @@ void SemanticAnalyzer::analyzeStructDeclaration(
 }
 
 vector<string> SemanticAnalyzer::getParameterTypes(
-    const std::vector<std::pair<string, string>> &parameters) {
+    const vector<std::pair<string, string>> &parameters) {
   vector<string> types;
   for (const auto &param : parameters) {
     types.push_back(param.first);

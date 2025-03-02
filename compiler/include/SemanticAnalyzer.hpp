@@ -23,6 +23,8 @@ public:
       const std::shared_ptr<StructDeclaration> &structDecl);
   void analyzeStatement(const StatementPtr &stmt);
   void analyzeExpression(const ExpressionPtr &expr);
+  void analyzeTypedefDeclaration(
+      const std::shared_ptr<TypedefDeclaration> &typedefDecl);
 
   const SymbolTable &getSymbolTable() const { return symbolTable; }
 

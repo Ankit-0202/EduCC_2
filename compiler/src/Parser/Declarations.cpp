@@ -1,5 +1,7 @@
 #include "AST.hpp"
 #include "Parser.hpp"
+#include "TypeRegistry.hpp" // Needed for typedefRegistry
+#include <algorithm>
 #include <iostream> // For debug printing if needed
 #include <optional>
 #include <stdexcept>
@@ -29,17 +31,93 @@ static string consumePointerTokens(Parser &parser, const string &baseType) {
   return newType;
 }
 
-// parseVariableDeclarationWithType:
-//   parses a variable declaration given an already-determined type name (like
-//   "int" or "void*").
+// Helper: returns true if the token is considered a valid identifier.
+// We accept tokens of type IDENTIFIER or LITERAL_STRING.
+static bool isIdentifier(const Token &token) {
+  return (token.type == TokenType::IDENTIFIER ||
+          token.type == TokenType::LITERAL_STRING);
+}
+
+// NEW: Helper: returns true if the token represents a type specifier.
+// We consider built-in type keywords and typedef aliases (represented as
+// LITERAL_STRING whose lexeme is found in typedefRegistry).
+static bool isTypeSpecifierToken(const Token &token) {
+  if (token.type == TokenType::KW_INT || token.type == TokenType::KW_FLOAT ||
+      token.type == TokenType::KW_CHAR || token.type == TokenType::KW_DOUBLE ||
+      token.type == TokenType::KW_BOOL || token.type == TokenType::KW_ENUM ||
+      token.type == TokenType::KW_UNION || token.type == TokenType::KW_STRUCT)
+    return true;
+  if (token.type == TokenType::LITERAL_STRING) {
+    if (typedefRegistry.find(token.lexeme) != typedefRegistry.end())
+      return true;
+  }
+  return false;
+}
+
+// NEW: parseTypedefDeclaration:
+//    Parses a typedef declaration of the form:
+//       typedef <underlying-type> <alias>;
+// For example: typedef int myint;
+DeclarationPtr Parser::parseTypedefDeclaration() {
+  // Consume the 'typedef' keyword.
+  advance(); // consume KW_TYPEDEF
+
+  string baseType;
+  if (match(TokenType::KW_INT))
+    baseType = "int";
+  else if (match(TokenType::KW_FLOAT))
+    baseType = "float";
+  else if (match(TokenType::KW_CHAR))
+    baseType = "char";
+  else if (match(TokenType::KW_DOUBLE))
+    baseType = "double";
+  else if (match(TokenType::KW_BOOL))
+    baseType = "bool";
+  else if (!isAtEnd() && peek().lexeme == "void") {
+    advance();
+    baseType = "void";
+  } else if (peek().lexeme == "struct") {
+    advance(); // consume "struct"
+    if (isIdentifier(peek()))
+      baseType = "struct " + advance().lexeme;
+    else
+      error("Typedef error: Inline struct must have a tag.");
+  } else if (peek().lexeme == "union") {
+    advance(); // consume "union"
+    if (isIdentifier(peek()))
+      baseType = "union " + advance().lexeme;
+    else
+      error("Typedef error: Anonymous union cannot be typedef'd.");
+  } else if (peek().lexeme == "enum") {
+    advance(); // consume "enum"
+    if (isIdentifier(peek()))
+      baseType = "enum " + advance().lexeme;
+    else
+      error("Typedef error: Anonymous enum cannot be typedef'd.");
+  } else {
+    error("Typedef error: Unknown type specifier in typedef declaration.");
+  }
+
+  string underlyingType = consumePointerTokens(*this, baseType);
+
+  if (!isIdentifier(peek()))
+    error("Typedef error: Expected identifier for typedef alias.");
+  string aliasName = advance().lexeme;
+  consume(TokenType::DELIM_SEMICOLON, "Expected ';' after typedef declaration");
+
+  // Immediately register the typedef alias for use in subsequent parsing.
+  typedefRegistry[aliasName] = underlyingType;
+
+  return std::make_shared<TypedefDeclaration>(underlyingType, aliasName);
+}
+
 DeclarationPtr
 Parser::parseVariableDeclarationWithType(const string &givenType) {
   string type = givenType;
   vector<std::shared_ptr<VariableDeclaration>> decls;
   do {
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!isIdentifier(peek()))
       error("Expected identifier after type/pointer specifiers");
-    }
     string varName = advance().lexeme; // variable name
     vector<ExpressionPtr> dimensions;
     while (match(TokenType::DELIM_LBRACKET)) {
@@ -65,27 +143,23 @@ Parser::parseVariableDeclarationWithType(const string &givenType) {
     return std::make_shared<MultiVariableDeclaration>(decls);
 }
 
-// parseFunctionDeclarationWithType:
-//   when we already have e.g. "int" or "void*" as the base type, parse a
-//   function name (identifier), then the parameter list, then either a function
-//   body or semicolon.
 DeclarationPtr
 Parser::parseFunctionDeclarationWithType(const string &givenType) {
   string returnType = givenType;
-  if (!check(TokenType::IDENTIFIER))
+  if (!isIdentifier(peek()))
     error("Expected function name after return type");
   string funcName = advance().lexeme; // function name
   consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
   vector<std::pair<string, string>> parameters = parseParameters();
   consume(TokenType::DELIM_RPAREN, "Expected ')' after parameter list");
 
-  // If next is a semicolon => forward-decl
+  // If next is a semicolon => forward-declaration.
   if (match(TokenType::DELIM_SEMICOLON)) {
     return std::make_shared<FunctionDeclaration>(returnType, funcName,
                                                  parameters, nullptr);
   }
 
-  // Otherwise parse the function body
+  // Otherwise parse the function body.
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin function body");
   StatementPtr body = parseCompoundStatement();
   return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters,
@@ -93,18 +167,23 @@ Parser::parseFunctionDeclarationWithType(const string &givenType) {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-  // 1) Check for struct / union / enum definitions
+  // NEW: Check for typedef declarations first.
+  if (peek().type == TokenType::KW_TYPEDEF || peek().lexeme == "typedef") {
+    return parseTypedefDeclaration();
+  }
+
+  // 1) Check for struct / union / enum definitions.
   if (peek().lexeme == "struct") {
     return parseStructDeclaration();
   }
-  if (check(TokenType::KW_UNION)) {
+  if (peek().type == TokenType::KW_UNION) {
     return parseUnionDeclaration();
   }
-  if (check(TokenType::KW_ENUM)) {
+  if (peek().type == TokenType::KW_ENUM) {
     size_t save = current;
     advance(); // consume KW_ENUM
     if (check(TokenType::DELIM_LBRACE) ||
-        (check(TokenType::IDENTIFIER) &&
+        (isIdentifier(peek()) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
       current = save;
@@ -114,78 +193,69 @@ DeclarationPtr Parser::parseDeclaration() {
     }
   }
 
-  // 2) Otherwise, if the next token is a recognized type specifier:
-  //    (int, float, char, double, bool, or "void" or user-defined "ident
-  //    struct"? etc.)
-  if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-      check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-      check(TokenType::KW_BOOL)) {
-    // e.g. int main(...) or int x; ...
+  // 2) Otherwise, if the next token is a recognized type specifier.
+  if (isTypeSpecifierToken(peek())) {
     size_t save = current;
     string baseType;
-    if (match(TokenType::KW_INT))
+    // If the token is a built-in type keyword, match it.
+    if (peek().type == TokenType::KW_INT) {
+      match(TokenType::KW_INT);
       baseType = "int";
-    else if (match(TokenType::KW_FLOAT))
+    } else if (peek().type == TokenType::KW_FLOAT) {
+      match(TokenType::KW_FLOAT);
       baseType = "float";
-    else if (match(TokenType::KW_CHAR))
+    } else if (peek().type == TokenType::KW_CHAR) {
+      match(TokenType::KW_CHAR);
       baseType = "char";
-    else if (match(TokenType::KW_DOUBLE))
+    } else if (peek().type == TokenType::KW_DOUBLE) {
+      match(TokenType::KW_DOUBLE);
       baseType = "double";
-    else if (match(TokenType::KW_BOOL))
+    } else if (peek().type == TokenType::KW_BOOL) {
+      match(TokenType::KW_BOOL);
       baseType = "bool";
-    // consume any pointer tokens
+    } else {
+      // Otherwise, it must be a typedef alias.
+      baseType = advance().lexeme;
+    }
     string type = consumePointerTokens(*this, baseType);
 
-    // Now see if next is an identifier => function or variable
-    if (!check(TokenType::IDENTIFIER))
+    // Now, expect an identifier (function or variable name).
+    if (!isIdentifier(peek()))
       error("Expected identifier after type/pointer specifiers");
 
-    // If next+1 is '(' => function
-    if (current + 1 < tokens.size() &&
-        tokens[current + 1].type == TokenType::DELIM_LPAREN) {
+    // If the token following the identifier is "(" then it is a function
+    // declaration.
+    if (current + 1 < tokens.size() && tokens[current + 1].lexeme == "(")
       return parseFunctionDeclarationWithType(type);
-    } else {
+    else
       return parseVariableDeclarationWithType(type);
-    }
   }
 
-  // 3) Possibly "void" as a type (recognized as IDENTIFIER in the token stream)
-  //    We handle it as a special case if (peek().lexeme == "void")
+  // 3) Possibly "void" as a type.
   if (!isAtEnd() && peek().lexeme == "void") {
-    // treat it as type "void"
-    advance(); // consume the "void" token (which is currently IDENTIFIER type)
+    advance(); // consume "void"
     string baseType = "void";
-
-    // consume pointer tokens: e.g. "void*"
     baseType = consumePointerTokens(*this, baseType);
-
-    // Now must see an identifier => function name or variable name
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!(isIdentifier(peek()) || peek().lexeme == "(")) {
       error("Expected function or variable name after 'void'");
     }
-    // If next+1 is '(' => function
-    if (current + 1 < tokens.size() &&
-        tokens[current + 1].type == TokenType::DELIM_LPAREN) {
+    if (current + 1 < tokens.size() && tokens[current + 1].lexeme == "(")
       return parseFunctionDeclarationWithType(baseType);
-    } else {
-      // e.g. "void var;" is not valid in standard C unless we do "void *var;"
-      // but we'll parse anyway:
+    else
       return parseVariableDeclarationWithType(baseType);
-    }
   }
 
-  // 4) Possibly "struct" or "union" or "enum" typed
+  // 4) Possibly "struct" or "union" or "enum" typed.
   if (peek().lexeme == "struct") {
     return parseStructDeclaration();
   }
-  if (check(TokenType::KW_UNION)) {
+  if (peek().type == TokenType::KW_UNION) {
     return parseUnionDeclaration();
   }
-  if (check(TokenType::KW_ENUM)) {
+  if (peek().type == TokenType::KW_ENUM) {
     return parseEnumDeclaration();
   }
 
-  // Otherwise, we do not recognize the next token as a declaration
   error("Expected declaration");
   return nullptr;
 }
@@ -343,8 +413,8 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
 
 DeclarationPtr Parser::parseFunctionDeclaration() {
   // This version is used when no pointer tokens have yet been consumed.
-  // We also might add "if match(TokenType::KW_VOID)) baseType= "void"; here" if
-  // we like, but let's keep it consistent with parseDeclaration().
+  // We also might add "if (match(TokenType::KW_VOID)) baseType= 'void';" here
+  // if we like, but let's keep it consistent with parseDeclaration().
   string returnType;
   if (match(TokenType::KW_INT))
     returnType = "int";

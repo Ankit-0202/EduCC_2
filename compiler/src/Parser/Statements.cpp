@@ -1,5 +1,8 @@
+// compiler/src/Parser/Statements.cpp
+
 #include "AST.hpp"
 #include "Parser.hpp"
+#include "TypeRegistry.hpp"
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -10,7 +13,38 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
+// NEW: Helper function to check if a token represents a type specifier.
+// It returns true for built-in type keywords and for tokens that are
+// identifiers (or literal strings) that match a typedef alias (stored in
+// typedefRegistry).
+static bool isTypeSpecifierToken(const Token &token) {
+  if (token.type == TokenType::KW_INT || token.type == TokenType::KW_FLOAT ||
+      token.type == TokenType::KW_CHAR || token.type == TokenType::KW_DOUBLE ||
+      token.type == TokenType::KW_BOOL || token.type == TokenType::KW_ENUM ||
+      token.type == TokenType::KW_UNION || token.type == TokenType::KW_STRUCT)
+    return true;
+  // Check for typedef alias stored as LITERAL_STRING.
+  if (token.type == TokenType::LITERAL_STRING) {
+    if (typedefRegistry.find(token.lexeme) != typedefRegistry.end())
+      return true;
+  }
+  // Also check if the token is an IDENTIFIER that matches a typedef alias.
+  if (token.type == TokenType::IDENTIFIER) {
+    if (typedefRegistry.find(token.lexeme) != typedefRegistry.end())
+      return true;
+  }
+  return false;
+}
+
 StatementPtr Parser::parseStatement() {
+  // NEW: Check for typedef declarations in statement context.
+  if (peek().lexeme == "typedef")
+    return std::make_shared<DeclarationStatement>(parseTypedefDeclaration());
+
+  if (check(TokenType::KW_TYPEDEF) ||
+      (check(TokenType::LITERAL_STRING) && peek().lexeme == "typedef"))
+    return std::make_shared<DeclarationStatement>(parseTypedefDeclaration());
+
   // First check for control-flow keywords.
   if (match(TokenType::KW_IF)) {
     return parseIfStatement();
@@ -27,35 +61,12 @@ StatementPtr Parser::parseStatement() {
     return parseCompoundStatement();
   }
 
-  // Check for a local enum definition in statement context.
-  // e.g. enum { RED, GREEN } col;
-  if (check(TokenType::KW_ENUM)) {
-    size_t save = current;
-    advance(); // consume KW_ENUM
-    // If we see an inline definition, revert and parse the enum as a
-    // declaration.
-    if (check(TokenType::DELIM_LBRACE) ||
-        (check(TokenType::IDENTIFIER) &&
-         (current + 1 < tokens.size() &&
-          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current = save; // revert
-      DeclarationPtr enumDecl = parseEnumDeclaration();
-      return std::make_shared<DeclarationStatement>(enumDecl);
-    } else {
-      // not an inline definition => e.g. enum Color col;
-      current = save; // revert pointer to handle in variable-decl logic below
-    }
-  }
-
-  // Otherwise, if the next token is a type specifier...
-  if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-      check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-      check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
-      check(TokenType::KW_UNION) ||
-      (check(TokenType::KW_STRUCT) ||
-       (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
+  // NEW: Instead of checking only for built-in type keywords, we use our
+  // helper.
+  if (isTypeSpecifierToken(peek())) {
     return parseVariableDeclarationStatement();
   }
+
   // Fall back to an expression statement.
   return parseExpressionStatement();
 }
@@ -180,7 +191,6 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     type = "double";
   else if (match(TokenType::KW_BOOL))
     type = "bool";
-
   // Or match enum
   else if (match(TokenType::KW_ENUM)) {
     // If this is an inline enum definition, revert and parse the enum
@@ -193,13 +203,12 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     }
-    // Otherwise, forward–declared enum: consume the tag token.
+    // Otherwise, forward-declared enum: consume the tag token.
     string tag = "";
     if (check(TokenType::IDENTIFIER))
       tag = advance().lexeme; // Consume the enum tag (e.g. "Color")
     type = "enum " + tag;
   }
-
   // Or match union
   else if (match(TokenType::KW_UNION)) {
     if (!check(TokenType::IDENTIFIER))
@@ -207,7 +216,6 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     string tag = advance().lexeme;
     type = "union " + tag;
   }
-
   // Or match struct
   else if (match(TokenType::KW_STRUCT) ||
            (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
@@ -218,6 +226,11 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     }
     string tag = advance().lexeme;
     type = "struct " + tag;
+  }
+  // NEW: Handle typedef alias identifiers.
+  else if (check(TokenType::IDENTIFIER) &&
+           typedefRegistry.find(peek().lexeme) != typedefRegistry.end()) {
+    type = typedefRegistry[advance().lexeme];
   } else {
     error("Expected type specifier in variable declaration");
   }
@@ -231,44 +244,28 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   // We can now parse the variable name(s)
   vector<std::shared_ptr<VariableDeclarationStatement>> decls;
   do {
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!(peek().type == TokenType::IDENTIFIER ||
+          peek().type == TokenType::LITERAL_STRING))
       error("Expected variable name in variable declaration");
-    }
-    Token varNameToken = advance(); // e.g. 'col'
-    string varName = varNameToken.lexeme;
-
-    // check for array dimensions
+    string varName = advance().lexeme; // variable name
     vector<ExpressionPtr> dimensions;
     while (match(TokenType::DELIM_LBRACKET)) {
-      if (check(TokenType::DELIM_RBRACKET)) {
-        // unsized array; consume the closing bracket without an expression.
-        advance();
-      } else {
-        ExpressionPtr dimExpr = parseExpression();
-        consume(TokenType::DELIM_RBRACKET,
-                "Expected ']' after array dimension");
-        dimensions.push_back(dimExpr);
-      }
+      ExpressionPtr dimExpr = parseExpression();
+      consume(TokenType::DELIM_RBRACKET, "Expected ']' after array dimension");
+      dimensions.push_back(dimExpr);
     }
-
-    // optional initializer
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
-      if (check(TokenType::DELIM_LBRACE)) {
+      if (check(TokenType::DELIM_LBRACE))
         initializer = parseInitializerList();
-      } else {
+      else
         initializer = parseExpression();
-      }
     }
-
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
         type, varName, initializer, dimensions));
-
   } while (match(TokenType::DELIM_COMMA));
-
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");
-
   if (decls.size() == 1)
     return decls[0];
   else

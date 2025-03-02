@@ -4,6 +4,8 @@
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Instructions.h>

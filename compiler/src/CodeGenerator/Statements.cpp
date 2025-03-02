@@ -784,7 +784,8 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
 
 //
 // getLLVMType: convert a string type (which may contain pointer stars) into an
-// LLVM type. Updated to support multiple pointer levels (e.g. "int **").
+// LLVM type. Updated to support multiple pointer levels (e.g. "int **") and
+// typedef resolution.
 llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   // Count the number of '*' characters.
   int pointerCount = 0;
@@ -804,6 +805,11 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     baseType.erase(baseType.begin());
   while (!baseType.empty() && isspace(baseType.back()))
     baseType.pop_back();
+
+  // NEW: Resolve typedef alias if it exists.
+  if (typedefRegistry.find(baseType) != typedefRegistry.end()) {
+    baseType = typedefRegistry[baseType];
+  }
 
   llvm::Type *ty = nullptr;
   if (baseType == "int")

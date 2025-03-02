@@ -49,6 +49,8 @@ static std::string tokenTypeToString(TokenType type) {
     return "KW_UNION";
   case TokenType::KW_STRUCT:
     return "KW_STRUCT";
+  case TokenType::KW_TYPEDEF:
+    return "KW_TYPEDEF";
   case TokenType::OP_PLUS:
     return "OP_PLUS";
   case TokenType::OP_MINUS:

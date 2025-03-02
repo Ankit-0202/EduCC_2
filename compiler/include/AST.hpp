@@ -321,4 +321,13 @@ public:
   }
 };
 
+class TypedefDeclaration : public Declaration {
+public:
+  std::string originalType; // the underlying type (including any pointer stars)
+  std::string alias;        // the new type name
+
+  TypedefDeclaration(const std::string &originalType, const std::string &alias)
+      : originalType(originalType), alias(alias) {}
+};
+
 #endif // AST_HPP

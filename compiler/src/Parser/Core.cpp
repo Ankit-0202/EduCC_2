@@ -2,12 +2,45 @@
 #include <stdexcept>
 #include <string>
 
-// --- Basic Parser utilities and the overall parse() method ---
-
 Parser::Parser(const std::vector<Token> &tokens) : tokens(tokens), current(0) {}
 
 bool Parser::match(TokenType type) {
   if (check(type)) {
+    advance();
+    return true;
+  }
+  // Fallback: if the expected token is an operator or punctuation and its
+  // lexeme matches.
+  std::string expected;
+  switch (type) {
+  case TokenType::OP_ASSIGN:
+    expected = "=";
+    break;
+  case TokenType::DELIM_SEMICOLON:
+    expected = ";";
+    break;
+  case TokenType::DELIM_LPAREN:
+    expected = "(";
+    break;
+  case TokenType::DELIM_RPAREN:
+    expected = ")";
+    break;
+  case TokenType::DELIM_LBRACE:
+    expected = "{";
+    break;
+  case TokenType::DELIM_RBRACE:
+    expected = "}";
+    break;
+  case TokenType::DELIM_LBRACKET:
+    expected = "[";
+    break;
+  case TokenType::DELIM_RBRACKET:
+    expected = "]";
+    break;
+  default:
+    break;
+  }
+  if (!expected.empty() && peek().lexeme == expected) {
     advance();
     return true;
   }
@@ -17,7 +50,14 @@ bool Parser::match(TokenType type) {
 bool Parser::check(TokenType type) const {
   if (isAtEnd())
     return false;
-  return peek().type == type;
+  Token t = peek();
+  if (t.type == type)
+    return true;
+  // NEW: If we expect a semicolon but the token’s lexeme is ";" then accept it.
+  if (type == TokenType::DELIM_SEMICOLON && t.lexeme == ";")
+    return true;
+  // (You can add additional cases here if needed.)
+  return false;
 }
 
 Token Parser::advance() {
@@ -41,6 +81,40 @@ bool Parser::isAtEnd() const {
 
 void Parser::consume(TokenType type, const std::string &errorMessage) {
   if (check(type)) {
+    advance();
+    return;
+  }
+  // Fallback: if we expect punctuation or an operator, check its lexeme.
+  std::string expected;
+  switch (type) {
+  case TokenType::OP_ASSIGN:
+    expected = "=";
+    break;
+  case TokenType::DELIM_SEMICOLON:
+    expected = ";";
+    break;
+  case TokenType::DELIM_LPAREN:
+    expected = "(";
+    break;
+  case TokenType::DELIM_RPAREN:
+    expected = ")";
+    break;
+  case TokenType::DELIM_LBRACE:
+    expected = "{";
+    break;
+  case TokenType::DELIM_RBRACE:
+    expected = "}";
+    break;
+  case TokenType::DELIM_LBRACKET:
+    expected = "[";
+    break;
+  case TokenType::DELIM_RBRACKET:
+    expected = "]";
+    break;
+  default:
+    break;
+  }
+  if (!expected.empty() && peek().lexeme == expected) {
     advance();
     return;
   }

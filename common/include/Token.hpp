@@ -22,6 +22,7 @@ enum class TokenType {
   KW_ENUM,
   KW_UNION,
   KW_STRUCT,
+  KW_TYPEDEF,
 
   // Operators
   OP_PLUS,

@@ -46,6 +46,7 @@ public:
 
   // Declaration parsing methods.
   DeclarationPtr parseDeclaration();
+  DeclarationPtr parseTypedefDeclaration();
   DeclarationPtr parseStructDeclaration();
   DeclarationPtr parseVariableDeclaration();
   DeclarationPtr parseVariableDeclarationWithType(const std::string &givenType);

@@ -1,5 +1,7 @@
 #include "AST.hpp"
 #include "Parser.hpp"
+#include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -234,9 +236,20 @@ ExpressionPtr Parser::parsePostfix() {
 
 // Primary (literals, identifiers, grouping)
 ExpressionPtr Parser::parsePrimary() {
+  // Try to parse an integer literal.
   if (match(TokenType::LITERAL_INT)) {
     int value = std::stoi(tokens[current - 1].lexeme);
     return std::make_shared<Literal>(value);
+  }
+  // Fallback: if the token is of type DOT but its lexeme consists only of
+  // digits, treat it as an integer literal.
+  if (peek().type == TokenType::DOT) {
+    string lex = peek().lexeme;
+    if (!lex.empty() && std::all_of(lex.begin(), lex.end(), ::isdigit)) {
+      advance();
+      int value = std::stoi(lex);
+      return std::make_shared<Literal>(value);
+    }
   }
   if (match(TokenType::LITERAL_FLOAT)) {
     float value = std::stof(tokens[current - 1].lexeme);
