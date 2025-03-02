@@ -1,26 +1,327 @@
 #include "ConditionalProcessor.hpp"
+#include "BuiltinMacros.hpp"
+#include <algorithm>
 #include <cctype>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 
+// The ConditionalProcessor uses a stack of states to track whether
+// the current block is active.
 ConditionalProcessor::ConditionalProcessor() {
-  // Start with a default active state.
   stateStack.push({true, false});
+  // Predefine built‑in macros required by many system header conditionals.
+  macroDefinitions["__STDC_WANT_LIB_EXT1__"] = "0";
+  macroDefinitions["__STRICT_ANSI__"] = "0";
+  // Remove the trailing L so that numeric conversion succeeds.
+  macroDefinitions["__DARWIN_C_LEVEL"] = "200809";
+  macroDefinitions["__DARWIN_C_FULL"] = "900000";
 }
 
-bool ConditionalProcessor::isConditionalDirective(const std::string &line) {
-  std::string trimmed = line;
+namespace {
+
+// Forward declarations for our recursive‑descent parser functions.
+int parseExpression(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseLogicalOr(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseLogicalAnd(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseEquality(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseRelational(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseAdditive(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseMultiplicative(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseUnary(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parsePrimary(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions);
+int parseBuiltinMacro(const std::string &s, size_t &pos);
+
+void skipSpaces(const std::string &s, size_t &pos) {
+  while (pos < s.size() && std::isspace(s[pos]))
+    pos++;
+}
+
+int parseUnary(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  skipSpaces(s, pos);
+  if (pos < s.size()) {
+    if (s[pos] == '!') {
+      pos++;
+      int value = parseUnary(s, pos, macroDefinitions);
+      return !value;
+    } else if (s[pos] == '-') {
+      pos++;
+      int value = parseUnary(s, pos, macroDefinitions);
+      return -value;
+    } else if (s[pos] == '+') {
+      pos++;
+      return parseUnary(s, pos, macroDefinitions);
+    }
+  }
+  return parsePrimary(s, pos, macroDefinitions);
+}
+
+int parseAdditive(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  int lhs = parseUnary(s, pos, macroDefinitions);
+  skipSpaces(s, pos);
+  while (pos < s.size() && (s[pos] == '+' || s[pos] == '-')) {
+    char op = s[pos];
+    pos++;
+    int rhs = parseUnary(s, pos, macroDefinitions);
+    lhs = (op == '+') ? (lhs + rhs) : (lhs - rhs);
+    skipSpaces(s, pos);
+  }
+  return lhs;
+}
+
+int parseRelational(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  int lhs = parseAdditive(s, pos, macroDefinitions);
+  skipSpaces(s, pos);
+  while (true) {
+    if (s.compare(pos, 2, ">=") == 0) {
+      pos += 2;
+      int rhs = parseAdditive(s, pos, macroDefinitions);
+      lhs = (lhs >= rhs) ? 1 : 0;
+    } else if (s.compare(pos, 2, "<=") == 0) {
+      pos += 2;
+      int rhs = parseAdditive(s, pos, macroDefinitions);
+      lhs = (lhs <= rhs) ? 1 : 0;
+    } else if (pos < s.size() && s[pos] == '>') {
+      pos++;
+      int rhs = parseAdditive(s, pos, macroDefinitions);
+      lhs = (lhs > rhs) ? 1 : 0;
+    } else if (pos < s.size() && s[pos] == '<') {
+      pos++;
+      int rhs = parseAdditive(s, pos, macroDefinitions);
+      lhs = (lhs < rhs) ? 1 : 0;
+    } else {
+      break;
+    }
+    skipSpaces(s, pos);
+  }
+  return lhs;
+}
+
+int parseEquality(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  int lhs = parseRelational(s, pos, macroDefinitions);
+  skipSpaces(s, pos);
+  while (true) {
+    if (s.compare(pos, 2, "==") == 0) {
+      pos += 2;
+      int rhs = parseRelational(s, pos, macroDefinitions);
+      lhs = (lhs == rhs) ? 1 : 0;
+    } else if (s.compare(pos, 2, "!=") == 0) {
+      pos += 2;
+      int rhs = parseRelational(s, pos, macroDefinitions);
+      lhs = (lhs != rhs) ? 1 : 0;
+    } else {
+      break;
+    }
+    skipSpaces(s, pos);
+  }
+  return lhs;
+}
+
+int parseLogicalAnd(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  int lhs = parseEquality(s, pos, macroDefinitions);
+  skipSpaces(s, pos);
+  while (s.compare(pos, 2, "&&") == 0) {
+    pos += 2;
+    int rhs = parseEquality(s, pos, macroDefinitions);
+    lhs = (lhs && rhs) ? 1 : 0;
+    skipSpaces(s, pos);
+  }
+  return lhs;
+}
+
+int parseLogicalOr(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  int lhs = parseLogicalAnd(s, pos, macroDefinitions);
+  skipSpaces(s, pos);
+  while (s.compare(pos, 2, "||") == 0) {
+    pos += 2;
+    int rhs = parseLogicalAnd(s, pos, macroDefinitions);
+    lhs = (lhs || rhs) ? 1 : 0;
+    skipSpaces(s, pos);
+  }
+  return lhs;
+}
+
+int parseExpression(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  return parseLogicalOr(s, pos, macroDefinitions);
+}
+
+int parseBuiltinMacro(const std::string &s, size_t &pos) {
+  size_t start = pos;
+  while (pos < s.size() && (std::isalnum(s[pos]) || s[pos] == '_'))
+    pos++;
+  std::string macroName = s.substr(start, pos - start);
+  skipSpaces(s, pos);
+  // Special cases: allow __has_safe_buffers and __has_ptrcheck without
+  // parentheses.
+  if ((macroName == "__has_safe_buffers" || macroName == "__has_ptrcheck") &&
+      (pos >= s.size() || s[pos] != '('))
+    return evaluateBuiltinMacro(macroName, {});
+  if (pos >= s.size() || s[pos] != '(')
+    throw std::runtime_error("Expected '(' after builtin macro " + macroName);
+  pos++; // skip '('
+  skipSpaces(s, pos);
+  std::string arg;
+  while (pos < s.size() && s[pos] != ')') {
+    arg.push_back(s[pos]);
+    pos++;
+  }
+  if (pos >= s.size() || s[pos] != ')')
+    throw std::runtime_error("Missing ')' in builtin macro " + macroName);
+  pos++; // skip ')'
+  skipSpaces(s, pos);
+  size_t argStart = arg.find_first_not_of(" \t");
+  size_t argEnd = arg.find_last_not_of(" \t");
+  if (argStart != std::string::npos && argEnd != std::string::npos)
+    arg = arg.substr(argStart, argEnd - argStart + 1);
+  if (!arg.empty() && arg.front() == '"' && arg.back() == '"')
+    arg = arg.substr(1, arg.size() - 2);
+  return evaluateBuiltinMacro(macroName, {arg});
+}
+
+int parsePrimary(
+    const std::string &s, size_t &pos,
+    const std::unordered_map<std::string, std::string> &macroDefinitions) {
+  skipSpaces(s, pos);
+  if (pos >= s.size())
+    throw std::runtime_error("Unexpected end of expression");
+
+  // Handle builtin macros starting with __has_ or __is_target_os.
+  if (s.compare(pos, 6, "__has_") == 0 ||
+      s.compare(pos, 14, "__is_target_os") == 0)
+    return parseBuiltinMacro(s, pos);
+
+  // Handle parenthesized expressions.
+  if (s[pos] == '(') {
+    pos++;
+    int value = parseExpression(s, pos, macroDefinitions);
+    skipSpaces(s, pos);
+    if (pos >= s.size() || s[pos] != ')')
+      throw std::runtime_error("Missing ')' in expression");
+    pos++;
+    return value;
+  }
+
+  // Handle defined operator.
+  if (s.compare(pos, 7, "defined") == 0) {
+    pos += 7;
+    skipSpaces(s, pos);
+    std::string macroName;
+    if (pos < s.size() && s[pos] == '(') {
+      pos++;
+      skipSpaces(s, pos);
+      while (pos < s.size() && (std::isalnum(s[pos]) || s[pos] == '_')) {
+        macroName.push_back(s[pos]);
+        pos++;
+      }
+      skipSpaces(s, pos);
+      if (pos >= s.size() || s[pos] != ')')
+        throw std::runtime_error("Missing ')' in defined operator");
+      pos++;
+    } else {
+      while (pos < s.size() && (std::isalnum(s[pos]) || s[pos] == '_')) {
+        macroName.push_back(s[pos]);
+        pos++;
+      }
+    }
+    return (macroDefinitions.find(macroName) != macroDefinitions.end()) ? 1 : 0;
+  }
+
+  // Handle numeric literals.
+  if (std::isdigit(s[pos])) {
+    std::string number;
+    while (pos < s.size() && std::isdigit(s[pos])) {
+      number.push_back(s[pos]);
+      pos++;
+    }
+    // Skip any trailing alphabetic characters.
+    while (pos < s.size() && std::isalpha(s[pos]))
+      pos++;
+    try {
+      return std::stoi(number);
+    } catch (...) {
+      throw std::runtime_error("Invalid integer literal: " + number);
+    }
+  }
+
+  // Handle an identifier: if defined, substitute; otherwise, default to 0.
+  std::string token;
+  while (pos < s.size() && (std::isalnum(s[pos]) || s[pos] == '_')) {
+    token.push_back(s[pos]);
+    pos++;
+  }
+  if (token.empty())
+    throw std::runtime_error("Expected token in expression");
+  if (macroDefinitions.find(token) != macroDefinitions.end()) {
+    std::string val = macroDefinitions.at(token);
+    // Remove a trailing 'L' or 'l' if present.
+    if (!val.empty() && (val.back() == 'L' || val.back() == 'l'))
+      val.pop_back();
+    // If the macro expansion isn’t a valid numeric constant, return 0.
+    if (val.empty() ||
+        (!(std::isdigit(val[0]) || val[0] == '-' || val[0] == '+')))
+      return 0;
+    try {
+      return std::stoi(val);
+    } catch (...) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+} // end anonymous namespace
+
+int ConditionalProcessor::evaluateExpression(const std::string &expr) {
+  std::string trimmed = expr;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
-  return trimmed.compare(0, 1, "#") == 0;
+  size_t pos = 0;
+  try {
+    int result = parseExpression(trimmed, pos, macroDefinitions);
+    skipSpaces(trimmed, pos);
+    if (pos < trimmed.size() && !std::all_of(
+                                    trimmed.begin() + pos, trimmed.end(),
+                                    [](char c) { return std::isspace(c); }))
+      throw std::runtime_error("Unexpected characters at end of expression");
+    return result;
+  } catch (const std::exception &e) {
+    throw std::runtime_error("Invalid expression in conditional: " + expr +
+                             "\nReason: " + e.what());
+  }
 }
 
-//
-// recordMacro:
-//   Records a simple macro definition for use in conditional expressions.
-//   (Only handles object-like macros. Function-like macros are not used in
-//   conditionals.)
-//
 void ConditionalProcessor::recordMacro(const std::string &line) {
   std::string trimmed = line;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
@@ -46,12 +347,6 @@ void ConditionalProcessor::recordMacro(const std::string &line) {
   }
 }
 
-//
-// processNonConditionalDirective:
-//   Processes non-conditional directives (like #define and #undef) by recording
-//   the macro and then returning the line (so it can be passed to the macro
-//   expander later).
-//
 std::string
 ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
   std::string trimmed = line;
@@ -64,91 +359,24 @@ ConditionalProcessor::processNonConditionalDirective(const std::string &line) {
   return "";
 }
 
-//
-// evaluateExpression:
-//   Evaluates a very simplified constant expression for conditionals.
-//   It supports integer literals and the defined operator in the forms:
-//       defined MACRO
-//       defined(MACRO)
-//   If the expression is not an integer literal, it attempts to substitute
-//   a recorded macro definition and convert it to an integer.
-//
-int ConditionalProcessor::evaluateExpression(const std::string &expr) {
-  std::string trimmed = expr;
-  trimmed.erase(0, trimmed.find_first_not_of(" \t"));
-  // Support "defined" operator.
-  if (trimmed.compare(0, 7, "defined") == 0) {
-    size_t pos = 7;
-    while (pos < trimmed.size() && isspace(trimmed[pos]))
-      pos++;
-    std::string macroName;
-    if (pos < trimmed.size() && trimmed[pos] == '(') {
-      pos++; // skip '('
-      size_t endPos = trimmed.find(')', pos);
-      if (endPos == std::string::npos)
-        throw std::runtime_error("Missing ')' in defined operator: " + expr);
-      macroName = trimmed.substr(pos, endPos - pos);
-    } else {
-      size_t endPos = trimmed.find_first_of(" \t", pos);
-      if (endPos == std::string::npos)
-        macroName = trimmed.substr(pos);
-      else
-        macroName = trimmed.substr(pos, endPos - pos);
-    }
-    // Trim macroName.
-    size_t s = macroName.find_first_not_of(" \t");
-    size_t e = macroName.find_last_not_of(" \t");
-    if (s != std::string::npos && e != std::string::npos)
-      macroName = macroName.substr(s, e - s + 1);
-    return (macroDefinitions.find(macroName) != macroDefinitions.end()) ? 1 : 0;
-  }
-  // Otherwise, try to convert the expression to an integer.
-  try {
-    return std::stoi(trimmed);
-  } catch (...) {
-    if (macroDefinitions.find(trimmed) != macroDefinitions.end()) {
-      std::string replacement = macroDefinitions[trimmed];
-      replacement.erase(0, replacement.find_first_not_of(" \t"));
-      try {
-        return std::stoi(replacement);
-      } catch (...) {
-        throw std::runtime_error(
-            "Invalid expression after macro substitution: " + replacement);
-      }
-    }
-    throw std::runtime_error("Invalid expression in conditional: " + expr);
-  }
-}
-
-//
-// processLine:
-//   Processes a single line. For macro directives (#define, #undef), it records
-//   them and preserves the line; for conditional directives (#if, #else, etc.),
-//   it uses the evaluator.
-//
 std::string ConditionalProcessor::processLine(const std::string &line) {
   std::string trimmed = line;
   trimmed.erase(0, trimmed.find_first_not_of(" \t"));
   if (trimmed.empty())
     return line; // blank line
 
-  // If the line doesn't start with '#', output it if we're active.
-  if (trimmed[0] != '#') {
+  if (trimmed[0] != '#')
     return stateStack.top().active ? line : "";
-  }
 
-  // It is a directive.
   std::istringstream iss(trimmed);
   std::string directive;
   iss >> directive;
 
-  // --- Preserve and record macro directives ---
   if (directive == "#define" || directive == "#undef") {
     recordMacro(line);
-    return line; // Preserve for macro expansion.
+    return line;
   }
 
-  // Now handle conditional directives.
   if (directive == "#if") {
     std::string expr;
     std::getline(iss, expr);
@@ -158,14 +386,10 @@ std::string ConditionalProcessor::processLine(const std::string &line) {
     stateStack.push({active, active});
     return "";
   } else if (directive == "#ifdef") {
-    // For simplicity, assume undefined.
-    bool active = false;
-    stateStack.push({active && stateStack.top().active, active});
+    stateStack.push({false, false});
     return "";
   } else if (directive == "#ifndef") {
-    // For simplicity, assume always true.
-    bool active = true;
-    stateStack.push({active && stateStack.top().active, active});
+    stateStack.push({false, false});
     return "";
   } else if (directive == "#elif") {
     if (stateStack.empty())
@@ -194,7 +418,6 @@ std::string ConditionalProcessor::processLine(const std::string &line) {
     stateStack.pop();
     return "";
   } else {
-    // For any other directives, just remove them.
     return "";
   }
 }

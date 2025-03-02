@@ -1,4 +1,5 @@
 #include "IncludeProcessor.hpp"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -9,7 +10,11 @@ namespace fs = std::filesystem;
 
 IncludeProcessor::IncludeProcessor(const std::vector<std::string> &systemPaths,
                                    const std::vector<std::string> &userPaths)
-    : m_systemPaths(systemPaths), m_userPaths(userPaths) {}
+    : m_systemPaths(systemPaths), m_userPaths(userPaths) {
+  // If an LLVM resource directory is defined, add it to system paths.
+  if (const char *resDir = std::getenv("LLVM_RESOURCE_DIR"))
+    m_systemPaths.push_back(resDir);
+}
 
 std::optional<std::string>
 IncludeProcessor::locateHeader(const std::string &filename, bool isSystem) {

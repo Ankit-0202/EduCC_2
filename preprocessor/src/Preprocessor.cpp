@@ -3,16 +3,46 @@
 #include "MacroExpander.hpp"
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
+
+// Instead of calling llvm::sys::getResourceDir() (which no longer exists),
+// we use the compile-time macro LLVM_RESOURCE_DIR (if defined) to obtain the
+// LLVM built‑in headers resource directory.
+#include <llvm/Support/Path.h>
 
 namespace fs = std::filesystem;
+
+// Helper function: Remove line continuations (backslash-newline sequences)
+// as required by the C preprocessor standard.
+static std::string removeLineContinuations(const std::string &source) {
+  std::string result;
+  result.reserve(source.size());
+  for (size_t i = 0; i < source.size(); ++i) {
+    // If a backslash is immediately followed by a newline (or "\r\n"), skip
+    // both.
+    if (source[i] == '\\' && i + 1 < source.size() && source[i + 1] == '\n') {
+      i++; // Skip the newline
+      continue;
+    }
+    // Handle Windows-style "\r\n"
+    if (source[i] == '\\' && i + 2 < source.size() && source[i + 1] == '\r' &&
+        source[i + 2] == '\n') {
+      i += 2;
+      continue;
+    }
+    result.push_back(source[i]);
+  }
+  return result;
+}
 
 Preprocessor::Preprocessor(const std::vector<std::string> &sysPaths,
                            const std::vector<std::string> &userPaths)
     : systemIncludePaths(sysPaths), userIncludePaths(userPaths),
-      includeProcessor(sysPaths,
-                       userPaths) // Initialize the IncludeProcessor member.
+      includeProcessor(sysPaths, userPaths), topLevelDir("") // Initially empty.
 {}
 
 std::string Preprocessor::readFile(const std::string &path) {
@@ -22,7 +52,10 @@ std::string Preprocessor::readFile(const std::string &path) {
                              path);
   std::stringstream buffer;
   buffer << in.rdbuf();
-  return buffer.str();
+  // Remove any line continuations (backslash-newline) before further
+  // processing.
+  std::string rawSource = buffer.str();
+  return removeLineContinuations(rawSource);
 }
 
 std::string Preprocessor::processIncludes(const std::string &source,
@@ -45,20 +78,33 @@ std::string Preprocessor::processIncludes(const std::string &source,
       bool isSystem = (trimmed[start] == '<');
 
       // Build the search directories.
-      // For system includes, use the configured systemIncludePaths.
-      // For quoted includes, automatically add the current file's directory,
-      // then all the userIncludePaths.
       std::vector<std::string> searchDirs;
       if (isSystem) {
         searchDirs = systemIncludePaths;
       } else {
-        // For quoted includes, first search the directory of the current file…
+        // For quoted includes, first add the directory of the current file.
         fs::path currentDir = fs::path(currentFile).parent_path();
         if (!currentDir.empty())
           searchDirs.push_back(currentDir.string());
+        // Then add all user-specified directories.
         for (const auto &dir : userIncludePaths)
           searchDirs.push_back(dir);
       }
+      // Also add the top-level directory (if set) as a fallback.
+      if (!topLevelDir.empty())
+        searchDirs.push_back(topLevelDir);
+      // Finally, add the current working directory.
+      std::string cwd = fs::current_path().string();
+      searchDirs.push_back(cwd);
+
+      // NEW: Add LLVM's resource directory if LLVM_RESOURCE_DIR is defined.
+#ifdef LLVM_RESOURCE_DIR
+      std::string resourceDir = LLVM_RESOURCE_DIR;
+#else
+      std::string resourceDir = "";
+#endif
+      if (!resourceDir.empty())
+        searchDirs.push_back(resourceDir);
 
       // Look for the header in the search directories.
       std::optional<std::string> headerPath;
@@ -69,9 +115,12 @@ std::string Preprocessor::processIncludes(const std::string &source,
           break;
         }
       }
-      if (!headerPath.has_value())
-        throw std::runtime_error("Preprocessor Error: Cannot locate header: " +
-                                 headerName);
+      if (!headerPath.has_value()) {
+        std::clog << "[WARNING] Preprocessor Warning: Cannot locate header: "
+                  << headerName << ". Skipping include.\n";
+        oss << "// Skipped missing include: " << headerName << "\n";
+        continue;
+      }
 
       std::string headerContents = processFile(headerPath.value());
       oss << headerContents << "\n";
@@ -96,8 +145,6 @@ std::string Preprocessor::processConditionals(const std::string &source) {
 
 std::string Preprocessor::processMacros(const std::string &source) {
   MacroExpander expander;
-  // First, run through the source to let the expander process all macro
-  // directives.
   std::istringstream iss(source);
   std::ostringstream withoutDirectives;
   std::string line;
@@ -111,7 +158,6 @@ std::string Preprocessor::processMacros(const std::string &source) {
     }
     withoutDirectives << line << "\n";
   }
-  // Now expand macros in the rest of the source.
   return expander.expand(withoutDirectives.str());
 }
 
@@ -123,9 +169,7 @@ std::string Preprocessor::processFile(const std::string &path) {
   std::string source = readFile(path);
   // Process includes, then conditionals, then macros.
   std::string included = processIncludes(source, path);
-  // Then process conditionals.
   std::string conditioned = processConditionals(included);
-  // Finally, process macros.
   std::string expanded = processMacros(conditioned);
 
   fileCache[path] = expanded;
@@ -133,5 +177,11 @@ std::string Preprocessor::processFile(const std::string &path) {
 }
 
 std::string Preprocessor::preprocess(const std::string &topLevelPath) {
+  // Set the top-level directory from the top-level source file.
+  fs::path topDir = fs::path(topLevelPath).parent_path();
+  if (!topDir.empty())
+    topLevelDir = topDir.string();
+  else
+    topLevelDir = "";
   return processFile(topLevelPath);
 }

@@ -5,6 +5,7 @@
 #include "Preprocessor.hpp"
 #include "SemanticAnalyzer.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <llvm/Support/FileSystem.h>
@@ -149,11 +150,16 @@ int main(int argc, char *argv[]) {
   /*
    * Step 1: Preprocessing
    */
-  std::vector<std::string> systemPaths = {
-      "/usr/include", "/usr/local/include",
+  std::vector<std::string> systemPaths;
+  // If LLVM_RESOURCE_DIR is set, add it.
+  if (const char *resDir = std::getenv("LLVM_RESOURCE_DIR"))
+    systemPaths.push_back(resDir);
+  // Standard system include paths.
+  systemPaths.push_back("/usr/include");
+  systemPaths.push_back("/usr/local/include");
+  systemPaths.push_back(
       "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/"
-      "Developer/SDKs/MacOSX.sdk/usr/include" // <- using Xcode SDK path
-  };
+      "Developer/SDKs/MacOSX.sdk/usr/include");
   std::vector<std::string> userPaths = {"."};
 
   Preprocessor preprocessor(systemPaths, userPaths);
