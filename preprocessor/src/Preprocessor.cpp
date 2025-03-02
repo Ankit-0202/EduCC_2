@@ -1,6 +1,8 @@
 #include "Preprocessor.hpp"
 #include "ConditionalProcessor.hpp"
+#include "IncludeProcessor.hpp"
 #include "MacroExpander.hpp"
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -35,6 +37,31 @@ static std::string removeLineContinuations(const std::string &source) {
       continue;
     }
     result.push_back(source[i]);
+  }
+  return result;
+}
+
+/// New helper function: Runs an external preprocessor (Clang) on the given
+/// header file. This is used for system headers.
+static std::string runExternalPreprocessor(const std::string &headerPath) {
+  // Construct the command to invoke Clang's preprocessor.
+  // -E: preprocess only, -P: omit line markers, -x c-header: treat input as a C
+  // header.
+  std::string command = "clang -E -P -x c-header " + headerPath;
+  FILE *pipe = popen(command.c_str(), "r");
+  if (!pipe) {
+    throw std::runtime_error("Failed to run external preprocessor on " +
+                             headerPath);
+  }
+  char buffer[128];
+  std::string result;
+  while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+    result += buffer;
+  }
+  int rc = pclose(pipe);
+  if (rc != 0) {
+    throw std::runtime_error("External preprocessor returned error for " +
+                             headerPath);
   }
   return result;
 }
@@ -97,7 +124,7 @@ std::string Preprocessor::processIncludes(const std::string &source,
       std::string cwd = fs::current_path().string();
       searchDirs.push_back(cwd);
 
-      // NEW: Add LLVM's resource directory if LLVM_RESOURCE_DIR is defined.
+      // Add LLVM's resource directory if LLVM_RESOURCE_DIR is defined.
 #ifdef LLVM_RESOURCE_DIR
       std::string resourceDir = LLVM_RESOURCE_DIR;
 #else
@@ -122,10 +149,13 @@ std::string Preprocessor::processIncludes(const std::string &source,
         continue;
       }
 
-      // --- New behavior: Skip processing system headers ---
+      // For system headers, run the external (Clang) preprocessor.
       if (isSystem) {
-        oss << "// Skipped system header: " << headerName << "\n";
+        std::string headerContents =
+            runExternalPreprocessor(headerPath.value());
+        oss << headerContents << "\n";
       } else {
+        // For user headers, process them using our own preprocessor.
         std::string headerContents = processFile(headerPath.value());
         oss << headerContents << "\n";
       }
