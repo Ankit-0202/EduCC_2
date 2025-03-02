@@ -12,18 +12,20 @@ using std::string;
 using std::vector;
 
 // Updated helper function to check if a token represents a type specifier.
-// It now returns true for built-in type keywords, for tokens with the
-// lexeme "struct" (even if the token type is IDENTIFIER), for signed/unsigned
-// modifiers, and for tokens that match a typedef alias.
+// It now returns true for built-in type keywords, for tokens with lexemes
+// "struct", "long", "short", for signed/unsigned modifiers, and for tokens that
+// match a typedef alias.
 static bool isTypeSpecifierToken(const Token &token) {
   if (token.type == TokenType::KW_INT || token.type == TokenType::KW_FLOAT ||
       token.type == TokenType::KW_CHAR || token.type == TokenType::KW_DOUBLE ||
       token.type == TokenType::KW_BOOL || token.type == TokenType::KW_ENUM ||
       token.type == TokenType::KW_UNION || token.type == TokenType::KW_STRUCT)
     return true;
-  // NEW: Accept "struct" as a type specifier even if its token type is
-  // IDENTIFIER.
-  if (token.type == TokenType::IDENTIFIER && token.lexeme == "struct")
+  // Accept "struct", "long", and "short" as type specifiers even if the token
+  // type is IDENTIFIER.
+  if (token.type == TokenType::IDENTIFIER &&
+      (token.lexeme == "struct" || token.lexeme == "long" ||
+       token.lexeme == "short"))
     return true;
   // Accept signed/unsigned modifiers.
   if (token.type == TokenType::IDENTIFIER &&
@@ -66,23 +68,13 @@ StatementPtr Parser::parseStatement() {
     return parseCompoundStatement();
   }
 
-  // Use the helper to decide if the next token is a type specifier.
+  // Use helper to decide if the next token is a type specifier.
   if (isTypeSpecifierToken(peek())) {
     return parseVariableDeclarationStatement();
   }
 
   // Fall back to an expression statement.
   return parseExpressionStatement();
-}
-
-std::shared_ptr<CompoundStatement> Parser::parseCompoundStatement() {
-  auto compound = std::make_shared<CompoundStatement>();
-  while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
-    StatementPtr stmt = parseStatement();
-    compound->addStatement(stmt);
-  }
-  consume(TokenType::DELIM_RBRACE, "Expected '}' after compound statement");
-  return compound;
 }
 
 StatementPtr Parser::parseIfStatement() {
@@ -183,29 +175,36 @@ StatementPtr Parser::parseExpressionStatement() {
 // parseVariableDeclarationStatement for local declarations
 StatementPtr Parser::parseVariableDeclarationStatement() {
   string type;
-  // Check for a signed/unsigned modifier.
-  string modifierStr = "";
+  // Check for signed/unsigned modifier.
+  string signMod = "";
   if (!isAtEnd() &&
       (peek().lexeme == "unsigned" || peek().lexeme == "signed")) {
-    modifierStr = advance().lexeme + " ";
+    signMod = advance().lexeme + " ";
+  }
+  // Check for long/short modifier.
+  string sizeMod = "";
+  if (!isAtEnd() && (peek().lexeme == "long" || peek().lexeme == "short")) {
+    sizeMod = advance().lexeme + " ";
   }
 
   // Attempt to match basic type keywords...
   if (match(TokenType::KW_INT))
-    type = modifierStr + "int";
+    type = signMod + sizeMod + "int";
   else if (match(TokenType::KW_FLOAT)) {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to float");
+    if (!signMod.empty() || !sizeMod.empty())
+      error(
+          "Modifiers 'signed/unsigned/long/short' cannot be applied to float");
     type = "float";
   } else if (match(TokenType::KW_CHAR))
-    type = modifierStr + "char";
+    type = signMod + sizeMod + "char";
   else if (match(TokenType::KW_DOUBLE)) {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to double");
+    if (!signMod.empty() || !sizeMod.empty())
+      error(
+          "Modifiers 'signed/unsigned/long/short' cannot be applied to double");
     type = "double";
   } else if (match(TokenType::KW_BOOL)) {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to bool");
+    if (!signMod.empty() || !sizeMod.empty())
+      error("Modifiers 'signed/unsigned/long/short' cannot be applied to bool");
     type = "bool";
   }
   // Or match enum
@@ -230,8 +229,7 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     string tag = advance().lexeme;
     type = "union " + tag;
   }
-  // Or match struct (accepting a literal "struct" even if token type is
-  // IDENTIFIER)
+  // Or match struct
   else if (match(TokenType::KW_STRUCT) ||
            (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
     if (peek().lexeme == "struct")
@@ -284,4 +282,13 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     return decls[0];
   else
     return std::make_shared<MultiVariableDeclarationStatement>(decls);
+}
+
+std::shared_ptr<CompoundStatement> Parser::parseCompoundStatement() {
+  auto compound = std::make_shared<CompoundStatement>();
+  while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+    compound->addStatement(parseStatement());
+  }
+  consume(TokenType::DELIM_RBRACE, "Expected '}' after compound statement");
+  return compound;
 }

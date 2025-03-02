@@ -1,8 +1,8 @@
 #include "AST.hpp"
 #include "Parser.hpp"
-#include "TypeRegistry.hpp" // Needed for typedefRegistry
+#include "TypeRegistry.hpp"
 #include <algorithm>
-#include <iostream> // For debug printing if needed
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -31,7 +31,6 @@ static string consumePointerTokens(Parser &parser, const string &baseType) {
   return newType;
 }
 
-// Helper: returns true if the token is considered a valid identifier.
 static bool isIdentifier(const Token &token) {
   return (token.type == TokenType::IDENTIFIER ||
           token.type == TokenType::LITERAL_STRING);
@@ -59,35 +58,40 @@ static bool isTypeSpecifierToken(const Token &token) {
 // For example: typedef int myint;
 DeclarationPtr Parser::parseTypedefDeclaration() {
   // Consume the 'typedef' keyword.
-  advance(); // consume KW_TYPEDEF
+  advance(); // consume typedef
 
-  // NEW: Check for signed/unsigned modifier
-  string modifierStr = "";
+  // Check for optional signed/unsigned modifier.
+  string signMod = "";
   if (!isAtEnd() &&
       (peek().lexeme == "unsigned" || peek().lexeme == "signed")) {
-    modifierStr = advance().lexeme + " ";
+    signMod = advance().lexeme + " ";
+  }
+  // Check for optional long/short modifier.
+  string sizeMod = "";
+  if (!isAtEnd() && (peek().lexeme == "long" || peek().lexeme == "short")) {
+    sizeMod = advance().lexeme + " ";
   }
 
   string baseType;
   if (match(TokenType::KW_INT))
-    baseType = modifierStr + "int";
+    baseType = signMod + sizeMod + "int";
   else if (match(TokenType::KW_FLOAT)) {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to float");
+    if (!signMod.empty() || !sizeMod.empty())
+      error("Modifiers cannot be applied to float");
     baseType = "float";
   } else if (match(TokenType::KW_CHAR))
-    baseType = modifierStr + "char";
+    baseType = signMod + sizeMod + "char";
   else if (match(TokenType::KW_DOUBLE)) {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to double");
+    if (!signMod.empty() || !sizeMod.empty())
+      error("Modifiers cannot be applied to double");
     baseType = "double";
   } else if (match(TokenType::KW_BOOL)) {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to bool");
+    if (!signMod.empty() || !sizeMod.empty())
+      error("Modifiers cannot be applied to bool");
     baseType = "bool";
   } else if (!isAtEnd() && peek().lexeme == "void") {
-    if (!modifierStr.empty())
-      error("Modifiers 'signed/unsigned' cannot be applied to void");
+    if (!signMod.empty() || !sizeMod.empty())
+      error("Modifiers cannot be applied to void");
     advance();
     baseType = "void";
   } else if (peek().lexeme == "struct") {
@@ -113,15 +117,12 @@ DeclarationPtr Parser::parseTypedefDeclaration() {
   }
 
   string underlyingType = consumePointerTokens(*this, baseType);
-
   if (!isIdentifier(peek()))
     error("Typedef error: Expected identifier for typedef alias.");
   string aliasName = advance().lexeme;
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after typedef declaration");
 
-  // Immediately register the typedef alias for use in subsequent parsing.
   typedefRegistry[aliasName] = underlyingType;
-
   return std::make_shared<TypedefDeclaration>(underlyingType, aliasName);
 }
 
