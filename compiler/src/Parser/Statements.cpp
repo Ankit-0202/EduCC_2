@@ -1,5 +1,3 @@
-// compiler/src/Parser/Statements.cpp
-
 #include "AST.hpp"
 #include "Parser.hpp"
 #include "TypeRegistry.hpp"
@@ -13,26 +11,29 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
-// NEW: Helper function to check if a token represents a type specifier.
-// It returns true for built-in type keywords, the signed/unsigned modifiers,
-// and for tokens that are identifiers (or literal strings) that match a typedef
-// alias.
+// Updated helper function to check if a token represents a type specifier.
+// It now returns true for built-in type keywords, for tokens with the
+// lexeme "struct" (even if the token type is IDENTIFIER), for signed/unsigned
+// modifiers, and for tokens that match a typedef alias.
 static bool isTypeSpecifierToken(const Token &token) {
   if (token.type == TokenType::KW_INT || token.type == TokenType::KW_FLOAT ||
       token.type == TokenType::KW_CHAR || token.type == TokenType::KW_DOUBLE ||
       token.type == TokenType::KW_BOOL || token.type == TokenType::KW_ENUM ||
       token.type == TokenType::KW_UNION || token.type == TokenType::KW_STRUCT)
     return true;
-  // NEW: Check for signed/unsigned modifiers.
+  // NEW: Accept "struct" as a type specifier even if its token type is
+  // IDENTIFIER.
+  if (token.type == TokenType::IDENTIFIER && token.lexeme == "struct")
+    return true;
+  // Accept signed/unsigned modifiers.
   if (token.type == TokenType::IDENTIFIER &&
       (token.lexeme == "unsigned" || token.lexeme == "signed"))
     return true;
-  // Check for typedef alias stored as LITERAL_STRING.
+  // Check for typedef alias (stored as LITERAL_STRING or IDENTIFIER).
   if (token.type == TokenType::LITERAL_STRING) {
     if (typedefRegistry.find(token.lexeme) != typedefRegistry.end())
       return true;
   }
-  // Also check if the token is an IDENTIFIER that matches a typedef alias.
   if (token.type == TokenType::IDENTIFIER) {
     if (typedefRegistry.find(token.lexeme) != typedefRegistry.end())
       return true;
@@ -41,7 +42,7 @@ static bool isTypeSpecifierToken(const Token &token) {
 }
 
 StatementPtr Parser::parseStatement() {
-  // NEW: Check for typedef declarations in statement context.
+  // Check for typedef declarations in statement context.
   if (peek().lexeme == "typedef")
     return std::make_shared<DeclarationStatement>(parseTypedefDeclaration());
 
@@ -61,12 +62,11 @@ StatementPtr Parser::parseStatement() {
   } else if (match(TokenType::KW_SWITCH)) {
     return parseSwitchStatement();
   } else if (match(TokenType::DELIM_LBRACE)) {
-    // If a compound statement is encountered.
+    // Compound statement.
     return parseCompoundStatement();
   }
 
-  // NEW: Instead of checking only for built-in type keywords, we use our
-  // helper.
+  // Use the helper to decide if the next token is a type specifier.
   if (isTypeSpecifierToken(peek())) {
     return parseVariableDeclarationStatement();
   }
@@ -183,7 +183,7 @@ StatementPtr Parser::parseExpressionStatement() {
 // parseVariableDeclarationStatement for local declarations
 StatementPtr Parser::parseVariableDeclarationStatement() {
   string type;
-  // NEW: Check for signed/unsigned modifier
+  // Check for a signed/unsigned modifier.
   string modifierStr = "";
   if (!isAtEnd() &&
       (peek().lexeme == "unsigned" || peek().lexeme == "signed")) {
@@ -210,20 +210,17 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   }
   // Or match enum
   else if (match(TokenType::KW_ENUM)) {
-    // If this is an inline enum definition, revert and parse the enum
-    // declaration.
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current--; // Revert the consumption of 'enum'
+      current--; // Revert consumption of 'enum'
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     }
-    // Otherwise, forward-declared enum: consume the tag token.
     string tag = "";
     if (check(TokenType::IDENTIFIER))
-      tag = advance().lexeme; // Consume the enum tag (e.g. "Color")
+      tag = advance().lexeme;
     type = "enum " + tag;
   }
   // Or match union
@@ -233,14 +230,14 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     string tag = advance().lexeme;
     type = "union " + tag;
   }
-  // Or match struct
+  // Or match struct (accepting a literal "struct" even if token type is
+  // IDENTIFIER)
   else if (match(TokenType::KW_STRUCT) ||
            (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
     if (peek().lexeme == "struct")
-      advance(); // consume the literal "struct"
-    if (!check(TokenType::IDENTIFIER)) {
+      advance(); // consume "struct"
+    if (!check(TokenType::IDENTIFIER))
       error("Expected struct tag after 'struct' in variable declaration");
-    }
     string tag = advance().lexeme;
     type = "struct " + tag;
   }
@@ -252,19 +249,19 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     error("Expected type specifier in variable declaration");
   }
 
-  // Now consume any pointer tokens
+  // Consume any pointer tokens.
   while (check(TokenType::OP_MULTIPLY) && peek().lexeme == "*") {
     advance(); // consume '*'
     type += "*";
   }
 
-  // We can now parse the variable name(s)
+  // Parse variable name(s) and optional array dimensions/initializers.
   vector<std::shared_ptr<VariableDeclarationStatement>> decls;
   do {
     if (!(peek().type == TokenType::IDENTIFIER ||
           peek().type == TokenType::LITERAL_STRING))
       error("Expected variable name in variable declaration");
-    string varName = advance().lexeme; // variable name
+    string varName = advance().lexeme;
     vector<ExpressionPtr> dimensions;
     while (match(TokenType::DELIM_LBRACKET)) {
       ExpressionPtr dimExpr = parseExpression();

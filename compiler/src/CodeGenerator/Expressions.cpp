@@ -31,7 +31,6 @@ using std::vector;
 //
 // generateArrayElementPointer: returns a pointer to an element of an array.
 // This function is used by both generateExpression() and generateLValue().
-// It assumes that the base of the array access is an identifier.
 //
 llvm::Value *
 CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
@@ -67,14 +66,13 @@ CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
 
 //
 // generateExpression: compute the rvalue of an expression.
-// This unified version includes support for pointer arithmetic and for
-// signed/unsigned types as well as all previously implemented operators.
+// This unified version supports pointer arithmetic, signed/unsigned types,
+// and performs type conversion for floating-point operations when needed.
 //
 llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     llvm::Value *lhs = generateExpression(binExpr->left);
     llvm::Value *rhs = generateExpression(binExpr->right);
-    // For binary arithmetic operators, handle pointer arithmetic first.
     if (binExpr->op == "+") {
       if (lhs->getType()->isPointerTy() && rhs->getType()->isIntegerTy()) {
         string effectiveType = getEffectiveType(*this, binExpr->left);
@@ -128,9 +126,12 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
                  ? builder.CreateFMul(lhs, rhs, "fmultmp")
                  : builder.CreateMul(lhs, rhs, "multmp");
     } else if (binExpr->op == "/") {
-      if (lhs->getType()->isFloatingPointTy())
+      if (lhs->getType()->isFloatingPointTy()) {
+        // If right-hand side is not floating-point, convert it.
+        if (!rhs->getType()->isFloatingPointTy())
+          rhs = builder.CreateSIToFP(rhs, lhs->getType(), "sitofp");
         return builder.CreateFDiv(lhs, rhs, "fdivtmp");
-      else {
+      } else {
         string effectiveType = getEffectiveType(*this, binExpr->left);
         if (effectiveType.find("unsigned") != string::npos)
           return builder.CreateUDiv(lhs, rhs, "udivtmp");
