@@ -32,7 +32,6 @@ static string consumePointerTokens(Parser &parser, const string &baseType) {
 }
 
 // Helper: returns true if the token is considered a valid identifier.
-// We accept tokens of type IDENTIFIER or LITERAL_STRING.
 static bool isIdentifier(const Token &token) {
   return (token.type == TokenType::IDENTIFIER ||
           token.type == TokenType::LITERAL_STRING);
@@ -62,18 +61,33 @@ DeclarationPtr Parser::parseTypedefDeclaration() {
   // Consume the 'typedef' keyword.
   advance(); // consume KW_TYPEDEF
 
+  // NEW: Check for signed/unsigned modifier
+  string modifierStr = "";
+  if (!isAtEnd() &&
+      (peek().lexeme == "unsigned" || peek().lexeme == "signed")) {
+    modifierStr = advance().lexeme + " ";
+  }
+
   string baseType;
   if (match(TokenType::KW_INT))
-    baseType = "int";
-  else if (match(TokenType::KW_FLOAT))
+    baseType = modifierStr + "int";
+  else if (match(TokenType::KW_FLOAT)) {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to float");
     baseType = "float";
-  else if (match(TokenType::KW_CHAR))
-    baseType = "char";
-  else if (match(TokenType::KW_DOUBLE))
+  } else if (match(TokenType::KW_CHAR))
+    baseType = modifierStr + "char";
+  else if (match(TokenType::KW_DOUBLE)) {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to double");
     baseType = "double";
-  else if (match(TokenType::KW_BOOL))
+  } else if (match(TokenType::KW_BOOL)) {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to bool");
     baseType = "bool";
-  else if (!isAtEnd() && peek().lexeme == "void") {
+  } else if (!isAtEnd() && peek().lexeme == "void") {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to void");
     advance();
     baseType = "void";
   } else if (peek().lexeme == "struct") {

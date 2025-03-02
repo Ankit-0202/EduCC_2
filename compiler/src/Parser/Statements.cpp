@@ -14,14 +14,18 @@ using std::string;
 using std::vector;
 
 // NEW: Helper function to check if a token represents a type specifier.
-// It returns true for built-in type keywords and for tokens that are
-// identifiers (or literal strings) that match a typedef alias (stored in
-// typedefRegistry).
+// It returns true for built-in type keywords, the signed/unsigned modifiers,
+// and for tokens that are identifiers (or literal strings) that match a typedef
+// alias.
 static bool isTypeSpecifierToken(const Token &token) {
   if (token.type == TokenType::KW_INT || token.type == TokenType::KW_FLOAT ||
       token.type == TokenType::KW_CHAR || token.type == TokenType::KW_DOUBLE ||
       token.type == TokenType::KW_BOOL || token.type == TokenType::KW_ENUM ||
       token.type == TokenType::KW_UNION || token.type == TokenType::KW_STRUCT)
+    return true;
+  // NEW: Check for signed/unsigned modifiers.
+  if (token.type == TokenType::IDENTIFIER &&
+      (token.lexeme == "unsigned" || token.lexeme == "signed"))
     return true;
   // Check for typedef alias stored as LITERAL_STRING.
   if (token.type == TokenType::LITERAL_STRING) {
@@ -179,18 +183,31 @@ StatementPtr Parser::parseExpressionStatement() {
 // parseVariableDeclarationStatement for local declarations
 StatementPtr Parser::parseVariableDeclarationStatement() {
   string type;
+  // NEW: Check for signed/unsigned modifier
+  string modifierStr = "";
+  if (!isAtEnd() &&
+      (peek().lexeme == "unsigned" || peek().lexeme == "signed")) {
+    modifierStr = advance().lexeme + " ";
+  }
 
   // Attempt to match basic type keywords...
   if (match(TokenType::KW_INT))
-    type = "int";
-  else if (match(TokenType::KW_FLOAT))
+    type = modifierStr + "int";
+  else if (match(TokenType::KW_FLOAT)) {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to float");
     type = "float";
-  else if (match(TokenType::KW_CHAR))
-    type = "char";
-  else if (match(TokenType::KW_DOUBLE))
+  } else if (match(TokenType::KW_CHAR))
+    type = modifierStr + "char";
+  else if (match(TokenType::KW_DOUBLE)) {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to double");
     type = "double";
-  else if (match(TokenType::KW_BOOL))
+  } else if (match(TokenType::KW_BOOL)) {
+    if (!modifierStr.empty())
+      error("Modifiers 'signed/unsigned' cannot be applied to bool");
     type = "bool";
+  }
   // Or match enum
   else if (match(TokenType::KW_ENUM)) {
     // If this is an inline enum definition, revert and parse the enum
@@ -227,7 +244,7 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     string tag = advance().lexeme;
     type = "struct " + tag;
   }
-  // NEW: Handle typedef alias identifiers.
+  // Handle typedef alias identifiers.
   else if (check(TokenType::IDENTIFIER) &&
            typedefRegistry.find(peek().lexeme) != typedefRegistry.end()) {
     type = typedefRegistry[advance().lexeme];

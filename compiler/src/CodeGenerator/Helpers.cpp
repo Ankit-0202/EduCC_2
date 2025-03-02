@@ -25,7 +25,6 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
                           id->name + "' not found.");
     return it->second;
   }
-
   // Case 2: Member Access: base.member
   if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
     string baseType = getEffectiveType(CG, mem->base);
@@ -41,7 +40,7 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
         if (member->name == mem->member)
           return member->type;
       }
-      throw runtime_error("CodeGenerator Error: Union type '" + tag +
+      throw runtime_error("CodeGenerator Error: Union type '" + baseType +
                           "' does not contain member '" + mem->member + "'.");
     }
     // If the base is a struct.
@@ -56,7 +55,7 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
         if (member->name == mem->member)
           return member->type;
       }
-      throw runtime_error("CodeGenerator Error: Struct type '" + tag +
+      throw runtime_error("CodeGenerator Error: Struct type '" + baseType +
                           "' does not contain member '" + mem->member + "'.");
     } else {
       throw runtime_error("CodeGenerator Error: Base expression type '" +
