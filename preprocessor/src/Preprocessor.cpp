@@ -122,8 +122,13 @@ std::string Preprocessor::processIncludes(const std::string &source,
         continue;
       }
 
-      std::string headerContents = processFile(headerPath.value());
-      oss << headerContents << "\n";
+      // --- New behavior: Skip processing system headers ---
+      if (isSystem) {
+        oss << "// Skipped system header: " << headerName << "\n";
+      } else {
+        std::string headerContents = processFile(headerPath.value());
+        oss << headerContents << "\n";
+      }
     } else {
       oss << line << "\n";
     }

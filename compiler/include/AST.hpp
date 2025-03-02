@@ -1,6 +1,7 @@
 #ifndef AST_HPP
 #define AST_HPP
 
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -304,6 +305,20 @@ public:
       const std::vector<std::pair<std::string, std::optional<ExpressionPtr>>>
           &enumerators)
       : tag(tag), enumerators(enumerators) {}
+};
+
+class StringLiteral : public Expression {
+public:
+  std::string value;
+
+  StringLiteral(const std::string &val) : value(val) {}
+
+  // Print method for debugging/AST dumping.
+  virtual void print(std::ostream &out) const {
+    out << "StringLiteral(\"";
+    out << value;
+    out << "\")";
+  }
 };
 
 #endif // AST_HPP

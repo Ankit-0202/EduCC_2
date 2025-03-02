@@ -250,6 +250,15 @@ ExpressionPtr Parser::parsePrimary() {
     char value = tokens[current - 1].lexeme[0];
     return std::make_shared<Literal>(value);
   }
+  // New branch to handle string literals.
+  if (match(TokenType::LITERAL_STRING)) {
+    string str = tokens[current - 1].lexeme;
+    // Remove the surrounding double quotes.
+    if (!str.empty() && str.front() == '"' && str.back() == '"') {
+      str = str.substr(1, str.size() - 2);
+    }
+    return std::make_shared<StringLiteral>(str);
+  }
   if (match(TokenType::IDENTIFIER)) {
     string name = tokens[current - 1].lexeme;
     if (name == "true") {
