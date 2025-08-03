@@ -1,36 +1,51 @@
 ###############################################################################
-# Makefile for EduCC
+# Makefile for EduCC Compiler
 ###############################################################################
 
-# Compiler and Flags
-CXX      := clang++
-LLVM_CXXFLAGS := $(shell llvm-config --cxxflags)
-LLVM_LIBS     := $(shell llvm-config --libs)
-LLVM_LIBDIR   := $(shell llvm-config --libdir)
-CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -g $(LLVM_CXXFLAGS) -DLLVM_ENABLE_OPAQUE_POINTERS=0
+# =============================================================================
+# Configuration
+# =============================================================================
 
-# Archiver
-AR       := ar
+# Compiler and Tools
+CXX          := clang++
+AR           := ar
+LLVM_CONFIG  := llvm-config
 
-# Directories
-ROOT_DIR           := $(shell pwd)
-COMMON_DIR         := common
-PREPROCESSOR_DIR   := preprocessor
-COMPILER_DIR       := compiler
-TEST_DIR           := tests
-BUILD_DIR          := build
-COMMON_BUILD       := $(BUILD_DIR)/common
-PREPROC_BUILD      := $(BUILD_DIR)/preprocessor
-COMPILER_BUILD     := $(BUILD_DIR)/compiler
-TEST_OUTPUT_DIR    := test_output
+# Compiler Flags
+CXXFLAGS_BASE := -std=c++17 -Wall -Wextra -Wno-unused-parameter -g
+LLVM_CXXFLAGS := $(shell $(LLVM_CONFIG) --cxxflags)
+LLVM_LIBS     := $(shell $(LLVM_CONFIG) --libs)
+LLVM_LIBDIR   := $(shell $(LLVM_CONFIG) --libdir)
+CXXFLAGS      := $(CXXFLAGS_BASE) $(LLVM_CXXFLAGS) -DLLVM_ENABLE_OPAQUE_POINTERS=0 -fexceptions
 
-# Common Sources & Headers
+# =============================================================================
+# Directory Structure
+# =============================================================================
+
+# Source Directories
+COMMON_DIR       := common
+PREPROCESSOR_DIR := preprocessor
+COMPILER_DIR     := compiler
+TEST_DIR         := tests
+
+# Build Directories
+BUILD_DIR        := build
+COMMON_BUILD     := $(BUILD_DIR)/common
+PREPROC_BUILD    := $(BUILD_DIR)/preprocessor
+COMPILER_BUILD   := $(BUILD_DIR)/compiler
+TEST_OUTPUT_DIR  := test_output
+
+# =============================================================================
+# Source Files
+# =============================================================================
+
+# Common Library
 COMMON_SRC     := $(shell find $(COMMON_DIR)/src -type f -name "*.cpp")
 COMMON_OBJ     := $(patsubst $(COMMON_DIR)/src/%, $(COMMON_BUILD)/%.o, $(COMMON_SRC))
 COMMON_INCLUDE := -I$(COMMON_DIR)/include
 COMMON_TARGET  := $(COMMON_BUILD)/libcommon.a
 
-# Preprocessor Sources & Headers
+# Preprocessor Library
 PREPROC_SRC     := $(shell find $(PREPROCESSOR_DIR)/src -type f -name "*.cpp")
 PREPROC_HEADERS := $(shell find $(PREPROCESSOR_DIR)/include -type f -name "*.h")
 PREPROC_FILES   := $(PREPROC_SRC) $(PREPROC_HEADERS)
@@ -38,7 +53,7 @@ PREPROC_OBJ     := $(patsubst $(PREPROCESSOR_DIR)/src/%, $(PREPROC_BUILD)/%.o, $
 PREPROC_INCLUDE := -I$(PREPROCESSOR_DIR)/include
 PREPROC_TARGET  := $(PREPROC_BUILD)/libpreprocessor.a
 
-# Compiler Sources & Headers
+# Compiler Library
 COMPILER_SRC     := $(shell find $(COMPILER_DIR)/src -type f -name "*.cpp")
 COMPILER_HEADERS := $(shell find $(COMPILER_DIR)/include -type f -name "*.h")
 COMPILER_FILES   := $(COMPILER_SRC) $(COMPILER_HEADERS)
@@ -46,11 +61,15 @@ COMPILER_OBJ     := $(patsubst $(COMPILER_DIR)/src/%, $(COMPILER_BUILD)/%.o, $(C
 COMPILER_INCLUDE := -I$(COMPILER_DIR)/include
 COMPILER_TARGET  := $(COMPILER_BUILD)/libcompiler.a
 
-# Main executable (links main.cpp with preprocessor, compiler & common libraries)
+# Main Executable
 MAIN_SRC    := main.cpp
 MAIN_TARGET := $(BUILD_DIR)/educc
 
-# LLVM & GCC Settings for tests
+# =============================================================================
+# Test Configuration
+# =============================================================================
+
+# Test Files
 LLFILE     := output.ll
 OBJFILE    := output.o
 OUR_EXE    := our_executable
@@ -59,204 +78,186 @@ GCC_EXE    := gcc_executable
 OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
-# Determine if a directory filter was passed on the command line to test or test-verbose.
+# Test Directory Filter
 FILTER := $(filter-out test test-verbose test-write,$(MAKECMDGOALS))
 TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
 
-.PHONY: all clean test test-write test-verbose run create_test_output_dir copy lint
+# =============================================================================
+# Phony Targets
+# =============================================================================
 
-###############################################################################
-# Build Everything
-###############################################################################
+.PHONY: all clean test test-write test-verbose run create_test_output_dir copy lint help
 
-all: $(MAIN_TARGET)  ## 'all' builds the final executable (educc)
+# =============================================================================
+# Main Targets
+# =============================================================================
 
-###############################################################################
-# Build Common Library
-###############################################################################
+all: $(MAIN_TARGET)  ## Build the final executable (educc)
 
-$(COMMON_BUILD):
-	mkdir -p $(COMMON_BUILD)
+help:  ## Show this help message
+	@echo "Available targets:"
+	@echo "  all          - Build the final executable (educc)"
+	@echo "  clean        - Remove all build artifacts"
+	@echo "  test         - Run tests (terminal output only)"
+	@echo "  test-write   - Run tests with log files"
+	@echo "  test-verbose - Run tests with verbose output"
+	@echo "  run <file>   - Compile a single file"
+	@echo "  copy         - Copy source files to clipboard"
+	@echo "  lint         - Format code with clang-format"
+	@echo "  help         - Show this help message"
 
+# =============================================================================
+# Build Rules
+# =============================================================================
+
+# Create build directories
+$(BUILD_DIR) $(COMMON_BUILD) $(PREPROC_BUILD) $(COMPILER_BUILD):
+	@mkdir -p $@
+
+# Common Library
 $(COMMON_BUILD)/%.o: $(COMMON_DIR)/src/%
 	@mkdir -p $(dir $@)
+	@echo "Compiling $<"
 	$(CXX) $(CXXFLAGS) $(COMMON_INCLUDE) -c $< -o $@
 
-$(COMMON_TARGET): $(COMMON_OBJ)
+$(COMMON_TARGET): $(COMMON_OBJ) | $(COMMON_BUILD)
+	@echo "Building $@"
 	$(AR) rcs $@ $^
 
-###############################################################################
-# Build Preprocessor Library
-###############################################################################
-
-$(PREPROC_BUILD):
-	mkdir -p $(PREPROC_BUILD)
-
+# Preprocessor Library
 $(PREPROC_BUILD)/%.o: $(PREPROCESSOR_DIR)/src/%
 	@mkdir -p $(dir $@)
+	@echo "Compiling $<"
 	$(CXX) $(CXXFLAGS) $(PREPROC_INCLUDE) $(COMMON_INCLUDE) -c $< -o $@
 
-$(PREPROC_TARGET): $(PREPROC_OBJ)
+$(PREPROC_TARGET): $(PREPROC_OBJ) | $(PREPROC_BUILD)
+	@echo "Building $@"
 	$(AR) rcs $@ $^
 
-###############################################################################
-# Build Compiler Library
-###############################################################################
-
-$(COMPILER_BUILD):
-	mkdir -p $(COMPILER_BUILD)
-
+# Compiler Library
 $(COMPILER_BUILD)/%.o: $(COMPILER_DIR)/src/%
 	@mkdir -p $(dir $@)
+	@echo "Compiling $<"
 	$(CXX) $(CXXFLAGS) $(COMPILER_INCLUDE) $(COMMON_INCLUDE) -c $< -o $@
 
-$(COMPILER_TARGET): $(COMPILER_OBJ)
+$(COMPILER_TARGET): $(COMPILER_OBJ) | $(COMPILER_BUILD)
+	@echo "Building $@"
 	$(AR) rcs $@ $^
 
-###############################################################################
-# Build Main Executable
-###############################################################################
-
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
-
+# Main Executable
 $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET) | $(BUILD_DIR)
+	@echo "Linking $@"
 	$(CXX) $(CXXFLAGS) -I$(COMPILER_DIR)/include -I$(PREPROCESSOR_DIR)/include $(COMMON_INCLUDE) -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
 
-###############################################################################
-# Testing Setup & Execution
-###############################################################################
+# =============================================================================
+# Testing
+# =============================================================================
 
 create_test_output_dir:
 	@mkdir -p $(TEST_OUTPUT_DIR)
 	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
 
-# Run tests and print output to the terminal only (no file logging)
-test: all
-	@clear
+# Test target - terminal output only
+test: clean all
 	@echo "Running tests in $(TEST_SUBDIR)..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
-	    $(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
-	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile"; \
-	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
-	        continue; \
-	    fi; \
-	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
-	    clang $(OBJFILE) -o $(OUR_EXE); \
-	    our_output=$$(./$(OUR_EXE)); \
-	    our_ret=$$?; \
-	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
-	    gcc_output=$$(./$(GCC_EXE)); \
-	    gcc_ret=$$?; \
-	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "[FAILED] $$testfile - Return code mismatch -- Ours: $$our_ret, GCC: $$gcc_ret" >&2; \
-	        continue; \
-	    fi; \
-	    if [ "$$our_output" != "$$gcc_output" ]; then \
-	        echo "Output mismatch for $$testfile"; \
-	        echo "Our output:"; echo "$$our_output"; \
-	        echo "GCC output:"; echo "$$gcc_output"; \
-	    fi; \
+		echo "Testing $$testfile..."; \
+		$(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
+		if [ ! -f $(LLFILE) ]; then \
+			echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
+			continue; \
+		fi; \
+		llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
+		clang $(OBJFILE) -o $(OUR_EXE); \
+		our_output=$$(./$(OUR_EXE) 2>/dev/null); \
+		our_ret=$$?; \
+		$(NATIVE_CC) $$testfile -o $(GCC_EXE); \
+		gcc_output=$$(./$(GCC_EXE) 2>/dev/null); \
+		gcc_ret=$$?; \
+		if [ $$our_ret -ne $$gcc_ret ]; then \
+			echo "[FAILED] $$testfile - Return code mismatch (Ours: $$our_ret, GCC: $$gcc_ret)" >&2; \
+		else \
+			echo "[PASSED] $$testfile"; \
+		fi; \
 	done
-	@echo "-----------------------------------------------------"; \
-	echo "All tests executed."
+	@echo "Test execution completed."
 
-# Renamed test target (now test-write): writes detailed logs to text files as before.
+# Test target with log files
 test-write: all create_test_output_dir
-	@clear
 	@echo "Running tests in $(TEST_SUBDIR) with log files..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
-	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
-	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
-	    echo "-----------------------------------------------------" >> $$output_file; \
-	    echo "Testing $$testfile" >> $$output_file; \
-	    $(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
-	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
-	        continue; \
-	    fi; \
-	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
-	    clang $(OBJFILE) -o $(OUR_EXE); \
-	    ./$(OUR_EXE) > our_output.txt; \
-	    our_ret=$$?; \
-	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
-	    ./$(GCC_EXE) > gcc_output.txt; \
-	    gcc_ret=$$?; \
-	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" >> $$output_file; \
-	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "[FAILED] $$testfile - Return code mismatch -- Ours: $$our_ret, GCC: $$gcc_ret" >&2; \
-	        continue; \
-	    fi; \
-	    if ! diff -u our_output.txt gcc_output.txt > /dev/null; then \
-	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
-	    else \
-	        echo "Test $$testfile passed." >> $$output_file; \
-	    fi; \
+		rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
+		output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
+		echo "Testing $$testfile..." | tee $$output_file; \
+		$(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
+		if [ ! -f $(LLFILE) ]; then \
+			echo "[FAILED] $$testfile - LLVM file not generated" | tee -a $$output_file; \
+			continue; \
+		fi; \
+		llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
+		clang $(OBJFILE) -o $(OUR_EXE); \
+		./$(OUR_EXE) > $(OUR_OUTPUT) 2>/dev/null; \
+		our_ret=$$?; \
+		$(NATIVE_CC) $$testfile -o $(GCC_EXE); \
+		./$(GCC_EXE) > $(GCC_OUTPUT) 2>/dev/null; \
+		gcc_ret=$$?; \
+		echo "Return codes - Ours: $$our_ret, GCC: $$gcc_ret" | tee -a $$output_file; \
+		if [ $$our_ret -ne $$gcc_ret ]; then \
+			echo "[FAILED] $$testfile - Return code mismatch" | tee -a $$output_file; \
+		else \
+			echo "[PASSED] $$testfile" | tee -a $$output_file; \
+		fi; \
 	done
-	@echo "-----------------------------------------------------"; \
-	echo "All tests executed. Check $(TEST_OUTPUT_DIR) for results."
+	@echo "Test execution completed. Check $(TEST_OUTPUT_DIR) for results."
 
-# Verbose Test Mode: Prints output to stdout as well as saving test logs
+# Verbose test mode
 test-verbose: all create_test_output_dir
-	@clear
 	@echo "Running tests in verbose mode in $(TEST_SUBDIR)..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
-	    rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
-	    output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$testfile .c).txt"; \
-	    echo "-----------------------------------------------------"; \
-	    echo "Testing $$testfile"; \
-	    echo "-----------------------------------------------------" >> $$output_file; \
-	    echo "Testing $$testfile" >> $$output_file; \
-	    $(MAIN_TARGET) $$testfile; \
-	    if [ ! -f $(LLFILE) ]; then \
-	        echo "Error: $(LLFILE) was not produced for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
-	        continue; \
-	    fi; \
-	    llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
-	    clang $(OBJFILE) -o $(OUR_EXE); \
-	    echo "Running compiled executable..."; \
-	    ./$(OUR_EXE) | tee $(OUR_OUTPUT); \
-	    our_ret=$$?; \
-	    $(NATIVE_CC) $$testfile -o $(GCC_EXE); \
-	    echo "Running GCC-compiled executable..."; \
-	    ./$(GCC_EXE) | tee $(GCC_OUTPUT); \
-	    gcc_ret=$$?; \
-	    echo "Our return code: $$our_ret, gcc return code: $$gcc_ret" | tee -a $$output_file; \
-	    if [ $$our_ret -ne $$gcc_ret ]; then \
-	        echo "Return code mismatch for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - Return code mismatch" >&2; \
-	        continue; \
-	    fi; \
-	    if ! diff -u our_output.txt gcc_output.txt; then \
-	        echo "Output mismatch for $$testfile" | tee -a $$output_file; \
-	        echo "[FAILED] $$testfile - Output mismatch" >&2; \
-	    else \
-	        echo "Test $$testfile passed." | tee -a $$output_file; \
-	    fi; \
+		rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
+		output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$testfile .c).txt"; \
+		echo "=========================================="; \
+		echo "Testing $$testfile"; \
+		echo "=========================================="; \
+		$(MAIN_TARGET) $$testfile; \
+		if [ ! -f $(LLFILE) ]; then \
+			echo "[FAILED] $$testfile - LLVM file not generated" | tee -a $$output_file; \
+			continue; \
+		fi; \
+		llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
+		clang $(OBJFILE) -o $(OUR_EXE); \
+		echo "Running our executable..."; \
+		./$(OUR_EXE) | tee $(OUR_OUTPUT); \
+		our_ret=$$?; \
+		$(NATIVE_CC) $$testfile -o $(GCC_EXE); \
+		echo "Running GCC executable..."; \
+		./$(GCC_EXE) | tee $(GCC_OUTPUT); \
+		gcc_ret=$$?; \
+		echo "Return codes - Ours: $$our_ret, GCC: $$gcc_ret" | tee -a $$output_file; \
+		if [ $$our_ret -ne $$gcc_ret ]; then \
+			echo "[FAILED] $$testfile - Return code mismatch" | tee -a $$output_file; \
+		else \
+			echo "[PASSED] $$testfile" | tee -a $$output_file; \
+		fi; \
 	done
-	@echo "-----------------------------------------------------"; \
-	echo "All tests executed in verbose mode. Check $(TEST_OUTPUT_DIR) for results."
+	@echo "Verbose test execution completed. Check $(TEST_OUTPUT_DIR) for results."
 
-###############################################################################
-# Run Compiler on a Single File
-###############################################################################
+# =============================================================================
+# Utility Targets
+# =============================================================================
 
+# Run compiler on a single file
 run: all
-	@clear
 	@ARGS=$(filter-out run,$(MAKECMDGOALS)); \
 	if [ -z "$$ARGS" ]; then \
-	  echo "Usage: make run <path/to/file.c>"; exit 1; \
+		echo "Usage: make run <path/to/file.c>"; \
+		exit 1; \
 	else \
-	  echo "Running $(MAIN_TARGET) on $$ARGS..." && $(MAIN_TARGET) $$ARGS; \
+		echo "Running $(MAIN_TARGET) on $$ARGS..."; \
+		$(MAIN_TARGET) $$ARGS; \
 	fi
 
-###############################################################################
-# Copy Source Code to Clipboard (macOS: pbcopy)
-###############################################################################
-
+# Copy source files to clipboard (macOS)
 copy:
 	@echo "Copying source files to clipboard..."
 	@( \
@@ -279,26 +280,23 @@ copy:
 	) | pbcopy
 	@echo "✅ All source files copied to clipboard!"
 
-###############################################################################
-# Clean Build Artifacts & Temporary Files
-###############################################################################
-
+# Clean build artifacts
 clean:
+	@echo "Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
 	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) $(OUR_OUTPUT) $(GCC_OUTPUT)
+	@echo "✅ Clean completed."
 
-###############################################################################
-# Fix Linting Issues
-###############################################################################
-
+# Format code with clang-format
 lint:
-	@echo "Fixing lint issues with clang-format..."
+	@echo "Formatting code with clang-format..."
 	@find . \( -name "*.cpp" -o -name "*.hpp" -o -name "*.c" -o -name "*.h" \) -exec clang-format -i {} +
-	@echo "✅ Linting issues fixed."
+	@echo "✅ Code formatting completed."
 
-###############################################################################
+# =============================================================================
 # Catch-all Rule
-###############################################################################
-# Prevent make from treating extra arguments (such as the filter) as targets.
+# =============================================================================
+
+# Prevent make from treating extra arguments as targets
 %:
 	@:

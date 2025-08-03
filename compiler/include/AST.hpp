@@ -125,6 +125,15 @@ public:
       : operand(operand), op(op) {}
 };
 
+class TernaryExpression : public Expression {
+public:
+  ExpressionPtr condition;
+  ExpressionPtr trueExpr;
+  ExpressionPtr falseExpr;
+  TernaryExpression(ExpressionPtr condition, ExpressionPtr trueExpr, ExpressionPtr falseExpr)
+      : condition(condition), trueExpr(trueExpr), falseExpr(falseExpr) {}
+};
+
 class InitializerList : public Expression {
 public:
   std::vector<ExpressionPtr> elements;
@@ -205,6 +214,16 @@ class ReturnStatement : public Statement {
 public:
   ExpressionPtr expression;
   ReturnStatement(ExpressionPtr expr) : expression(expr) {}
+};
+
+class BreakStatement : public Statement {
+public:
+  BreakStatement() = default;
+};
+
+class ContinueStatement : public Statement {
+public:
+  ContinueStatement() = default;
 };
 
 // For local variable declarations (statements)

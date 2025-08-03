@@ -67,6 +67,12 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
   } else if (auto declStmt =
                  std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
     analyzeDeclaration(declStmt->declaration);
+  } else if (auto breakStmt = std::dynamic_pointer_cast<BreakStatement>(stmt)) {
+    // Break statements are valid in loops and switch statements
+    // For now, we'll just accept them
+  } else if (auto continueStmt = std::dynamic_pointer_cast<ContinueStatement>(stmt)) {
+    // Continue statements are valid in loops
+    // For now, we'll just accept them
   } else {
     throw runtime_error(
         "Semantic Analysis Error: Unsupported statement type encountered.");

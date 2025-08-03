@@ -206,6 +206,20 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     }
     builder.CreateRet(retVal);
     return true;
+  } else if (auto breakStmt = std::dynamic_pointer_cast<BreakStatement>(stmt)) {
+    if (loopStack.empty()) {
+      throw runtime_error("CodeGenerator Error: 'break' statement not in a loop or switch");
+    }
+    // Branch to the loop exit block
+    builder.CreateBr(loopStack.back().afterBlock);
+    return true;
+  } else if (auto continueStmt = std::dynamic_pointer_cast<ContinueStatement>(stmt)) {
+    if (loopStack.empty()) {
+      throw runtime_error("CodeGenerator Error: 'continue' statement not in a loop");
+    }
+    // Branch to the loop condition block
+    builder.CreateBr(loopStack.back().conditionBlock);
+    return true;
   } else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
     llvm::Value *condVal = generateExpression(ifStmt->condition);
     if (condVal->getType() != Type::getInt1Ty(context))
@@ -234,6 +248,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     BasicBlock *bodyBB = BasicBlock::Create(context, "while.body", theFunction);
     BasicBlock *afterBB =
         BasicBlock::Create(context, "while.after", theFunction);
+    
+    // Push loop context for break/continue
+    loopStack.push_back({condBB, bodyBB, afterBB});
+    
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
     llvm::Value *condVal = generateExpression(whileStmt->condition);
@@ -246,6 +264,9 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     if (!bodyTerminated)
       builder.CreateBr(condBB);
     builder.SetInsertPoint(afterBB);
+    
+    // Pop loop context
+    loopStack.pop_back();
     return false;
   } else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
     if (forStmt->initializer)
@@ -255,6 +276,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     BasicBlock *bodyBB = BasicBlock::Create(context, "for.body", theFunction);
     BasicBlock *incrBB = BasicBlock::Create(context, "for.incr", theFunction);
     BasicBlock *afterBB = BasicBlock::Create(context, "for.after", theFunction);
+    
+    // Push loop context for break/continue
+    loopStack.push_back({condBB, bodyBB, afterBB});
+    
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
     llvm::Value *condVal = nullptr;
@@ -276,6 +301,9 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       generateExpression(forStmt->increment);
     builder.CreateBr(condBB);
     builder.SetInsertPoint(afterBB);
+    
+    // Pop loop context
+    loopStack.pop_back();
     return false;
   } else if (auto switchStmt =
                  std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
@@ -778,6 +806,32 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     }
   } else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
     return generateLValue(expr);
+  } else if (auto ternary = std::dynamic_pointer_cast<TernaryExpression>(expr)) {
+    // Generate the condition
+    llvm::Value *condVal = generateExpression(ternary->condition);
+    if (condVal->getType() != Type::getInt1Ty(context)) {
+      condVal = builder.CreateICmpNE(condVal, 
+                                    ConstantInt::get(condVal->getType(), 0), 
+                                    "ternarycond");
+    }
+    
+    // Generate the true and false expressions
+    llvm::Value *trueVal = generateExpression(ternary->trueExpr);
+    llvm::Value *falseVal = generateExpression(ternary->falseExpr);
+    
+    // Ensure both expressions have the same type
+    if (trueVal->getType() != falseVal->getType()) {
+      if (trueVal->getType()->isIntegerTy() && falseVal->getType()->isIntegerTy()) {
+        if (trueVal->getType()->getIntegerBitWidth() < falseVal->getType()->getIntegerBitWidth()) {
+          trueVal = builder.CreateSExt(trueVal, falseVal->getType(), "sexttmp");
+        } else {
+          falseVal = builder.CreateSExt(falseVal, trueVal->getType(), "sexttmp");
+        }
+      }
+    }
+    
+    // Create the select instruction
+    return builder.CreateSelect(condVal, trueVal, falseVal, "selecttmp");
   }
   throw runtime_error("Unsupported expression type in generateExpression().");
 }
@@ -827,7 +881,7 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
       throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
                           "'.");
     int maxSize = 0;
-    DataLayout dl(module.get());
+    DataLayout dl(module->getDataLayout());
     for (auto &member : it->second->members) {
       int memberSize = 0;
       if (member->type == "int" || member->type == "float")

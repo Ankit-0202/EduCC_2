@@ -19,6 +19,8 @@ enum class TokenType {
   KW_SWITCH,
   KW_CASE,
   KW_DEFAULT,
+  KW_BREAK,
+  KW_CONTINUE,
   KW_ENUM,
   KW_UNION,
   KW_STRUCT,
@@ -56,6 +58,7 @@ enum class TokenType {
   DELIM_LBRACE,
   DELIM_RBRACE,
   DELIM_COLON,
+  DELIM_QUESTION,
   DELIM_LBRACKET, // new token for '['
   DELIM_RBRACKET, // new token for ']'
   DOT,

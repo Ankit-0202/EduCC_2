@@ -106,10 +106,16 @@ Token Lexer::identifier() {
     token.type = TokenType::KW_CASE;
   else if (lexeme == "default")
     token.type = TokenType::KW_DEFAULT;
+  else if (lexeme == "break")
+    token.type = TokenType::KW_BREAK;
+  else if (lexeme == "continue")
+    token.type = TokenType::KW_CONTINUE;
   else if (lexeme == "enum")
     token.type = TokenType::KW_ENUM;
   else if (lexeme == "union")
     token.type = TokenType::KW_UNION;
+  else if (lexeme == "struct")
+    token.type = TokenType::KW_STRUCT;
   else
     token.type = TokenType::IDENTIFIER;
   token.lexeme = lexeme;
@@ -352,6 +358,9 @@ Token Lexer::opOrDelim() {
     break;
   case ']':
     token.type = TokenType::DELIM_RBRACKET;
+    break;
+  case '?':
+    token.type = TokenType::DELIM_QUESTION;
     break;
   case '\'':
     // Backtrack and let character() handle it.

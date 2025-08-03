@@ -68,6 +68,14 @@ public:
 
   // For function parameters allocation.
   std::unordered_map<std::string, llvm::Value *> localVariables;
+
+  // Loop context tracking for break/continue statements
+  struct LoopContext {
+    llvm::BasicBlock *conditionBlock;
+    llvm::BasicBlock *bodyBlock;
+    llvm::BasicBlock *afterBlock;
+  };
+  std::vector<LoopContext> loopStack;
 };
 
 #endif // CODEGENERATOR_HPP

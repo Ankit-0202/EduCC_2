@@ -42,6 +42,10 @@ static std::string tokenTypeToString(TokenType type) {
     return "KW_CASE";
   case TokenType::KW_DEFAULT:
     return "KW_DEFAULT";
+  case TokenType::KW_BREAK:
+    return "KW_BREAK";
+  case TokenType::KW_CONTINUE:
+    return "KW_CONTINUE";
   case TokenType::KW_ENUM:
     return "KW_ENUM";
   case TokenType::KW_UNION:
@@ -100,6 +104,8 @@ static std::string tokenTypeToString(TokenType type) {
     return "DELIM_RBRACKET";
   case TokenType::DELIM_COLON:
     return "DELIM_COLON";
+  case TokenType::DELIM_QUESTION:
+    return "DELIM_QUESTION";
   case TokenType::DOT:
     return "DOT";
   case TokenType::LITERAL_INT:

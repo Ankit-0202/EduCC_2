@@ -12,6 +12,15 @@ ExpressionPtr Parser::parseExpression() { return parseAssignment(); }
 
 ExpressionPtr Parser::parseAssignment() {
   ExpressionPtr expr = parseLogicalOr();
+  
+  // Check for ternary operator
+  if (match(TokenType::DELIM_QUESTION)) {
+    ExpressionPtr trueExpr = parseAssignment();
+    consume(TokenType::DELIM_COLON, "Expected ':' in ternary operator");
+    ExpressionPtr falseExpr = parseAssignment();
+    return std::make_shared<TernaryExpression>(expr, trueExpr, falseExpr);
+  }
+  
   if (!isAtEnd() && (peek().type == TokenType::OP_PLUS_ASSIGN ||
                      peek().type == TokenType::OP_MINUS_ASSIGN ||
                      peek().type == TokenType::OP_MULTIPLY_ASSIGN ||

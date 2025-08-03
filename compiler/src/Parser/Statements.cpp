@@ -22,6 +22,10 @@ StatementPtr Parser::parseStatement() {
     return parseForStatement();
   } else if (match(TokenType::KW_SWITCH)) {
     return parseSwitchStatement();
+  } else if (match(TokenType::KW_BREAK)) {
+    return parseBreakStatement();
+  } else if (match(TokenType::KW_CONTINUE)) {
+    return parseContinueStatement();
   } else if (match(TokenType::DELIM_LBRACE)) {
     // If a compound statement is encountered.
     return parseCompoundStatement();
@@ -273,4 +277,14 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     return decls[0];
   else
     return std::make_shared<MultiVariableDeclarationStatement>(decls);
+}
+
+StatementPtr Parser::parseBreakStatement() {
+  consume(TokenType::DELIM_SEMICOLON, "Expected ';' after 'break'");
+  return std::make_shared<BreakStatement>();
+}
+
+StatementPtr Parser::parseContinueStatement() {
+  consume(TokenType::DELIM_SEMICOLON, "Expected ';' after 'continue'");
+  return std::make_shared<ContinueStatement>();
 }
