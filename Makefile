@@ -79,32 +79,20 @@ OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
 # Test Directory Filter
-FILTER := $(filter-out test test-verbose test-write,$(MAKECMDGOALS))
+FILTER := $(filter-out test test-log,$(MAKECMDGOALS))
 TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
 
 # =============================================================================
 # Phony Targets
 # =============================================================================
 
-.PHONY: all clean test test-write test-verbose run create_test_output_dir copy lint help
+.PHONY: all clean test test-log run copy lint help
 
 # =============================================================================
 # Main Targets
 # =============================================================================
 
-all: $(MAIN_TARGET)  ## Build the final executable (educc)
-
-help:  ## Show this help message
-	@echo "Available targets:"
-	@echo "  all          - Build the final executable (educc)"
-	@echo "  clean        - Remove all build artifacts"
-	@echo "  test         - Run tests (terminal output only)"
-	@echo "  test-write   - Run tests with log files"
-	@echo "  test-verbose - Run tests with verbose output"
-	@echo "  run <file>   - Compile a single file"
-	@echo "  copy         - Copy source files to clipboard"
-	@echo "  lint         - Format code with clang-format"
-	@echo "  help         - Show this help message"
+all: $(MAIN_TARGET)
 
 # =============================================================================
 # Build Rules
@@ -153,16 +141,12 @@ $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET
 # Testing
 # =============================================================================
 
-create_test_output_dir:
-	@mkdir -p $(TEST_OUTPUT_DIR)
-	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
-
-# Test target - terminal output only
+# Test target with terminal output
 test: clean all
 	@echo "Running tests in $(TEST_SUBDIR)..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
 		echo "Testing $$testfile..."; \
-		$(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
+		$(MAIN_TARGET) $$testfile $(LLFILE) > /dev/null 2>&1; \
 		if [ ! -f $(LLFILE) ]; then \
 			echo "[FAILED] $$testfile - LLVM file not generated" >&2; \
 			continue; \
@@ -183,13 +167,15 @@ test: clean all
 	@echo "Test execution completed."
 
 # Test target with log files
-test-write: all create_test_output_dir
+test-log: clean all
+	@mkdir -p $(TEST_OUTPUT_DIR)
+	@find $(TEST_SUBDIR) -type d | sed "s|^$(TEST_DIR)|$(TEST_OUTPUT_DIR)|" | xargs mkdir -p
 	@echo "Running tests in $(TEST_SUBDIR) with log files..."
 	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
 		rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
 		output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$rel_path .c).txt"; \
 		echo "Testing $$testfile..." | tee $$output_file; \
-		$(MAIN_TARGET) $$testfile > /dev/null 2>&1; \
+		$(MAIN_TARGET) $$testfile $(LLFILE) > /dev/null 2>&1; \
 		if [ ! -f $(LLFILE) ]; then \
 			echo "[FAILED] $$testfile - LLVM file not generated" | tee -a $$output_file; \
 			continue; \
@@ -209,38 +195,6 @@ test-write: all create_test_output_dir
 		fi; \
 	done
 	@echo "Test execution completed. Check $(TEST_OUTPUT_DIR) for results."
-
-# Verbose test mode
-test-verbose: all create_test_output_dir
-	@echo "Running tests in verbose mode in $(TEST_SUBDIR)..."
-	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
-		rel_path=$$(echo $$testfile | sed "s|^$(TEST_DIR)/||"); \
-		output_file="$(TEST_OUTPUT_DIR)/$$(dirname $$rel_path)/$$(basename $$testfile .c).txt"; \
-		echo "=========================================="; \
-		echo "Testing $$testfile"; \
-		echo "=========================================="; \
-		$(MAIN_TARGET) $$testfile; \
-		if [ ! -f $(LLFILE) ]; then \
-			echo "[FAILED] $$testfile - LLVM file not generated" | tee -a $$output_file; \
-			continue; \
-		fi; \
-		llc $(LLFILE) -filetype=obj -o $(OBJFILE); \
-		clang $(OBJFILE) -o $(OUR_EXE); \
-		echo "Running our executable..."; \
-		./$(OUR_EXE) | tee $(OUR_OUTPUT); \
-		our_ret=$$?; \
-		$(NATIVE_CC) $$testfile -o $(GCC_EXE); \
-		echo "Running GCC executable..."; \
-		./$(GCC_EXE) | tee $(GCC_OUTPUT); \
-		gcc_ret=$$?; \
-		echo "Return codes - Ours: $$our_ret, GCC: $$gcc_ret" | tee -a $$output_file; \
-		if [ $$our_ret -ne $$gcc_ret ]; then \
-			echo "[FAILED] $$testfile - Return code mismatch" | tee -a $$output_file; \
-		else \
-			echo "[PASSED] $$testfile" | tee -a $$output_file; \
-		fi; \
-	done
-	@echo "Verbose test execution completed. Check $(TEST_OUTPUT_DIR) for results."
 
 # =============================================================================
 # Utility Targets
@@ -278,20 +232,20 @@ copy:
 			echo ""; \
 		done; \
 	) | pbcopy
-	@echo "✅ All source files copied to clipboard!"
+	@echo "All source files copied to clipboard!"
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR) $(TEST_OUTPUT_DIR)
 	rm -f $(LLFILE) $(OBJFILE) $(OUR_EXE) $(GCC_EXE) $(OUR_OUTPUT) $(GCC_OUTPUT)
-	@echo "✅ Clean completed."
+	@echo "Clean completed."
 
 # Format code with clang-format
 lint:
 	@echo "Formatting code with clang-format..."
 	@find . \( -name "*.cpp" -o -name "*.hpp" -o -name "*.c" -o -name "*.h" \) -exec clang-format -i {} +
-	@echo "✅ Code formatting completed."
+	@echo "Code formatting completed."
 
 # =============================================================================
 # Catch-all Rule

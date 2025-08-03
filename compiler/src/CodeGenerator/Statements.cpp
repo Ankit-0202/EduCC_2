@@ -66,6 +66,7 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
 // };"), we infer the array size from the initializer list.
 void CodeGenerator::generateVariableDeclaration(
     const shared_ptr<VariableDeclaration> &varDecl) {
+  std::cerr << "[DEBUG] generateVariableDeclaration: Processing variable '" << varDecl->name << "' of type '" << varDecl->type << "'" << std::endl;
   llvm::Type *baseType = getLLVMType(varDecl->type);
   llvm::Type *varType = baseType;
 
@@ -83,7 +84,7 @@ void CodeGenerator::generateVariableDeclaration(
     }
   }
   // Otherwise, if there is an initializer list, infer the array size from it.
-  else if (varDecl->initializer) {
+  else if (varDecl->initializer.has_value()) {
     if (auto lit =
             std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
       if (lit->type == Literal::LiteralType::String) {
@@ -107,9 +108,10 @@ void CodeGenerator::generateVariableDeclaration(
   declaredVarStack.back().insert(varDecl->name);
   declaredTypes[varDecl->name] = varType;
   declaredTypeStrings[varDecl->name] = varDecl->type;
+  std::cerr << "[DEBUG] generateVariableDeclaration: Variable '" << varDecl->name << "' registered with type '" << varDecl->type << "'" << std::endl;
 
   // Handle string literal initializer for char arrays
-  if (varDecl->initializer) {
+  if (varDecl->initializer.has_value()) {
     if (auto lit =
             std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
       if (lit->type == Literal::LiteralType::String) {
@@ -146,7 +148,7 @@ void CodeGenerator::generateVariableDeclaration(
     }
   }
 
-  if (varDecl->initializer) {
+  if (varDecl->initializer.has_value()) {
     // If this is an array initializer (either with explicit dimensions or
     // inferred unsized)
     if (!varDecl->dimensions.empty() ||
@@ -197,8 +199,9 @@ void CodeGenerator::generateVariableDeclaration(
       }
       builder.CreateStore(initVal, alloc);
     }
-  } else if (auto lit = std::dynamic_pointer_cast<Literal>(
-                 varDecl->initializer.value())) {
+  } else if (varDecl->initializer.has_value()) {
+    if (auto lit = std::dynamic_pointer_cast<Literal>(
+            varDecl->initializer.value())) {
     std::cerr << "[DEBUG] (generateVariableDeclaration) found Literal "
                  "initializer, type="
               << (int)lit->type << std::endl;
@@ -222,6 +225,7 @@ void CodeGenerator::generateVariableDeclaration(
       return;
     }
   }
+}
 }
 
 //
@@ -452,38 +456,67 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   }
   // 2) MemberAccess: base.member
   else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
+    std::cerr << "[DEBUG] generateLValue: Processing member access for member: " << mem->member << std::endl;
     string baseEffectiveType = getEffectiveType(*this, mem->base);
+    std::cerr << "[DEBUG] generateLValue: Base effective type: " << baseEffectiveType << std::endl;
     llvm::Value *basePtr = generateLValue(mem->base);
+    std::cerr << "[DEBUG] generateLValue: Got base pointer" << std::endl;
+    
     if (baseEffectiveType.rfind("struct ", 0) == 0) {
       string tag = baseEffectiveType.substr(7);
       tag = normalizeTag(tag);
-      auto sit = structRegistry.find(tag);
-      if (sit == structRegistry.end())
+      
+      // Get the struct type from our local registry
+      auto it = declaredTypes.find(tag);
+      if (it == declaredTypes.end())
         throw runtime_error("Unknown struct type '" + tag + "'.");
-      size_t index = 0;
-      bool found = false;
-      for (size_t i = 0; i < sit->second->members.size(); i++) {
-        if (sit->second->members[i]->name == mem->member) {
-          index = i;
-          found = true;
-          break;
-        }
+      
+      StructType* structTy = dyn_cast<StructType>(it->second);
+      if (!structTy)
+        throw runtime_error("Type '" + tag + "' is not a struct type.");
+      
+      // Find the member index using the enhanced type registry
+      AggregateTypeInfo* typeInfo = getAggregateTypeInfo(tag);
+      if (!typeInfo) {
+        throw runtime_error("Struct type info not found for '" + tag + "'.");
       }
-      if (!found)
-        throw runtime_error("Struct type '" + tag +
-                            "' does not contain member '" + mem->member + "'.");
-      StructType *structTy = getStructTypeByName(module.get(), tag);
-      if (!structTy) {
-        // Build from the registry
-        vector<Type *> memberTypes;
-        for (auto &m : sit->second->members) {
-          memberTypes.push_back(getLLVMType(m->type));
-        }
-        structTy = StructType::create(context, memberTypes, tag, false);
+      
+      MemberInfo* memberInfo = getMemberInfo(tag, mem->member);
+      if (!memberInfo) {
+        throw runtime_error("Struct type '" + tag + "' does not contain member '" + mem->member + "'.");
       }
-      return builder.CreateStructGEP(structTy, basePtr, index, mem->member);
+      
+      return builder.CreateStructGEP(structTy, basePtr, memberInfo->index, mem->member);
     }
-    // non-struct => just get LValue of the base
+    else if (baseEffectiveType.rfind("union ", 0) == 0) {
+      string tag = baseEffectiveType.substr(6);
+      tag = normalizeTag(tag);
+      
+      // Get the union type from our local registry
+      auto it = declaredTypes.find(tag);
+      if (it == declaredTypes.end())
+        throw runtime_error("Unknown union type '" + tag + "'.");
+      
+      StructType* unionTy = dyn_cast<StructType>(it->second);
+      if (!unionTy)
+        throw runtime_error("Type '" + tag + "' is not a union type.");
+      
+      // Find the member index using the enhanced type registry
+      AggregateTypeInfo* typeInfo = getAggregateTypeInfo(tag);
+      if (!typeInfo) {
+        throw runtime_error("Union type info not found for '" + tag + "'.");
+      }
+      
+      MemberInfo* memberInfo = getMemberInfo(tag, mem->member);
+      if (!memberInfo) {
+        throw runtime_error("Union type '" + tag + "' does not contain member '" + mem->member + "'.");
+      }
+      
+      // For unions, all members share the same memory location
+      // We'll use index 0 since all members start at the same offset
+      return builder.CreateStructGEP(unionTy, basePtr, 0, mem->member);
+    }
+    // non-struct/union => just get LValue of the base
     else {
       return generateLValue(mem->base);
     }
@@ -989,49 +1022,20 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     ty = Type::getInt32Ty(context);
   else if (baseType.rfind("union ", 0) == 0) {
     string tag = baseType.substr(6);
-    auto it = unionRegistry.find(tag);
-    if (it == unionRegistry.end())
+    auto it = declaredTypes.find(tag);
+    if (it == declaredTypes.end()) {
       throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
                           "'.");
-    int maxSize = 0;
-    DataLayout dl(module->getDataLayout());
-    for (auto &member : it->second->members) {
-      int memberSize = 0;
-      if (member->type == "int" || member->type == "float")
-        memberSize = 4;
-      else if (member->type == "char" || member->type == "bool")
-        memberSize = 1;
-      else if (member->type == "double")
-        memberSize = 8;
-      else if (member->type.rfind("enum ", 0) == 0)
-        memberSize = 4;
-      else if (member->type.rfind("union ", 0) == 0)
-        throw runtime_error("Nested unions not supported.");
-      else if (member->type.rfind("struct ", 0) == 0) {
-        llvm::Type *structTy = getLLVMType(member->type);
-        uint64_t size = dl.getTypeAllocSize(structTy);
-        memberSize = (int)size;
-      } else {
-        throw runtime_error("Unsupported union member type '" + member->type +
-                            "'.");
-      }
-      if (memberSize > maxSize)
-        maxSize = memberSize;
     }
-    if (maxSize <= 0)
-      maxSize = 1;
-    ty = ArrayType::get(Type::getInt8Ty(context), maxSize);
+    ty = it->second;
   } else if (baseType.rfind("struct ", 0) == 0) {
     string tag = baseType.substr(7);
-    auto it = structRegistry.find(tag);
-    if (it == structRegistry.end())
+    auto it = declaredTypes.find(tag);
+    if (it == declaredTypes.end()) {
       throw runtime_error("CodeGenerator Error: Unknown struct type '" + type +
                           "'.");
-    vector<Type *> memberTypes;
-    for (auto &m : it->second->members) {
-      memberTypes.push_back(getLLVMType(m->type));
     }
-    ty = StructType::create(context, memberTypes, tag, /*packed=*/false);
+    ty = it->second;
   } else {
     throw runtime_error("CodeGenerator Error: Unsupported type '" + type +
                         "'.");

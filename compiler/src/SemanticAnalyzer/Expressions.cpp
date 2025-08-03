@@ -10,7 +10,7 @@ using std::string;
 
 namespace {
 // Helper function to infer the type (as a string) of an expression.
-// It uses the analyzer's symbol table via the public getter, and the global
+// It uses the analyzer's symbol table via the public getter and the global
 // unionRegistry and structRegistry.
 string inferExpressionType(const std::shared_ptr<Expression> &expr,
                            const SemanticAnalyzer &analyzer) {

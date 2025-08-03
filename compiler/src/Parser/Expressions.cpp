@@ -160,7 +160,7 @@ ExpressionPtr Parser::parseFactor() {
   return expr;
 }
 
-// Modified parseUnary() to support cast expressions, address-of ('&'), and
+// Modified parseUnary() to support cast expressions, address-of ('&') and
 // dereference ('*') operators.
 ExpressionPtr Parser::parseUnary() {
   // Handle address-of operator '&'

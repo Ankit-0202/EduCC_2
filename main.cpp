@@ -130,10 +130,12 @@ static std::string tokenTypeToString(TokenType type) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc < 2) {
-    std::cerr << "Usage: C99Compiler <source_file.c> [optional output.ll]\n";
+  std::cerr << "[DEBUG] main: Starting with " << argc << " arguments" << std::endl;
+  if (argc != 3) {
+    std::cerr << "Usage: " << argv[0] << " <source_file> <output_file>\n";
     return 1;
   }
+  std::cerr << "[DEBUG] main: Arguments parsed successfully" << std::endl;
 
   std::string sourcePath = argv[1];
   std::string outFile = "output.ll";
@@ -144,12 +146,14 @@ int main(int argc, char *argv[]) {
   // --- Step 0: Read and dump the original source ---
   std::ifstream srcFile(sourcePath);
   if (!srcFile.is_open()) {
-    std::cerr << "Error: Could not open source file: " << sourcePath << "\n";
+    std::cerr << "Error: Could not open source file '" << sourcePath << "'.\n";
     return 1;
   }
+  std::cerr << "[DEBUG] main: Source file opened successfully" << std::endl;
   std::stringstream srcBuffer;
   srcBuffer << srcFile.rdbuf();
   std::string originalSource = srcBuffer.str();
+  std::cerr << "[DEBUG] main: Source file read successfully" << std::endl;
   std::cout << "===== Original Source =====\n";
   std::cout << originalSource << "\n";
   std::cout << "===========================\n\n";
@@ -163,7 +167,9 @@ int main(int argc, char *argv[]) {
   Preprocessor preprocessor(systemPaths, userPaths);
   std::string preprocessedSource;
   try {
+    std::cerr << "[DEBUG] main: About to call preprocessor.preprocess" << std::endl;
     preprocessedSource = preprocessor.preprocess(sourcePath);
+    std::cerr << "[DEBUG] main: preprocessor.preprocess completed successfully" << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Preprocessing Error: " << e.what() << "\n";
     return 1;
@@ -179,7 +185,9 @@ int main(int argc, char *argv[]) {
   Lexer lexer(preprocessedSource);
   std::vector<Token> tokens;
   try {
+    std::cerr << "[DEBUG] main: About to call lexer.tokenize" << std::endl;
     tokens = lexer.tokenize();
+    std::cerr << "[DEBUG] main: lexer.tokenize completed successfully" << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Lexer Error: " << e.what() << "\n";
     return 1;
@@ -199,23 +207,23 @@ int main(int argc, char *argv[]) {
   Parser parser(tokens);
   std::shared_ptr<Program> ast;
   try {
+    std::cerr << "[DEBUG] main: About to call parser.parse" << std::endl;
     ast = parser.parse();
+    std::cerr << "[DEBUG] main: parser.parse completed successfully" << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Parser Error: " << e.what() << "\n";
     return 1;
   }
 
-  // (Optional: If you have a function to dump the AST, print it here.)
-  // std::cout << "===== AST Dump =====\n";
-  // ast->print(std::cout);
-  // std::cout << "====================\n\n";
 
   /*
    * Step 4: Semantic Analysis
    */
   SemanticAnalyzer semanticAnalyzer;
   try {
+    std::cerr << "[DEBUG] main: About to call semanticAnalyzer.analyze" << std::endl;
     semanticAnalyzer.analyze(ast);
+    std::cerr << "[DEBUG] main: semanticAnalyzer.analyze completed successfully" << std::endl;
     std::cout << "Semantic analysis completed successfully.\n";
   } catch (const std::exception &e) {
     std::cerr << "Semantic Analysis Error: " << e.what() << "\n";
@@ -227,7 +235,9 @@ int main(int argc, char *argv[]) {
    */
   CodeGenerator codeGen;
   try {
+    std::cerr << "[DEBUG] main: About to call generateCode" << std::endl;
     std::unique_ptr<llvm::Module> module = codeGen.generateCode(ast);
+    std::cerr << "[DEBUG] main: generateCode completed successfully" << std::endl;
     std::error_code EC;
     llvm::raw_fd_ostream dest(outFile, EC,
                               static_cast<llvm::sys::fs::OpenFlags>(0));

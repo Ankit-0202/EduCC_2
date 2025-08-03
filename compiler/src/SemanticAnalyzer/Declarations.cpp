@@ -2,6 +2,7 @@
 #include "SemanticAnalyzer.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -190,21 +191,144 @@ void SemanticAnalyzer::analyzeEnumDeclaration(
 
 void SemanticAnalyzer::analyzeUnionDeclaration(
     const std::shared_ptr<UnionDeclaration> &unionDecl) {
+  std::cerr << "[DEBUG] analyzeUnionDeclaration: Processing union declaration" << std::endl;
+  
+  // Create aggregate type info for the union
+  AggregateTypeInfo unionInfo;
+  unionInfo.tag = unionDecl->tag.value_or("anonymous_union");
+  unionInfo.isUnion = true;
+  unionInfo.totalSize = 0;
+  
+  size_t memberIndex = 0;
   for (auto &member : unionDecl->members) {
     analyzeVariableDeclaration(member);
+    
+    // Calculate member size (simplified)
+    size_t memberSize = 0;
+    if (member->type == "int" || member->type == "float")
+      memberSize = 4;
+    else if (member->type == "char" || member->type == "bool")
+      memberSize = 1;
+    else if (member->type == "double")
+      memberSize = 8;
+    else if (member->type.rfind("enum ", 0) == 0)
+      memberSize = 4;
+    else if (member->type.rfind("struct ", 0) == 0) {
+      std::string structTag = member->type.substr(7);
+      auto structIt = structRegistry.find(structTag);
+      if (structIt != structRegistry.end()) {
+        // Calculate struct size based on members
+        memberSize = 0;
+        for (const auto& structMember : structIt->second->members) {
+          size_t structMemberSize = 0;
+          if (structMember->type == "int" || structMember->type == "float")
+            structMemberSize = 4;
+          else if (structMember->type == "char" || structMember->type == "bool")
+            structMemberSize = 1;
+          else if (structMember->type == "double")
+            structMemberSize = 8;
+          else
+            structMemberSize = 4; // Default
+          memberSize += structMemberSize;
+        }
+      } else {
+        memberSize = 4; // Default size
+      }
+    } else {
+      memberSize = 4; // Default size
+    }
+    
+    // For unions, all members share the same memory location
+    MemberInfo memberInfo;
+    memberInfo.name = member->name;
+    memberInfo.type = member->type;
+    memberInfo.index = memberIndex;
+    memberInfo.offset = 0; // All union members start at offset 0
+    memberInfo.size = memberSize;
+    unionInfo.members.push_back(memberInfo);
+    
+    // Union size is the size of the largest member
+    if (memberSize > unionInfo.totalSize) {
+      unionInfo.totalSize = memberSize;
+    }
+    
+    memberIndex++;
   }
+  
   if (unionDecl->tag.has_value()) {
+    std::cerr << "[DEBUG] analyzeUnionDeclaration: Registering union '" << unionDecl->tag.value() << "'" << std::endl;
     unionRegistry[unionDecl->tag.value()] = unionDecl;
+    aggregateTypeRegistry[unionDecl->tag.value()] = unionInfo;
   }
 }
 
 void SemanticAnalyzer::analyzeStructDeclaration(
     const std::shared_ptr<StructDeclaration> &structDecl) {
+  // Create aggregate type info for the struct
+  AggregateTypeInfo structInfo;
+  structInfo.tag = structDecl->tag.value_or("anonymous_struct");
+  structInfo.isUnion = false;
+  structInfo.totalSize = 0;
+  
+  size_t memberIndex = 0;
+  size_t currentOffset = 0;
+  
   for (auto &member : structDecl->members) {
     analyzeVariableDeclaration(member);
+    
+    // Calculate member size (simplified)
+    size_t memberSize = 0;
+    if (member->type == "int" || member->type == "float")
+      memberSize = 4;
+    else if (member->type == "char" || member->type == "bool")
+      memberSize = 1;
+    else if (member->type == "double")
+      memberSize = 8;
+    else if (member->type.rfind("enum ", 0) == 0)
+      memberSize = 4;
+    else if (member->type.rfind("struct ", 0) == 0) {
+      std::string structTag = member->type.substr(7);
+      auto structIt = structRegistry.find(structTag);
+      if (structIt != structRegistry.end()) {
+        // Calculate struct size based on members
+        memberSize = 0;
+        for (const auto& structMember : structIt->second->members) {
+          size_t structMemberSize = 0;
+          if (structMember->type == "int" || structMember->type == "float")
+            structMemberSize = 4;
+          else if (structMember->type == "char" || structMember->type == "bool")
+            structMemberSize = 1;
+          else if (structMember->type == "double")
+            structMemberSize = 8;
+          else
+            structMemberSize = 4; // Default
+          memberSize += structMemberSize;
+        }
+      } else {
+        memberSize = 4; // Default size
+      }
+    } else {
+      memberSize = 4; // Default size
+    }
+    
+    // For structs, members are laid out sequentially
+    MemberInfo memberInfo;
+    memberInfo.name = member->name;
+    memberInfo.type = member->type;
+    memberInfo.index = memberIndex;
+    memberInfo.offset = currentOffset;
+    memberInfo.size = memberSize;
+    structInfo.members.push_back(memberInfo);
+    
+    currentOffset += memberSize;
+    memberIndex++;
   }
+  
+  structInfo.totalSize = currentOffset;
+  
   if (structDecl->tag.has_value()) {
     structRegistry[structDecl->tag.value()] = structDecl;
+    aggregateTypeRegistry[structDecl->tag.value()] = structInfo;
   }
 }
 

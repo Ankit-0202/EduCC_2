@@ -35,7 +35,7 @@ void MacroExpander::setCurrentFile(const std::string &fileName) {
 //   Parses a directive line and adds or removes macro definitions.
 //   This version manually scans the line to extract the macro name and,
 //   if the next non‐whitespace character is '(', parses the parameter list.
-//   Supports object-like, function-like, and variadic macros.
+//   Supports object-like, function-like and variadic macros.
 //
 void MacroExpander::processDirective(const std::string &line) {
   size_t pos = line.find("#define");
