@@ -117,8 +117,8 @@ int main() {
 
   // Verify final result
   // Expected: 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 14 + 15 + 16 =
-  // 103
-  if (result != 103) {
+  // 123
+  if (result != 123) {
     return 1; // Incorrect result
   }
 

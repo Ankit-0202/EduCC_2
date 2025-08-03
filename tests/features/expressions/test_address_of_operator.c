@@ -69,7 +69,7 @@ int main() {
   volatile int *ptr_volatile = &volatile_var;
 
   // Test address-of for pointer variables
-  int *ptr_to_ptr = &ptr_int;
+  int *ptr_to_ptr = ptr_int;
   int **ptr_ptr = &ptr_int;
 
   // Test address-of for array

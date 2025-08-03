@@ -133,6 +133,22 @@ Token Lexer::number() {
   int startColumn = column;
   std::string lexeme;
   bool sawDot = false;
+  
+  // Handle hexadecimal literals (0x...)
+  if (peek() == '0' && !isAtEnd() && peekNext() == 'x') {
+    lexeme.push_back(get()); // consume '0'
+    lexeme.push_back(get()); // consume 'x'
+    while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(peek())))) {
+      lexeme.push_back(get());
+    }
+    Token token;
+    token.type = TokenType::LITERAL_INT;
+    token.lexeme = lexeme;
+    token.line = startLine;
+    token.column = startColumn;
+    return token;
+  }
+  
   while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
     lexeme.push_back(get());
   }
@@ -342,7 +358,7 @@ Token Lexer::opOrDelim() {
       lexeme += "=";
       token.type = TokenType::OP_NOT_EQUAL;
     } else {
-      token.type = TokenType::UNKNOWN;
+      token.type = TokenType::OP_LOGICAL_NOT;
     }
     break;
   }
@@ -396,6 +412,10 @@ Token Lexer::opOrDelim() {
   }
   case '^': {
     token.type = TokenType::OP_BITWISE_XOR;
+    break;
+  }
+  case '~': {
+    token.type = TokenType::OP_BITWISE_NOT;
     break;
   }
   case ';':

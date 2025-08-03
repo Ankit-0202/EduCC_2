@@ -68,6 +68,8 @@ static std::string tokenTypeToString(TokenType type) {
     return "OP_MULTIPLY";
   case TokenType::OP_DIVIDE:
     return "OP_DIVIDE";
+  case TokenType::OP_MODULO:
+    return "OP_MODULO";
   case TokenType::OP_ASSIGN:
     return "OP_ASSIGN";
   case TokenType::OP_PLUS_ASSIGN:
@@ -94,6 +96,20 @@ static std::string tokenTypeToString(TokenType type) {
     return "OP_LOGICAL_AND";
   case TokenType::OP_LOGICAL_OR:
     return "OP_LOGICAL_OR";
+  case TokenType::OP_LOGICAL_NOT:
+    return "OP_LOGICAL_NOT";
+  case TokenType::OP_BITWISE_AND:
+    return "OP_BITWISE_AND";
+  case TokenType::OP_BITWISE_OR:
+    return "OP_BITWISE_OR";
+  case TokenType::OP_BITWISE_XOR:
+    return "OP_BITWISE_XOR";
+  case TokenType::OP_LEFT_SHIFT:
+    return "OP_LEFT_SHIFT";
+  case TokenType::OP_RIGHT_SHIFT:
+    return "OP_RIGHT_SHIFT";
+  case TokenType::OP_BITWISE_NOT:
+    return "OP_BITWISE_NOT";
   case TokenType::DELIM_SEMICOLON:
     return "DELIM_SEMICOLON";
   case TokenType::DELIM_COMMA:

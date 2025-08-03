@@ -202,7 +202,32 @@ DeclarationPtr Parser::parseDeclaration() {
 
   // 4) Possibly "struct" or "union" or "enum" typed
   if (peek().lexeme == "struct") {
-    return parseStructDeclaration();
+    size_t save = current;
+    advance(); // consume "struct"
+    if (check(TokenType::IDENTIFIER)) {
+      string structTag = advance().lexeme;
+      // Look ahead: if next token is '{', it's a struct definition
+      if (check(TokenType::DELIM_LBRACE)) {
+        current = save;
+        return parseStructDeclaration();
+      } else if (check(TokenType::IDENTIFIER)) {
+        // struct IDENT IDENT ... => variable declaration
+        string type = "struct " + structTag;
+        type = consumePointerTokens(*this, type);
+        if (!check(TokenType::IDENTIFIER))
+          error("Expected identifier after struct type");
+        return parseVariableDeclarationWithType(type);
+      } else {
+        // struct IDENT ... (not followed by '{' or identifier): error
+        error("Expected '{' for struct definition or identifier for variable declaration after struct tag");
+      }
+    } else if (check(TokenType::DELIM_LBRACE)) {
+      // struct { ... } (anonymous struct definition)
+      current = save;
+      return parseStructDeclaration();
+    } else {
+      error("Expected struct tag or '{' after 'struct'");
+    }
   }
   if (check(TokenType::KW_UNION)) {
     return parseUnionDeclaration();

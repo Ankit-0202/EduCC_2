@@ -27,6 +27,7 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
     analyzeExpression(whileStmt->condition);
     analyzeStatement(whileStmt->body);
   } else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
+    symbolTable.enterScope();
     if (forStmt->initializer)
       analyzeStatement(forStmt->initializer);
     if (forStmt->condition)
@@ -34,6 +35,7 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
     if (forStmt->increment)
       analyzeExpression(forStmt->increment);
     analyzeStatement(forStmt->body);
+    symbolTable.exitScope();
   } else if (auto switchStmt =
                  std::dynamic_pointer_cast<SwitchStatement>(stmt)) {
     analyzeExpression(switchStmt->expression);

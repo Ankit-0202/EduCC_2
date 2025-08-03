@@ -160,9 +160,29 @@ ExpressionPtr Parser::parseFactor() {
   return expr;
 }
 
-// Modified parseUnary() to support cast expressions, address-of ('&') and
-// dereference ('*') operators.
+// Modified parseUnary() to support cast expressions, address-of ('&'), 
+// dereference ('*'), logical NOT ('!'), and unary minus ('-') operators.
 ExpressionPtr Parser::parseUnary() {
+  // Handle logical NOT operator '!'
+  if (match(TokenType::OP_LOGICAL_NOT)) {
+    ExpressionPtr operand = parseUnary();
+    return std::make_shared<UnaryExpression>("!", operand);
+  }
+  // Handle unary minus operator '-'
+  if (match(TokenType::OP_MINUS)) {
+    ExpressionPtr operand = parseUnary();
+    return std::make_shared<UnaryExpression>("-", operand);
+  }
+  // Handle unary plus operator '+'
+  if (match(TokenType::OP_PLUS)) {
+    ExpressionPtr operand = parseUnary();
+    return std::make_shared<UnaryExpression>("+", operand);
+  }
+  // Handle bitwise NOT operator '~'
+  if (match(TokenType::OP_BITWISE_NOT)) {
+    ExpressionPtr operand = parseUnary();
+    return std::make_shared<UnaryExpression>("~", operand);
+  }
   // Handle address-of operator '&'
   if (!isAtEnd() && peek().lexeme == "&") {
     advance();

@@ -32,22 +32,43 @@ StatementPtr Parser::parseStatement() {
     return parseCompoundStatement();
   }
 
-  // Check for a local enum definition in statement context.
-  // e.g. enum { RED, GREEN } col;
+  // Check for a local enum/struct/union definition in statement context.
   if (check(TokenType::KW_ENUM)) {
     size_t save = current;
     advance(); // consume KW_ENUM
-    // If we see an inline definition, revert and parse the enum as a
-    // declaration.
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
-         (current + 1 < tokens.size() &&
-          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+         (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
       current = save; // revert
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
     } else {
-      // not an inline definition => e.g. enum Color col;
+      current = save; // revert pointer to handle in variable-decl logic below
+    }
+  }
+  if (check(TokenType::KW_STRUCT)) {
+    size_t save = current;
+    advance(); // consume KW_STRUCT
+    if (check(TokenType::DELIM_LBRACE) ||
+        (check(TokenType::IDENTIFIER) &&
+         (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+      current = save; // revert
+      DeclarationPtr structDecl = parseStructDeclaration();
+      return std::make_shared<DeclarationStatement>(structDecl);
+    } else {
+      current = save; // revert pointer to handle in variable-decl logic below
+    }
+  }
+  if (check(TokenType::KW_UNION)) {
+    size_t save = current;
+    advance(); // consume KW_UNION
+    if (check(TokenType::DELIM_LBRACE) ||
+        (check(TokenType::IDENTIFIER) &&
+         (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+      current = save; // revert
+      DeclarationPtr unionDecl = parseUnionDeclaration();
+      return std::make_shared<DeclarationStatement>(unionDecl);
+    } else {
       current = save; // revert pointer to handle in variable-decl logic below
     }
   }
