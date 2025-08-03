@@ -34,9 +34,18 @@ static string consumePointerTokens(Parser &parser, const string &baseType) {
 //   "int" or "void*").
 DeclarationPtr
 Parser::parseVariableDeclarationWithType(const string &givenType) {
+  std::cerr << "[DEBUG] (parseVariableDeclarationWithType) current=" << current
+            << ", next tokens: ";
+  for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
+    std::cerr << static_cast<int>(tokens[current + i].type) << "('"
+              << tokens[current + i].lexeme << "') ";
+  }
+  std::cerr << std::endl;
   string type = givenType;
   vector<std::shared_ptr<VariableDeclaration>> decls;
   do {
+    std::cerr << "[DEBUG] Current token: type=" << static_cast<int>(peek().type)
+              << ", lexeme='" << peek().lexeme << "'\n";
     if (!check(TokenType::IDENTIFIER)) {
       error("Expected identifier after type/pointer specifiers");
     }
@@ -71,6 +80,13 @@ Parser::parseVariableDeclarationWithType(const string &givenType) {
 //   body or semicolon.
 DeclarationPtr
 Parser::parseFunctionDeclarationWithType(const string &givenType) {
+  std::cerr << "[DEBUG] (parseFunctionDeclarationWithType) current=" << current
+            << ", next tokens: ";
+  for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
+    std::cerr << static_cast<int>(tokens[current + i].type) << "('"
+              << tokens[current + i].lexeme << "') ";
+  }
+  std::cerr << std::endl;
   string returnType = givenType;
   if (!check(TokenType::IDENTIFIER))
     error("Expected function name after return type");
@@ -93,6 +109,13 @@ Parser::parseFunctionDeclarationWithType(const string &givenType) {
 }
 
 DeclarationPtr Parser::parseDeclaration() {
+  std::cerr << "[DEBUG] (parseDeclaration) current=" << current
+            << ", next tokens: ";
+  for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
+    std::cerr << static_cast<int>(tokens[current + i].type) << "('"
+              << tokens[current + i].lexeme << "') ";
+  }
+  std::cerr << std::endl;
   // 1) Check for struct / union / enum definitions
   if (peek().lexeme == "struct") {
     return parseStructDeclaration();
@@ -137,6 +160,9 @@ DeclarationPtr Parser::parseDeclaration() {
     string type = consumePointerTokens(*this, baseType);
 
     // Now see if next is an identifier => function or variable
+    std::cerr << "[DEBUG] (parseDeclaration) Current token: type="
+              << static_cast<int>(peek().type) << ", lexeme='" << peek().lexeme
+              << "'\n";
     if (!check(TokenType::IDENTIFIER))
       error("Expected identifier after type/pointer specifiers");
 

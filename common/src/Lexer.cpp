@@ -205,6 +205,60 @@ Token Lexer::character() {
   return token;
 }
 
+Token Lexer::string() {
+  int startLine = line;
+  int startColumn = column;
+  std::string lexeme;
+  // Consume the opening quote.
+  get(); // consume '"'
+  lexeme = "\"";
+  // Read characters until closing quote.
+  while (!isAtEnd() && peek() != '"') {
+    char ch = get();
+    if (ch == '\\') {
+      // Handle escape sequences.
+      if (isAtEnd())
+        throw std::runtime_error(
+            "Lexer Error: Unterminated escape sequence in string literal");
+      char escapeChar = get();
+      switch (escapeChar) {
+      case 'n':
+        ch = '\n';
+        break;
+      case 't':
+        ch = '\t';
+        break;
+      case 'r':
+        ch = '\r';
+        break;
+      case '\\':
+        ch = '\\';
+        break;
+      case '"':
+        ch = '"';
+        break;
+      case '\'':
+        ch = '\'';
+        break;
+      default:
+        ch = escapeChar;
+        break;
+      }
+    }
+    lexeme += ch;
+  }
+  // Expect closing double quote.
+  if (isAtEnd() || get() != '"')
+    throw std::runtime_error("Lexer Error: Unterminated string literal");
+  lexeme += "\"";
+  Token token;
+  token.type = TokenType::LITERAL_STRING;
+  token.lexeme = lexeme;
+  token.line = startLine;
+  token.column = startColumn;
+  return token;
+}
+
 Token Lexer::opOrDelim() {
   int startLine = line;
   int startColumn = column;
@@ -367,6 +421,11 @@ Token Lexer::opOrDelim() {
     currentPos--;
     column--;
     return character();
+  case '"':
+    // Backtrack and let string() handle it.
+    currentPos--;
+    column--;
+    return string();
   default:
     token.type = TokenType::UNKNOWN;
     break;
@@ -390,6 +449,8 @@ std::vector<Token> Lexer::tokenize() {
       tokens.push_back(number());
     } else if (c == '\'') {
       tokens.push_back(character());
+    } else if (c == '"') {
+      tokens.push_back(string());
     } else {
       tokens.push_back(opOrDelim());
     }

@@ -116,6 +116,8 @@ static std::string tokenTypeToString(TokenType type) {
     return "LITERAL_DOUBLE";
   case TokenType::LITERAL_CHAR:
     return "LITERAL_CHAR";
+  case TokenType::LITERAL_STRING:
+    return "LITERAL_STRING";
   case TokenType::IDENTIFIER:
     return "IDENTIFIER";
   case TokenType::EOF_TOKEN:

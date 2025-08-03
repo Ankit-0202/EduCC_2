@@ -1,4 +1,5 @@
 #include "Parser.hpp"
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -62,6 +63,12 @@ void Parser::error(const std::string &message) const {
 std::shared_ptr<Program> Parser::parse() {
   auto program = std::make_shared<Program>();
   while (!isAtEnd()) {
+    std::cerr << "[DEBUG] (parse) current=" << current << ", next tokens: ";
+    for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
+      std::cerr << static_cast<int>(tokens[current + i].type) << "('"
+                << tokens[current + i].lexeme << "') ";
+    }
+    std::cerr << std::endl;
     DeclarationPtr decl = parseDeclaration();
     if (decl)
       program->addDeclaration(decl);

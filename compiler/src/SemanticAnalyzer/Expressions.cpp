@@ -208,7 +208,8 @@ void SemanticAnalyzer::analyzeExpression(
     for (const auto &arg : funcCall->arguments) {
       analyzeExpression(arg);
     }
-  } else if (auto ternary = std::dynamic_pointer_cast<TernaryExpression>(expr)) {
+  } else if (auto ternary =
+                 std::dynamic_pointer_cast<TernaryExpression>(expr)) {
     analyzeExpression(ternary->condition);
     analyzeExpression(ternary->trueExpr);
     analyzeExpression(ternary->falseExpr);

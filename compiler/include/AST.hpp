@@ -39,19 +39,22 @@ public:
 
 class Literal : public Expression {
 public:
-  enum class LiteralType { Int, Float, Double, Char, Bool };
+  enum class LiteralType { Int, Float, Double, Char, Bool, String };
   LiteralType type;
   int intValue;
   float floatValue;
   double doubleValue;
   char charValue;
   bool boolValue;
+  std::string stringValue;
 
   Literal(int value) : type(LiteralType::Int), intValue(value) {}
   Literal(float value) : type(LiteralType::Float), floatValue(value) {}
   Literal(double value) : type(LiteralType::Double), doubleValue(value) {}
   Literal(char value) : type(LiteralType::Char), charValue(value) {}
   Literal(bool value) : type(LiteralType::Bool), boolValue(value) {}
+  Literal(const std::string &value)
+      : type(LiteralType::String), stringValue(value) {}
 };
 
 class Identifier : public Expression {
@@ -130,7 +133,8 @@ public:
   ExpressionPtr condition;
   ExpressionPtr trueExpr;
   ExpressionPtr falseExpr;
-  TernaryExpression(ExpressionPtr condition, ExpressionPtr trueExpr, ExpressionPtr falseExpr)
+  TernaryExpression(ExpressionPtr condition, ExpressionPtr trueExpr,
+                    ExpressionPtr falseExpr)
       : condition(condition), trueExpr(trueExpr), falseExpr(falseExpr) {}
 };
 

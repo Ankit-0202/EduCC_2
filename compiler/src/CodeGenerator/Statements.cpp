@@ -3,6 +3,7 @@
 #include "CodeGenerator/Helpers.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+#include <iostream>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Instructions.h>
@@ -83,10 +84,20 @@ void CodeGenerator::generateVariableDeclaration(
   }
   // Otherwise, if there is an initializer list, infer the array size from it.
   else if (varDecl->initializer) {
-    if (auto initList = std::dynamic_pointer_cast<InitializerList>(
-            varDecl->initializer.value())) {
-      uint64_t arraySize = initList->elements.size();
-      varType = ArrayType::get(baseType, arraySize);
+    if (auto lit =
+            std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
+      if (lit->type == Literal::LiteralType::String) {
+        // Infer array size from string length + 1 (for null terminator)
+        uint64_t arraySize = lit->stringValue.size() + 1;
+        varType = ArrayType::get(baseType, arraySize);
+        // Re-create the alloca with the correct type
+        AllocaInst *alloc =
+            builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+        localVarStack.back()[varDecl->name] = alloc;
+        declaredVarStack.back().insert(varDecl->name);
+        declaredTypes[varDecl->name] = varType;
+        declaredTypeStrings[varDecl->name] = varDecl->type;
+      }
     }
   }
 
@@ -96,6 +107,44 @@ void CodeGenerator::generateVariableDeclaration(
   declaredVarStack.back().insert(varDecl->name);
   declaredTypes[varDecl->name] = varType;
   declaredTypeStrings[varDecl->name] = varDecl->type;
+
+  // Handle string literal initializer for char arrays
+  if (varDecl->initializer) {
+    if (auto lit =
+            std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
+      if (lit->type == Literal::LiteralType::String) {
+        auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
+        std::string str = lit->stringValue;
+        uint64_t arraySize =
+            arrayTy ? arrayTy->getNumElements() : (str.size() + 1);
+        if (!arrayTy) {
+          varType = ArrayType::get(baseType, arraySize);
+          alloc = builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+          localVarStack.back()[varDecl->name] = alloc;
+          declaredVarStack.back().insert(varDecl->name);
+          declaredTypes[varDecl->name] = varType;
+          declaredTypeStrings[varDecl->name] = varDecl->type;
+          arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
+        }
+        if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
+          throw std::runtime_error("CodeGenerator Error: String literal "
+                                   "initializer for non-char array.");
+        for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+          char c = (i < str.size()) ? str[i] : '\0';
+          llvm::Value *elemVal =
+              llvm::ConstantInt::get(Type::getInt8Ty(context), c);
+          std::vector<llvm::Value *> indices = {
+              llvm::ConstantInt::get(Type::getInt32Ty(context), 0),
+              llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
+          llvm::Value *elemPtr =
+              builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
+                                varDecl->name + "_idx");
+          builder.CreateStore(elemVal, elemPtr);
+        }
+        return;
+      }
+    }
+  }
 
   if (varDecl->initializer) {
     // If this is an array initializer (either with explicit dimensions or
@@ -147,6 +196,30 @@ void CodeGenerator::generateVariableDeclaration(
         }
       }
       builder.CreateStore(initVal, alloc);
+    }
+  } else if (auto lit = std::dynamic_pointer_cast<Literal>(
+                 varDecl->initializer.value())) {
+    std::cerr << "[DEBUG] (generateVariableDeclaration) found Literal "
+                 "initializer, type="
+              << (int)lit->type << std::endl;
+    if (lit->type == Literal::LiteralType::String) {
+      auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
+      if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
+        throw std::runtime_error("CodeGenerator Error: String literal "
+                                 "initializer for non-char array.");
+      std::string str = lit->stringValue;
+      for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+        char c = (i < str.size()) ? str[i] : '\0';
+        llvm::Value *elemVal =
+            llvm::ConstantInt::get(Type::getInt8Ty(context), c);
+        std::vector<llvm::Value *> indices = {
+            llvm::ConstantInt::get(Type::getInt32Ty(context), 0),
+            llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
+        llvm::Value *elemPtr = builder.CreateGEP(
+            alloc->getAllocatedType(), alloc, indices, varDecl->name + "_idx");
+        builder.CreateStore(elemVal, elemPtr);
+      }
+      return;
     }
   }
 }
@@ -208,14 +281,17 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     return true;
   } else if (auto breakStmt = std::dynamic_pointer_cast<BreakStatement>(stmt)) {
     if (loopStack.empty()) {
-      throw runtime_error("CodeGenerator Error: 'break' statement not in a loop or switch");
+      throw runtime_error(
+          "CodeGenerator Error: 'break' statement not in a loop or switch");
     }
     // Branch to the loop exit block
     builder.CreateBr(loopStack.back().afterBlock);
     return true;
-  } else if (auto continueStmt = std::dynamic_pointer_cast<ContinueStatement>(stmt)) {
+  } else if (auto continueStmt =
+                 std::dynamic_pointer_cast<ContinueStatement>(stmt)) {
     if (loopStack.empty()) {
-      throw runtime_error("CodeGenerator Error: 'continue' statement not in a loop");
+      throw runtime_error(
+          "CodeGenerator Error: 'continue' statement not in a loop");
     }
     // Branch to the loop condition block
     builder.CreateBr(loopStack.back().conditionBlock);
@@ -248,10 +324,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     BasicBlock *bodyBB = BasicBlock::Create(context, "while.body", theFunction);
     BasicBlock *afterBB =
         BasicBlock::Create(context, "while.after", theFunction);
-    
+
     // Push loop context for break/continue
     loopStack.push_back({condBB, bodyBB, afterBB});
-    
+
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
     llvm::Value *condVal = generateExpression(whileStmt->condition);
@@ -264,7 +340,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     if (!bodyTerminated)
       builder.CreateBr(condBB);
     builder.SetInsertPoint(afterBB);
-    
+
     // Pop loop context
     loopStack.pop_back();
     return false;
@@ -276,10 +352,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     BasicBlock *bodyBB = BasicBlock::Create(context, "for.body", theFunction);
     BasicBlock *incrBB = BasicBlock::Create(context, "for.incr", theFunction);
     BasicBlock *afterBB = BasicBlock::Create(context, "for.after", theFunction);
-    
+
     // Push loop context for break/continue
     loopStack.push_back({condBB, bodyBB, afterBB});
-    
+
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
     llvm::Value *condVal = nullptr;
@@ -301,7 +377,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       generateExpression(forStmt->increment);
     builder.CreateBr(condBB);
     builder.SetInsertPoint(afterBB);
-    
+
     // Pop loop context
     loopStack.pop_back();
     return false;
@@ -428,23 +504,47 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
     llvm::Value *oldVal =
         builder.CreateLoad(allocaInst->getAllocatedType(), v, id->name.c_str());
     llvm::Value *one = nullptr;
-    if (oldVal->getType()->isIntegerTy())
-      one = ConstantInt::get(oldVal->getType(), 1);
-    else if (oldVal->getType()->isFloatingPointTy())
-      one = ConstantFP::get(oldVal->getType(), 1.0);
-    else
-      throw runtime_error("Unsupported type for postfix operator.");
     llvm::Value *newVal = nullptr;
+
+    if (oldVal->getType()->isIntegerTy()) {
+      one = ConstantInt::get(oldVal->getType(), 1);
+    } else if (oldVal->getType()->isFloatingPointTy()) {
+      one = ConstantFP::get(oldVal->getType(), 1.0);
+    } else if (oldVal->getType()->isPointerTy()) {
+      // For pointers, increment/decrement by the size of the pointed-to type
+      // Since we're using opaque pointers, we need to determine the size
+      // differently For now, assume int* (4 bytes) - this is a simplified
+      // approach
+      one = ConstantInt::get(Type::getInt32Ty(context), 4);
+    } else {
+      throw runtime_error("Unsupported type for postfix operator.");
+    }
+
     if (post->op == "++") {
       if (oldVal->getType()->isFloatingPointTy())
         newVal = builder.CreateFAdd(oldVal, one, "postinc");
-      else
+      else if (oldVal->getType()->isPointerTy()) {
+        // For pointer increment, use GEP with int8* and cast
+        llvm::Value *ptrAsInt8 = builder.CreateBitCast(
+            oldVal, PointerType::get(Type::getInt8Ty(context), 0), "ptrcast");
+        newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, one,
+                                   "postinc");
+        newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
+      } else
         newVal = builder.CreateAdd(oldVal, one, "postinc");
     } else {
       // op == "--"
       if (oldVal->getType()->isFloatingPointTy())
         newVal = builder.CreateFSub(oldVal, one, "postdec");
-      else
+      else if (oldVal->getType()->isPointerTy()) {
+        llvm::Value *negOne = builder.CreateNeg(one, "negindex");
+        // For pointer decrement, use GEP with int8* and cast
+        llvm::Value *ptrAsInt8 = builder.CreateBitCast(
+            oldVal, PointerType::get(Type::getInt8Ty(context), 0), "ptrcast");
+        newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, negOne,
+                                   "postdec");
+        newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
+      } else
         newVal = builder.CreateSub(oldVal, one, "postdec");
     }
     builder.CreateStore(newVal, v);
@@ -729,6 +829,16 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       return ConstantInt::get(Type::getInt8Ty(context), lit->charValue);
     case Literal::LiteralType::Bool:
       return ConstantInt::get(Type::getInt1Ty(context), lit->boolValue);
+    case Literal::LiteralType::String: {
+      // Create a global string constant
+      llvm::Constant *strConstant =
+          llvm::ConstantDataArray::getString(context, lit->stringValue, true);
+      llvm::GlobalVariable *gVar = new llvm::GlobalVariable(
+          *module, strConstant->getType(), true,
+          llvm::GlobalValue::PrivateLinkage, strConstant, "str");
+      return builder.CreateBitCast(
+          gVar, PointerType::get(Type::getInt8Ty(context), 0), "strptr");
+    }
     default:
       throw runtime_error("Cannot infer type for literal.");
     }
@@ -806,30 +916,33 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     }
   } else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
     return generateLValue(expr);
-  } else if (auto ternary = std::dynamic_pointer_cast<TernaryExpression>(expr)) {
+  } else if (auto ternary =
+                 std::dynamic_pointer_cast<TernaryExpression>(expr)) {
     // Generate the condition
     llvm::Value *condVal = generateExpression(ternary->condition);
     if (condVal->getType() != Type::getInt1Ty(context)) {
-      condVal = builder.CreateICmpNE(condVal, 
-                                    ConstantInt::get(condVal->getType(), 0), 
-                                    "ternarycond");
+      condVal = builder.CreateICmpNE(
+          condVal, ConstantInt::get(condVal->getType(), 0), "ternarycond");
     }
-    
+
     // Generate the true and false expressions
     llvm::Value *trueVal = generateExpression(ternary->trueExpr);
     llvm::Value *falseVal = generateExpression(ternary->falseExpr);
-    
+
     // Ensure both expressions have the same type
     if (trueVal->getType() != falseVal->getType()) {
-      if (trueVal->getType()->isIntegerTy() && falseVal->getType()->isIntegerTy()) {
-        if (trueVal->getType()->getIntegerBitWidth() < falseVal->getType()->getIntegerBitWidth()) {
+      if (trueVal->getType()->isIntegerTy() &&
+          falseVal->getType()->isIntegerTy()) {
+        if (trueVal->getType()->getIntegerBitWidth() <
+            falseVal->getType()->getIntegerBitWidth()) {
           trueVal = builder.CreateSExt(trueVal, falseVal->getType(), "sexttmp");
         } else {
-          falseVal = builder.CreateSExt(falseVal, trueVal->getType(), "sexttmp");
+          falseVal =
+              builder.CreateSExt(falseVal, trueVal->getType(), "sexttmp");
         }
       }
     }
-    
+
     // Create the select instruction
     return builder.CreateSelect(condVal, trueVal, falseVal, "selecttmp");
   }

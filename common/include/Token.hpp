@@ -68,6 +68,7 @@ enum class TokenType {
   LITERAL_FLOAT,
   LITERAL_DOUBLE,
   LITERAL_CHAR,
+  LITERAL_STRING,
 
   // Identifiers and others
   IDENTIFIER,

@@ -12,7 +12,7 @@ ExpressionPtr Parser::parseExpression() { return parseAssignment(); }
 
 ExpressionPtr Parser::parseAssignment() {
   ExpressionPtr expr = parseLogicalOr();
-  
+
   // Check for ternary operator
   if (match(TokenType::DELIM_QUESTION)) {
     ExpressionPtr trueExpr = parseAssignment();
@@ -20,7 +20,7 @@ ExpressionPtr Parser::parseAssignment() {
     ExpressionPtr falseExpr = parseAssignment();
     return std::make_shared<TernaryExpression>(expr, trueExpr, falseExpr);
   }
-  
+
   if (!isAtEnd() && (peek().type == TokenType::OP_PLUS_ASSIGN ||
                      peek().type == TokenType::OP_MINUS_ASSIGN ||
                      peek().type == TokenType::OP_MULTIPLY_ASSIGN ||
@@ -257,6 +257,15 @@ ExpressionPtr Parser::parsePrimary() {
   }
   if (match(TokenType::LITERAL_CHAR)) {
     char value = tokens[current - 1].lexeme[0];
+    return std::make_shared<Literal>(value);
+  }
+  if (match(TokenType::LITERAL_STRING)) {
+    string value = tokens[current - 1].lexeme;
+    // Remove the surrounding quotes
+    if (value.length() >= 2 && value[0] == '"' &&
+        value[value.length() - 1] == '"') {
+      value = value.substr(1, value.length() - 2);
+    }
     return std::make_shared<Literal>(value);
   }
   if (match(TokenType::IDENTIFIER)) {

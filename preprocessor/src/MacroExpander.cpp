@@ -12,7 +12,12 @@
 static std::string tokensToString(const std::vector<Token> &tokens) {
   std::ostringstream oss;
   for (const auto &tok : tokens) {
-    oss << tok.lexeme << " ";
+    if (tok.type == TokenType::LITERAL_STRING) {
+      // For string literals, don't add extra spaces
+      oss << tok.lexeme;
+    } else {
+      oss << tok.lexeme << " ";
+    }
   }
   return oss.str();
 }

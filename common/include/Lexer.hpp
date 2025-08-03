@@ -19,6 +19,7 @@ private:
   Token identifier();
   Token number();
   Token character();
+  Token string();
   Token opOrDelim();
 
   std::string sourceCode;

@@ -1,5 +1,6 @@
 #include "AST.hpp"
 #include "Parser.hpp"
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -236,6 +237,9 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   vector<std::shared_ptr<VariableDeclarationStatement>> decls;
   do {
     if (!check(TokenType::IDENTIFIER)) {
+      std::cerr << "[DEBUG] (parseVariableDeclarationStatement) current="
+                << current << ", token: type=" << static_cast<int>(peek().type)
+                << ", lexeme='" << peek().lexeme << "'\n";
       error("Expected variable name in variable declaration");
     }
     Token varNameToken = advance(); // e.g. 'col'
