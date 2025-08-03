@@ -216,23 +216,24 @@ ExpressionPtr Parser::parsePostfix() {
       Token memberToken = advance();
       string memberName = memberToken.lexeme;
       expr = std::make_shared<MemberAccess>(expr, memberName);
+    } else if (match(TokenType::OP_RIGHT_ARROW)) {
+      // Expect an identifier after the arrow.
+      if (!check(TokenType::IDENTIFIER))
+        error("Expected identifier after '->' for pointer member access");
+      Token memberToken = advance();
+      string memberName = memberToken.lexeme;
+      // For 'ptr->x', treat as MemberAccess(Dereference(ptr), x)
+      expr = std::make_shared<MemberAccess>(
+          std::make_shared<UnaryExpression>("*", expr), memberName);
     }
     // Array indexing support: parse '[' expression ']'
     else if (match(TokenType::DELIM_LBRACKET)) {
       ExpressionPtr indexExpr = parseExpression();
       consume(TokenType::DELIM_RBRACKET, "Expected ']' after array index");
       expr = std::make_shared<ArrayAccess>(expr, indexExpr);
-    } else if (current + 1 < tokens.size() &&
-               tokens[current].type == TokenType::OP_PLUS &&
-               tokens[current + 1].type == TokenType::OP_PLUS) {
-      advance();
-      advance();
+    } else if (match(TokenType::OP_PLUS_PLUS)) {
       expr = std::make_shared<PostfixExpression>(expr, "++");
-    } else if (current + 1 < tokens.size() &&
-               tokens[current].type == TokenType::OP_MINUS &&
-               tokens[current + 1].type == TokenType::OP_MINUS) {
-      advance();
-      advance();
+    } else if (match(TokenType::OP_MINUS_MINUS)) {
       expr = std::make_shared<PostfixExpression>(expr, "--");
     } else {
       break;
@@ -293,6 +294,38 @@ ExpressionPtr Parser::parsePrimary() {
     ExpressionPtr expr = parseExpression();
     consume(TokenType::DELIM_RPAREN, "Expected ')' after expression");
     return expr;
+  }
+  if (match(TokenType::KW_SIZEOF)) {
+    consume(TokenType::DELIM_LPAREN, "Expected '(' after sizeof");
+
+    // Check if it's sizeof(type) or sizeof(expression)
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+        check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
+        check(TokenType::KW_STRUCT) || check(TokenType::KW_UNION) ||
+        check(TokenType::KW_ENUM)) {
+      // sizeof(type)
+      Token typeToken = advance();
+      string typeName = typeToken.lexeme;
+
+      // Handle struct/union/enum types
+      if (typeToken.type == TokenType::KW_STRUCT ||
+          typeToken.type == TokenType::KW_UNION ||
+          typeToken.type == TokenType::KW_ENUM) {
+        if (check(TokenType::IDENTIFIER)) {
+          Token tagToken = advance();
+          typeName += " " + tagToken.lexeme;
+        }
+      }
+
+      consume(TokenType::DELIM_RPAREN, "Expected ')' after sizeof type");
+      return std::make_shared<SizeOfExpression>(typeName);
+    } else {
+      // sizeof(expression)
+      ExpressionPtr operand = parseExpression();
+      consume(TokenType::DELIM_RPAREN, "Expected ')' after sizeof expression");
+      return std::make_shared<SizeOfExpression>(operand);
+    }
   }
   error("Expected expression");
   return nullptr;

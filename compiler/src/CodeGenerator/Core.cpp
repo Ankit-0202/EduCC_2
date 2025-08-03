@@ -5,6 +5,7 @@
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 
+#include <iostream>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -12,7 +13,6 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
-#include <iostream>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -296,23 +296,23 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
             new GlobalVariable(*module, Type::getInt32Ty(context), true,
                                GlobalValue::ExternalLinkage, initVal, enumName);
       }
-    }
-    else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
+    } else if (auto unionDecl =
+                   std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
       // Handle union declarations - register the type for later use
       if (!unionDecl->tag.has_value()) {
         // Anonymous union: skip type registration
         continue;
       }
-      
+
       // Create LLVM struct type for the union
       // For unions, we need to find the largest member size
       int maxSize = 0;
-      std::vector<Type*> memberTypes;
-      
-      for (const auto& member : unionDecl->members) {
-        Type* memberType = getLLVMType(member->type);
+      std::vector<Type *> memberTypes;
+
+      for (const auto &member : unionDecl->members) {
+        Type *memberType = getLLVMType(member->type);
         memberTypes.push_back(memberType);
-        
+
         // Calculate member size
         int memberSize = 0;
         if (member->type == "int" || member->type == "float")
@@ -330,35 +330,38 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
         if (memberSize > maxSize)
           maxSize = memberSize;
       }
-      
+
       if (maxSize <= 0)
         maxSize = 1;
-      
-      // Create a struct type for the union (LLVM doesn't have native union types)
-      // We'll use a struct with the largest member size
-      StructType* unionType = StructType::create(context, unionDecl->tag.value());
-      unionType->setBody(memberTypes, /*isPacked=*/true); // Packed for union-like behavior
-      
+
+      // Create a struct type for the union (LLVM doesn't have native union
+      // types) We'll use a struct with the largest member size
+      StructType *unionType =
+          StructType::create(context, unionDecl->tag.value());
+      unionType->setBody(memberTypes,
+                         /*isPacked=*/true); // Packed for union-like behavior
+
       // Register the type in our type registry
       declaredTypes[unionDecl->tag.value()] = unionType;
-    }
-    else if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(decl)) {
+    } else if (auto structDecl =
+                   std::dynamic_pointer_cast<StructDeclaration>(decl)) {
       // Handle struct declarations - register the type for later use
       if (!structDecl->tag.has_value()) {
         // Anonymous struct: skip type registration
         continue;
       }
-      
+
       // Create LLVM struct type for the struct
-      std::vector<Type*> memberTypes;
-      for (const auto& member : structDecl->members) {
-        Type* memberType = getLLVMType(member->type);
+      std::vector<Type *> memberTypes;
+      for (const auto &member : structDecl->members) {
+        Type *memberType = getLLVMType(member->type);
         memberTypes.push_back(memberType);
       }
-      
-      StructType* structType = StructType::create(context, structDecl->tag.value());
+
+      StructType *structType =
+          StructType::create(context, structDecl->tag.value());
       structType->setBody(memberTypes, /*isPacked=*/false);
-      
+
       // Register the type in our type registry
       declaredTypes[structDecl->tag.value()] = structType;
     }

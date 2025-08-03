@@ -6,18 +6,18 @@
 #include <vector>
 
 struct MemberInfo {
-    std::string name;
-    std::string type;
-    size_t index;
-    size_t offset;
-    size_t size;
+  std::string name;
+  std::string type;
+  size_t index;
+  size_t offset;
+  size_t size;
 };
 
 struct AggregateTypeInfo {
-    std::string tag;
-    std::vector<MemberInfo> members;
-    size_t totalSize;
-    bool isUnion;
+  std::string tag;
+  std::vector<MemberInfo> members;
+  size_t totalSize;
+  bool isUnion;
 };
 
 extern std::unordered_map<std::string, std::shared_ptr<UnionDeclaration>>
@@ -30,5 +30,6 @@ extern std::unordered_map<std::string, AggregateTypeInfo> aggregateTypeRegistry;
 
 // Helper functions
 std::string normalizeTag(const std::string &tag);
-AggregateTypeInfo* getAggregateTypeInfo(const std::string &tag);
-MemberInfo* getMemberInfo(const std::string &tag, const std::string &memberName);
+AggregateTypeInfo *getAggregateTypeInfo(const std::string &tag);
+MemberInfo *getMemberInfo(const std::string &tag,
+                          const std::string &memberName);

@@ -284,12 +284,16 @@ DeclarationPtr Parser::parseStructDeclaration() {
 }
 
 DeclarationPtr Parser::parseUnionDeclaration() {
-  std::cerr << "[DEBUG] parseUnionDeclaration: Starting union declaration parsing" << std::endl;
+  std::cerr
+      << "[DEBUG] parseUnionDeclaration: Starting union declaration parsing"
+      << std::endl;
   consume(TokenType::KW_UNION, "Expected 'union' keyword");
   optional<string> tag = std::nullopt;
   if (check(TokenType::IDENTIFIER))
     tag = advance().lexeme;
-  std::cerr << "[DEBUG] parseUnionDeclaration: Tag is " << (tag.has_value() ? "'" + tag.value() + "'" : "nullopt") << std::endl;
+  std::cerr << "[DEBUG] parseUnionDeclaration: Tag is "
+            << (tag.has_value() ? "'" + tag.value() + "'" : "nullopt")
+            << std::endl;
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin union declaration");
   vector<std::shared_ptr<VariableDeclaration>> members;
   while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
@@ -298,7 +302,8 @@ DeclarationPtr Parser::parseUnionDeclaration() {
   }
   consume(TokenType::DELIM_RBRACE, "Expected '}' to close union declaration");
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after union declaration");
-  std::cerr << "[DEBUG] parseUnionDeclaration: Creating UnionDeclaration with " << members.size() << " members" << std::endl;
+  std::cerr << "[DEBUG] parseUnionDeclaration: Creating UnionDeclaration with "
+            << members.size() << " members" << std::endl;
   return std::make_shared<UnionDeclaration>(tag, members);
 }
 

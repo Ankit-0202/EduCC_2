@@ -66,7 +66,9 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
 // };"), we infer the array size from the initializer list.
 void CodeGenerator::generateVariableDeclaration(
     const shared_ptr<VariableDeclaration> &varDecl) {
-  std::cerr << "[DEBUG] generateVariableDeclaration: Processing variable '" << varDecl->name << "' of type '" << varDecl->type << "'" << std::endl;
+  std::cerr << "[DEBUG] generateVariableDeclaration: Processing variable '"
+            << varDecl->name << "' of type '" << varDecl->type << "'"
+            << std::endl;
   llvm::Type *baseType = getLLVMType(varDecl->type);
   llvm::Type *varType = baseType;
 
@@ -97,7 +99,14 @@ void CodeGenerator::generateVariableDeclaration(
         localVarStack.back()[varDecl->name] = alloc;
         declaredVarStack.back().insert(varDecl->name);
         declaredTypes[varDecl->name] = varType;
-        declaredTypeStrings[varDecl->name] = varDecl->type;
+        // Build the type string including array dimensions
+        string typeWithDimensions = varDecl->type;
+        for (auto &dimExpr : varDecl->dimensions) {
+          if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
+            typeWithDimensions += "[" + std::to_string(lit->intValue) + "]";
+          }
+        }
+        declaredTypeStrings[varDecl->name] = typeWithDimensions;
       }
     }
   }
@@ -107,8 +116,19 @@ void CodeGenerator::generateVariableDeclaration(
   localVarStack.back()[varDecl->name] = alloc;
   declaredVarStack.back().insert(varDecl->name);
   declaredTypes[varDecl->name] = varType;
-  declaredTypeStrings[varDecl->name] = varDecl->type;
-  std::cerr << "[DEBUG] generateVariableDeclaration: Variable '" << varDecl->name << "' registered with type '" << varDecl->type << "'" << std::endl;
+
+  // Build the type string including array dimensions
+  string typeWithDimensions = varDecl->type;
+  for (auto &dimExpr : varDecl->dimensions) {
+    if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
+      typeWithDimensions += "[" + std::to_string(lit->intValue) + "]";
+    }
+  }
+  declaredTypeStrings[varDecl->name] = typeWithDimensions;
+
+  std::cerr << "[DEBUG] generateVariableDeclaration: Variable '"
+            << varDecl->name << "' registered with type '"
+            << declaredTypeStrings[varDecl->name] << "'" << std::endl;
 
   // Handle string literal initializer for char arrays
   if (varDecl->initializer.has_value()) {
@@ -125,7 +145,14 @@ void CodeGenerator::generateVariableDeclaration(
           localVarStack.back()[varDecl->name] = alloc;
           declaredVarStack.back().insert(varDecl->name);
           declaredTypes[varDecl->name] = varType;
-          declaredTypeStrings[varDecl->name] = varDecl->type;
+          // Build the type string including array dimensions
+          string typeWithDimensions = varDecl->type;
+          for (auto &dimExpr : varDecl->dimensions) {
+            if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
+              typeWithDimensions += "[" + std::to_string(lit->intValue) + "]";
+            }
+          }
+          declaredTypeStrings[varDecl->name] = typeWithDimensions;
           arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
         }
         if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
@@ -200,32 +227,33 @@ void CodeGenerator::generateVariableDeclaration(
       builder.CreateStore(initVal, alloc);
     }
   } else if (varDecl->initializer.has_value()) {
-    if (auto lit = std::dynamic_pointer_cast<Literal>(
-            varDecl->initializer.value())) {
-    std::cerr << "[DEBUG] (generateVariableDeclaration) found Literal "
-                 "initializer, type="
-              << (int)lit->type << std::endl;
-    if (lit->type == Literal::LiteralType::String) {
-      auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
-      if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
-        throw std::runtime_error("CodeGenerator Error: String literal "
-                                 "initializer for non-char array.");
-      std::string str = lit->stringValue;
-      for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
-        char c = (i < str.size()) ? str[i] : '\0';
-        llvm::Value *elemVal =
-            llvm::ConstantInt::get(Type::getInt8Ty(context), c);
-        std::vector<llvm::Value *> indices = {
-            llvm::ConstantInt::get(Type::getInt32Ty(context), 0),
-            llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
-        llvm::Value *elemPtr = builder.CreateGEP(
-            alloc->getAllocatedType(), alloc, indices, varDecl->name + "_idx");
-        builder.CreateStore(elemVal, elemPtr);
+    if (auto lit =
+            std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
+      std::cerr << "[DEBUG] (generateVariableDeclaration) found Literal "
+                   "initializer, type="
+                << (int)lit->type << std::endl;
+      if (lit->type == Literal::LiteralType::String) {
+        auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
+        if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
+          throw std::runtime_error("CodeGenerator Error: String literal "
+                                   "initializer for non-char array.");
+        std::string str = lit->stringValue;
+        for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+          char c = (i < str.size()) ? str[i] : '\0';
+          llvm::Value *elemVal =
+              llvm::ConstantInt::get(Type::getInt8Ty(context), c);
+          std::vector<llvm::Value *> indices = {
+              llvm::ConstantInt::get(Type::getInt32Ty(context), 0),
+              llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
+          llvm::Value *elemPtr =
+              builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
+                                varDecl->name + "_idx");
+          builder.CreateStore(elemVal, elemPtr);
+        }
+        return;
       }
-      return;
     }
   }
-}
 }
 
 //
@@ -456,62 +484,66 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   }
   // 2) MemberAccess: base.member
   else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    std::cerr << "[DEBUG] generateLValue: Processing member access for member: " << mem->member << std::endl;
+    std::cerr << "[DEBUG] generateLValue: Processing member access for member: "
+              << mem->member << std::endl;
     string baseEffectiveType = getEffectiveType(*this, mem->base);
-    std::cerr << "[DEBUG] generateLValue: Base effective type: " << baseEffectiveType << std::endl;
+    std::cerr << "[DEBUG] generateLValue: Base effective type: "
+              << baseEffectiveType << std::endl;
     llvm::Value *basePtr = generateLValue(mem->base);
     std::cerr << "[DEBUG] generateLValue: Got base pointer" << std::endl;
-    
+
     if (baseEffectiveType.rfind("struct ", 0) == 0) {
       string tag = baseEffectiveType.substr(7);
       tag = normalizeTag(tag);
-      
+
       // Get the struct type from our local registry
       auto it = declaredTypes.find(tag);
       if (it == declaredTypes.end())
         throw runtime_error("Unknown struct type '" + tag + "'.");
-      
-      StructType* structTy = dyn_cast<StructType>(it->second);
+
+      StructType *structTy = dyn_cast<StructType>(it->second);
       if (!structTy)
         throw runtime_error("Type '" + tag + "' is not a struct type.");
-      
+
       // Find the member index using the enhanced type registry
-      AggregateTypeInfo* typeInfo = getAggregateTypeInfo(tag);
+      AggregateTypeInfo *typeInfo = getAggregateTypeInfo(tag);
       if (!typeInfo) {
         throw runtime_error("Struct type info not found for '" + tag + "'.");
       }
-      
-      MemberInfo* memberInfo = getMemberInfo(tag, mem->member);
+
+      MemberInfo *memberInfo = getMemberInfo(tag, mem->member);
       if (!memberInfo) {
-        throw runtime_error("Struct type '" + tag + "' does not contain member '" + mem->member + "'.");
+        throw runtime_error("Struct type '" + tag +
+                            "' does not contain member '" + mem->member + "'.");
       }
-      
-      return builder.CreateStructGEP(structTy, basePtr, memberInfo->index, mem->member);
-    }
-    else if (baseEffectiveType.rfind("union ", 0) == 0) {
+
+      return builder.CreateStructGEP(structTy, basePtr, memberInfo->index,
+                                     mem->member);
+    } else if (baseEffectiveType.rfind("union ", 0) == 0) {
       string tag = baseEffectiveType.substr(6);
       tag = normalizeTag(tag);
-      
+
       // Get the union type from our local registry
       auto it = declaredTypes.find(tag);
       if (it == declaredTypes.end())
         throw runtime_error("Unknown union type '" + tag + "'.");
-      
-      StructType* unionTy = dyn_cast<StructType>(it->second);
+
+      StructType *unionTy = dyn_cast<StructType>(it->second);
       if (!unionTy)
         throw runtime_error("Type '" + tag + "' is not a union type.");
-      
+
       // Find the member index using the enhanced type registry
-      AggregateTypeInfo* typeInfo = getAggregateTypeInfo(tag);
+      AggregateTypeInfo *typeInfo = getAggregateTypeInfo(tag);
       if (!typeInfo) {
         throw runtime_error("Union type info not found for '" + tag + "'.");
       }
-      
-      MemberInfo* memberInfo = getMemberInfo(tag, mem->member);
+
+      MemberInfo *memberInfo = getMemberInfo(tag, mem->member);
       if (!memberInfo) {
-        throw runtime_error("Union type '" + tag + "' does not contain member '" + mem->member + "'.");
+        throw runtime_error("Union type '" + tag +
+                            "' does not contain member '" + mem->member + "'.");
       }
-      
+
       // For unions, all members share the same memory location
       // We'll use index 0 since all members start at the same offset
       return builder.CreateStructGEP(unionTy, basePtr, 0, mem->member);
@@ -978,6 +1010,36 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
 
     // Create the select instruction
     return builder.CreateSelect(condVal, trueVal, falseVal, "selecttmp");
+  } else if (auto sizeofExpr =
+                 std::dynamic_pointer_cast<SizeOfExpression>(expr)) {
+    if (sizeofExpr->isType) {
+      // sizeof(type)
+      llvm::Type *type = getLLVMType(sizeofExpr->typeName);
+      auto DL = module->getDataLayout();
+      uint64_t size = DL.getTypeAllocSize(type);
+      return ConstantInt::get(Type::getInt32Ty(context), size);
+    } else {
+      // sizeof(expression)
+      llvm::Value *operand = generateExpression(sizeofExpr->operand);
+      llvm::Type *operandType = operand->getType();
+
+      // Handle pointer types
+      if (operandType->isPointerTy()) {
+        // For pointers, get the size of the pointed-to type
+        string effectiveType = getEffectiveType(*this, sizeofExpr->operand);
+        while (!effectiveType.empty() && effectiveType.back() == '*')
+          effectiveType.pop_back();
+        llvm::Type *pointeeType = getLLVMType(effectiveType);
+        auto DL = module->getDataLayout();
+        uint64_t size = DL.getTypeAllocSize(pointeeType);
+        return ConstantInt::get(Type::getInt32Ty(context), size);
+      } else {
+        // For non-pointer types, get the size directly
+        auto DL = module->getDataLayout();
+        uint64_t size = DL.getTypeAllocSize(operandType);
+        return ConstantInt::get(Type::getInt32Ty(context), size);
+      }
+    }
   }
   throw runtime_error("Unsupported expression type in generateExpression().");
 }

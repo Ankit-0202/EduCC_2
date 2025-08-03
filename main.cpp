@@ -52,8 +52,16 @@ static std::string tokenTypeToString(TokenType type) {
     return "KW_UNION";
   case TokenType::KW_STRUCT:
     return "KW_STRUCT";
+  case TokenType::KW_SIZEOF:
+    return "KW_SIZEOF";
   case TokenType::OP_PLUS:
     return "OP_PLUS";
+  case TokenType::OP_PLUS_PLUS:
+    return "OP_PLUS_PLUS";
+  case TokenType::OP_MINUS_MINUS:
+    return "OP_MINUS_MINUS";
+  case TokenType::OP_RIGHT_ARROW:
+    return "OP_RIGHT_ARROW";
   case TokenType::OP_MINUS:
     return "OP_MINUS";
   case TokenType::OP_MULTIPLY:
@@ -130,7 +138,8 @@ static std::string tokenTypeToString(TokenType type) {
 }
 
 int main(int argc, char *argv[]) {
-  std::cerr << "[DEBUG] main: Starting with " << argc << " arguments" << std::endl;
+  std::cerr << "[DEBUG] main: Starting with " << argc << " arguments"
+            << std::endl;
   if (argc != 3) {
     std::cerr << "Usage: " << argv[0] << " <source_file> <output_file>\n";
     return 1;
@@ -167,9 +176,11 @@ int main(int argc, char *argv[]) {
   Preprocessor preprocessor(systemPaths, userPaths);
   std::string preprocessedSource;
   try {
-    std::cerr << "[DEBUG] main: About to call preprocessor.preprocess" << std::endl;
+    std::cerr << "[DEBUG] main: About to call preprocessor.preprocess"
+              << std::endl;
     preprocessedSource = preprocessor.preprocess(sourcePath);
-    std::cerr << "[DEBUG] main: preprocessor.preprocess completed successfully" << std::endl;
+    std::cerr << "[DEBUG] main: preprocessor.preprocess completed successfully"
+              << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Preprocessing Error: " << e.what() << "\n";
     return 1;
@@ -187,7 +198,8 @@ int main(int argc, char *argv[]) {
   try {
     std::cerr << "[DEBUG] main: About to call lexer.tokenize" << std::endl;
     tokens = lexer.tokenize();
-    std::cerr << "[DEBUG] main: lexer.tokenize completed successfully" << std::endl;
+    std::cerr << "[DEBUG] main: lexer.tokenize completed successfully"
+              << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Lexer Error: " << e.what() << "\n";
     return 1;
@@ -209,21 +221,23 @@ int main(int argc, char *argv[]) {
   try {
     std::cerr << "[DEBUG] main: About to call parser.parse" << std::endl;
     ast = parser.parse();
-    std::cerr << "[DEBUG] main: parser.parse completed successfully" << std::endl;
+    std::cerr << "[DEBUG] main: parser.parse completed successfully"
+              << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Parser Error: " << e.what() << "\n";
     return 1;
   }
-
 
   /*
    * Step 4: Semantic Analysis
    */
   SemanticAnalyzer semanticAnalyzer;
   try {
-    std::cerr << "[DEBUG] main: About to call semanticAnalyzer.analyze" << std::endl;
+    std::cerr << "[DEBUG] main: About to call semanticAnalyzer.analyze"
+              << std::endl;
     semanticAnalyzer.analyze(ast);
-    std::cerr << "[DEBUG] main: semanticAnalyzer.analyze completed successfully" << std::endl;
+    std::cerr << "[DEBUG] main: semanticAnalyzer.analyze completed successfully"
+              << std::endl;
     std::cout << "Semantic analysis completed successfully.\n";
   } catch (const std::exception &e) {
     std::cerr << "Semantic Analysis Error: " << e.what() << "\n";
@@ -237,7 +251,8 @@ int main(int argc, char *argv[]) {
   try {
     std::cerr << "[DEBUG] main: About to call generateCode" << std::endl;
     std::unique_ptr<llvm::Module> module = codeGen.generateCode(ast);
-    std::cerr << "[DEBUG] main: generateCode completed successfully" << std::endl;
+    std::cerr << "[DEBUG] main: generateCode completed successfully"
+              << std::endl;
     std::error_code EC;
     llvm::raw_fd_ostream dest(outFile, EC,
                               static_cast<llvm::sys::fs::OpenFlags>(0));

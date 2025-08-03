@@ -104,8 +104,53 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
                           funcCall->functionName + "'.");
     return symOpt.value().type;
   }
-  throw runtime_error(
-      "Semantic Analysis Error: Cannot infer type for expression.");
+  // For sizeof expressions, return "int" (sizeof returns size_t which is
+  // typically int)
+  if (auto sizeofExpr = std::dynamic_pointer_cast<SizeOfExpression>(expr)) {
+    return "int";
+  }
+  // For a postfix expression, return the type of the operand.
+  if (auto postExpr = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
+    return inferExpressionType(postExpr->operand, analyzer);
+  }
+  // For a unary expression, infer type based on the operator.
+  if (auto unExpr = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
+    string operandType = inferExpressionType(unExpr->operand, analyzer);
+    if (unExpr->op == "*") {
+      // Dereference: remove one level of pointer
+      if (!operandType.empty() && operandType.back() == '*')
+        return operandType.substr(0, operandType.size() - 1);
+      throw runtime_error("Cannot dereference non-pointer type: " +
+                          operandType);
+    } else if (unExpr->op == "&") {
+      // Address-of: add one level of pointer
+      return operandType + "*";
+    } else if (unExpr->op == "+" || unExpr->op == "-" || unExpr->op == "~" ||
+               unExpr->op == "!") {
+      return operandType;
+    }
+    throw runtime_error("Unknown unary operator: " + unExpr->op);
+  }
+  // For an assignment, return the type of the left-hand side.
+  if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
+    return inferExpressionType(assign->lhs, analyzer);
+  }
+  // For an array access, return the element type of the array or pointer.
+  if (auto arrAccess = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
+    string baseType = inferExpressionType(arrAccess->base, analyzer);
+    // Remove one level of pointer
+    if (!baseType.empty() && baseType.back() == '*') {
+      return baseType.substr(0, baseType.size() - 1);
+    }
+    // Remove '[N]' for array types (if present)
+    size_t pos = baseType.find('[');
+    if (pos != string::npos) {
+      return baseType.substr(0, pos);
+    }
+    throw runtime_error("Cannot index non-array/non-pointer type: " + baseType);
+  }
+  // For other expressions, we can't infer the type.
+  throw runtime_error("Cannot infer type for expression");
 }
 } // namespace
 
@@ -213,6 +258,14 @@ void SemanticAnalyzer::analyzeExpression(
     analyzeExpression(ternary->condition);
     analyzeExpression(ternary->trueExpr);
     analyzeExpression(ternary->falseExpr);
+  } else if (auto sizeofExpr =
+                 std::dynamic_pointer_cast<SizeOfExpression>(expr)) {
+    if (sizeofExpr->isType) {
+      // sizeof(type) - no expression to analyze
+    } else {
+      // sizeof(expression) - analyze the operand
+      analyzeExpression(sizeofExpr->operand);
+    }
   } else {
     throw runtime_error(
         "Semantic Analysis Error: Unsupported expression type encountered.");

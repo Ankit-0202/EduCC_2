@@ -120,6 +120,18 @@ public:
       : castType(castType), operand(operand) {}
 };
 
+class SizeOfExpression : public Expression {
+public:
+  std::string typeName;  // For sizeof(type)
+  ExpressionPtr operand; // For sizeof(expression)
+  bool isType;           // true if sizeof(type), false if sizeof(expression)
+
+  SizeOfExpression(const std::string &typeName)
+      : typeName(typeName), operand(nullptr), isType(true) {}
+  SizeOfExpression(ExpressionPtr operand)
+      : typeName(""), operand(operand), isType(false) {}
+};
+
 class PostfixExpression : public Expression {
 public:
   ExpressionPtr operand;

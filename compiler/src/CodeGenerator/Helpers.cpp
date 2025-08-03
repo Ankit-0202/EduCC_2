@@ -16,54 +16,60 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
   std::cerr << "[DEBUG] getEffectiveType: Starting" << std::endl;
   // Case 1: Identifier
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    std::cerr << "[DEBUG] getEffectiveType: Processing identifier: " << id->name << std::endl;
+    std::cerr << "[DEBUG] getEffectiveType: Processing identifier: " << id->name
+              << std::endl;
     auto it = CG.declaredTypeStrings.find(id->name);
     if (it == CG.declaredTypeStrings.end())
       throw runtime_error("CodeGenerator Error: Declared type for variable '" +
                           id->name + "' not found.");
-    std::cerr << "[DEBUG] getEffectiveType: Found type: " << it->second << std::endl;
+    std::cerr << "[DEBUG] getEffectiveType: Found type: " << it->second
+              << std::endl;
     return it->second;
   }
 
   // Case 2: Member Access: base.member
   if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    std::cerr << "[DEBUG] Processing member access: " << mem->member << std::endl;
+    std::cerr << "[DEBUG] Processing member access: " << mem->member
+              << std::endl;
     string baseType = getEffectiveType(CG, mem->base);
     std::cerr << "[DEBUG] Base type: " << baseType << std::endl;
-    
+
     // If the base is a union.
     if (baseType.rfind("union ", 0) == 0) {
       string tag = baseType.substr(6);
       tag = normalizeTag(tag);
-      
+
       // Use the enhanced type registry to get member type
-      MemberInfo* memberInfo = getMemberInfo(tag, mem->member);
+      MemberInfo *memberInfo = getMemberInfo(tag, mem->member);
       if (memberInfo) {
         return memberInfo->type;
       }
-      
+
       // Fallback to simplified approach
       if (mem->member == "i" || mem->member == "f" || mem->member == "c") {
-        return mem->member == "i" ? "int" : (mem->member == "f" ? "float" : "char");
+        return mem->member == "i" ? "int"
+                                  : (mem->member == "f" ? "float" : "char");
       }
-      throw runtime_error("CodeGenerator Error: Union member '" + mem->member + "' not supported.");
+      throw runtime_error("CodeGenerator Error: Union member '" + mem->member +
+                          "' not supported.");
     }
     // If the base is a struct.
     else if (baseType.rfind("struct ", 0) == 0) {
       string tag = baseType.substr(7);
       tag = normalizeTag(tag);
-      
+
       // Use the enhanced type registry to get member type
-      MemberInfo* memberInfo = getMemberInfo(tag, mem->member);
+      MemberInfo *memberInfo = getMemberInfo(tag, mem->member);
       if (memberInfo) {
         return memberInfo->type;
       }
-      
+
       // Fallback to simplified approach
       if (mem->member == "x" || mem->member == "y") {
         return "int"; // Assuming both x and y are int for now
       }
-      throw runtime_error("CodeGenerator Error: Struct member '" + mem->member + "' not supported.");
+      throw runtime_error("CodeGenerator Error: Struct member '" + mem->member +
+                          "' not supported.");
     } else {
       throw runtime_error("CodeGenerator Error: Base expression type '" +
                           baseType + "' is not an aggregate type.");
@@ -89,7 +95,19 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
     }
   }
 
-  // Case 4: Binary Expression (handle pointer arithmetic)
+  // Case 4: Array Access (handle array indexing)
+  if (auto arr = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
+    string baseType = getEffectiveType(CG, arr->base);
+    // Remove one level of array dimension
+    size_t pos = baseType.find('[');
+    if (pos != string::npos) {
+      return baseType.substr(0, pos);
+    }
+    throw runtime_error("CodeGenerator Error: Cannot index non-array type '" +
+                        baseType + "'.");
+  }
+
+  // Case 5: Binary Expression (handle pointer arithmetic)
   if (auto bin = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     if (bin->op == "+" || bin->op == "-") {
       string leftType = getEffectiveType(CG, bin->left);

@@ -1,6 +1,7 @@
 #include "Lexer.hpp"
 #include <algorithm>
 #include <cctype>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -116,11 +117,14 @@ Token Lexer::identifier() {
     token.type = TokenType::KW_UNION;
   else if (lexeme == "struct")
     token.type = TokenType::KW_STRUCT;
+  else if (lexeme == "sizeof")
+    token.type = TokenType::KW_SIZEOF;
   else
     token.type = TokenType::IDENTIFIER;
   token.lexeme = lexeme;
   token.line = startLine;
   token.column = startColumn;
+
   return token;
 }
 
@@ -267,9 +271,13 @@ Token Lexer::opOrDelim() {
   Token token;
   switch (c) {
   case '+': {
-    if (!isAtEnd() && peek() == '=') {
+    if (!isAtEnd() && peek() == '+') {
       get();
-      lexeme = "+=";
+      lexeme += "+";
+      token.type = TokenType::OP_PLUS_PLUS;
+    } else if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
       token.type = TokenType::OP_PLUS_ASSIGN;
     } else {
       token.type = TokenType::OP_PLUS;
@@ -277,9 +285,17 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '-': {
-    if (!isAtEnd() && peek() == '=') {
+    if (!isAtEnd() && peek() == '>') {
       get();
-      lexeme = "-=";
+      lexeme += ">";
+      token.type = TokenType::OP_RIGHT_ARROW;
+    } else if (!isAtEnd() && peek() == '-') {
+      get();
+      lexeme += "-";
+      token.type = TokenType::OP_MINUS_MINUS;
+    } else if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
       token.type = TokenType::OP_MINUS_ASSIGN;
     } else {
       token.type = TokenType::OP_MINUS;

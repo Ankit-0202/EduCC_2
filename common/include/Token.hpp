@@ -24,6 +24,7 @@ enum class TokenType {
   KW_ENUM,
   KW_UNION,
   KW_STRUCT,
+  KW_SIZEOF,
 
   // Operators
   OP_PLUS,
@@ -49,6 +50,9 @@ enum class TokenType {
   OP_BITWISE_XOR,
   OP_LEFT_SHIFT,
   OP_RIGHT_SHIFT,
+  OP_RIGHT_ARROW, // ->
+  OP_PLUS_PLUS,   // ++
+  OP_MINUS_MINUS, // --
 
   // Delimiters
   DELIM_SEMICOLON,

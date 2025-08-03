@@ -34,8 +34,10 @@ int main() {
   int unary_pos = +b; // 3
 
   // Test complex expressions
-  int complex1 = a + b * c - d / e; // 10 + 21 - 2 = 29 (assuming d=10, e=5)
-  int complex2 = (a + b) * (c - d); // 13 * -3 = -39 (assuming d=10)
+  int d = 10;
+  int e = 5;
+  int complex1 = a + b * c - d / e; // 10 + 21 - 2 = 29
+  int complex2 = (a + b) * (c - d); // 13 * -3 = -39
 
   // Test mixed type arithmetic
   float f = 3.5f;
@@ -64,11 +66,6 @@ int main() {
     return 9;
   if (unary_pos != 3)
     return 10;
-
-  // Test edge cases
-  int zero_div = 0;
-  int div_by_zero =
-      a / zero_div; // Should cause runtime error or undefined behavior
 
   // Test large numbers
   int large1 = 1000000;

@@ -69,12 +69,8 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
 
 void SemanticAnalyzer::analyzeVariableDeclaration(
     const std::shared_ptr<VariableDeclaration> &varDecl) {
-  Symbol symbol(varDecl->name, varDecl->type);
-  if (!symbolTable.declare(symbol)) {
-    throw runtime_error("Semantic Analysis Error: Variable '" + varDecl->name +
-                        "' is already declared in this scope.");
-  }
-  // Analyze each array dimension and ensure it is a constant integer.
+  // Build the type string including array dimensions
+  string typeWithDimensions = varDecl->type;
   for (auto &dimExpr : varDecl->dimensions) {
     analyzeExpression(dimExpr);
     if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
@@ -82,12 +78,20 @@ void SemanticAnalyzer::analyzeVariableDeclaration(
         throw runtime_error("Semantic Analysis Error: Array dimension for '" +
                             varDecl->name + "' must be an integer literal.");
       }
+      typeWithDimensions += "[" + std::to_string(lit->intValue) + "]";
     } else {
       throw runtime_error("Semantic Analysis Error: Array dimension for '" +
                           varDecl->name +
                           "' must be a constant integer literal.");
     }
   }
+
+  Symbol symbol(varDecl->name, typeWithDimensions);
+  if (!symbolTable.declare(symbol)) {
+    throw runtime_error("Semantic Analysis Error: Variable '" + varDecl->name +
+                        "' is already declared in this scope.");
+  }
+
   if (varDecl->initializer) {
     analyzeExpression(varDecl->initializer.value());
   }
@@ -191,18 +195,19 @@ void SemanticAnalyzer::analyzeEnumDeclaration(
 
 void SemanticAnalyzer::analyzeUnionDeclaration(
     const std::shared_ptr<UnionDeclaration> &unionDecl) {
-  std::cerr << "[DEBUG] analyzeUnionDeclaration: Processing union declaration" << std::endl;
-  
+  std::cerr << "[DEBUG] analyzeUnionDeclaration: Processing union declaration"
+            << std::endl;
+
   // Create aggregate type info for the union
   AggregateTypeInfo unionInfo;
   unionInfo.tag = unionDecl->tag.value_or("anonymous_union");
   unionInfo.isUnion = true;
   unionInfo.totalSize = 0;
-  
+
   size_t memberIndex = 0;
   for (auto &member : unionDecl->members) {
     analyzeVariableDeclaration(member);
-    
+
     // Calculate member size (simplified)
     size_t memberSize = 0;
     if (member->type == "int" || member->type == "float")
@@ -219,7 +224,7 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
       if (structIt != structRegistry.end()) {
         // Calculate struct size based on members
         memberSize = 0;
-        for (const auto& structMember : structIt->second->members) {
+        for (const auto &structMember : structIt->second->members) {
           size_t structMemberSize = 0;
           if (structMember->type == "int" || structMember->type == "float")
             structMemberSize = 4;
@@ -237,7 +242,7 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
     } else {
       memberSize = 4; // Default size
     }
-    
+
     // For unions, all members share the same memory location
     MemberInfo memberInfo;
     memberInfo.name = member->name;
@@ -246,17 +251,18 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
     memberInfo.offset = 0; // All union members start at offset 0
     memberInfo.size = memberSize;
     unionInfo.members.push_back(memberInfo);
-    
+
     // Union size is the size of the largest member
     if (memberSize > unionInfo.totalSize) {
       unionInfo.totalSize = memberSize;
     }
-    
+
     memberIndex++;
   }
-  
+
   if (unionDecl->tag.has_value()) {
-    std::cerr << "[DEBUG] analyzeUnionDeclaration: Registering union '" << unionDecl->tag.value() << "'" << std::endl;
+    std::cerr << "[DEBUG] analyzeUnionDeclaration: Registering union '"
+              << unionDecl->tag.value() << "'" << std::endl;
     unionRegistry[unionDecl->tag.value()] = unionDecl;
     aggregateTypeRegistry[unionDecl->tag.value()] = unionInfo;
   }
@@ -269,13 +275,13 @@ void SemanticAnalyzer::analyzeStructDeclaration(
   structInfo.tag = structDecl->tag.value_or("anonymous_struct");
   structInfo.isUnion = false;
   structInfo.totalSize = 0;
-  
+
   size_t memberIndex = 0;
   size_t currentOffset = 0;
-  
+
   for (auto &member : structDecl->members) {
     analyzeVariableDeclaration(member);
-    
+
     // Calculate member size (simplified)
     size_t memberSize = 0;
     if (member->type == "int" || member->type == "float")
@@ -292,7 +298,7 @@ void SemanticAnalyzer::analyzeStructDeclaration(
       if (structIt != structRegistry.end()) {
         // Calculate struct size based on members
         memberSize = 0;
-        for (const auto& structMember : structIt->second->members) {
+        for (const auto &structMember : structIt->second->members) {
           size_t structMemberSize = 0;
           if (structMember->type == "int" || structMember->type == "float")
             structMemberSize = 4;
@@ -310,7 +316,7 @@ void SemanticAnalyzer::analyzeStructDeclaration(
     } else {
       memberSize = 4; // Default size
     }
-    
+
     // For structs, members are laid out sequentially
     MemberInfo memberInfo;
     memberInfo.name = member->name;
@@ -319,13 +325,13 @@ void SemanticAnalyzer::analyzeStructDeclaration(
     memberInfo.offset = currentOffset;
     memberInfo.size = memberSize;
     structInfo.members.push_back(memberInfo);
-    
+
     currentOffset += memberSize;
     memberIndex++;
   }
-  
+
   structInfo.totalSize = currentOffset;
-  
+
   if (structDecl->tag.has_value()) {
     structRegistry[structDecl->tag.value()] = structDecl;
     aggregateTypeRegistry[structDecl->tag.value()] = structInfo;
