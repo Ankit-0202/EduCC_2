@@ -4,6 +4,7 @@
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 
+#include <iostream>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Instructions.h>
@@ -30,7 +31,7 @@ using std::vector;
 
 llvm::Value *
 CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
-  // We require that the base of the array access is an identifier.
+  // Handle array access on identifiers (e.g., arr[i])
   if (auto baseId = std::dynamic_pointer_cast<Identifier>(arr->base)) {
     auto it = declaredTypes.find(baseId->name);
     if (it == declaredTypes.end())
@@ -56,8 +57,32 @@ CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
     llvm::Value *gep =
         builder.CreateGEP(arrayTy, baseLVal, indices, "arraygep");
     return gep;
+  }
+  // Handle array access on member access (e.g., struct.member[i] or union.member[i])
+  else if (auto baseMember = std::dynamic_pointer_cast<MemberAccess>(arr->base)) {
+    // Get the base pointer (e.g., pointer to struct/union)
+    llvm::Value *basePtr = generateLValue(baseMember);
+    
+    // Get the effective type of the member to determine array element type
+    string memberType = getEffectiveType(*this, baseMember);
+    llvm::Type *elementType = getLLVMType(memberType);
+    
+    // Evaluate the index expression.
+    llvm::Value *indexVal = generateExpression(arr->index);
+    if (!indexVal->getType()->isIntegerTy(32))
+      indexVal = builder.CreateIntCast(indexVal, Type::getInt32Ty(context),
+                                       true, "arrayidxcast");
+
+    // For array members, we need to get a pointer to the array element
+    vector<llvm::Value *> indices;
+    indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+    indices.push_back(indexVal);
+
+    llvm::Value *gep =
+        builder.CreateGEP(elementType, basePtr, indices, "memberarraygep");
+    return gep;
   } else {
-    throw runtime_error("Array access on non-identifier base not supported.");
+    throw runtime_error("Array access on unsupported base type.");
   }
 }
 
@@ -66,6 +91,22 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     llvm::Value *lhs = generateExpression(binExpr->left);
     llvm::Value *rhs = generateExpression(binExpr->right);
+    
+    // Debug output to see what types we're dealing with
+    std::cerr << "[DEBUG] Binary expression: " << binExpr->op << std::endl;
+    std::cerr << "[DEBUG] LHS type: " << (lhs->getType()->isPointerTy() ? "pointer" : "value") << std::endl;
+    std::cerr << "[DEBUG] RHS type: " << (rhs->getType()->isPointerTy() ? "pointer" : "value") << std::endl;
+    std::cerr << "[DEBUG] LHS type name: " << (lhs->getType()->isFloatTy() ? "float" : 
+                                                  lhs->getType()->isDoubleTy() ? "double" :
+                                                  lhs->getType()->isIntegerTy(32) ? "int32" :
+                                                  lhs->getType()->isIntegerTy(64) ? "int64" :
+                                                  lhs->getType()->isIntegerTy(8) ? "int8" : "other") << std::endl;
+    std::cerr << "[DEBUG] RHS type name: " << (rhs->getType()->isFloatTy() ? "float" : 
+                                                  rhs->getType()->isDoubleTy() ? "double" :
+                                                  rhs->getType()->isIntegerTy(32) ? "int32" :
+                                                  rhs->getType()->isIntegerTy(64) ? "int64" :
+                                                  rhs->getType()->isIntegerTy(8) ? "int8" : "other") << std::endl;
+    
     // Only perform conversion if neither operand is a pointer arithmetic case.
     if (!((lhs->getType()->isPointerTy() && rhs->getType()->isIntegerTy()) ||
           (rhs->getType()->isPointerTy() && lhs->getType()->isIntegerTy()))) {
@@ -76,6 +117,21 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         } else if (lhs->getType()->isFloatingPointTy() &&
                    rhs->getType()->isIntegerTy()) {
           rhs = builder.CreateSIToFP(rhs, lhs->getType(), "sitofp");
+        } else if (lhs->getType()->isFloatingPointTy() &&
+                   rhs->getType()->isFloatingPointTy()) {
+          // Convert between float and double
+          if (lhs->getType()->isFloatTy() && rhs->getType()->isDoubleTy()) {
+            lhs = builder.CreateFPExt(lhs, rhs->getType(), "fpext");
+          } else if (lhs->getType()->isDoubleTy() && rhs->getType()->isFloatTy()) {
+            rhs = builder.CreateFPExt(rhs, lhs->getType(), "fpext");
+          }
+        } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+          // Convert between different integer types
+          if (lhs->getType()->getIntegerBitWidth() < rhs->getType()->getIntegerBitWidth()) {
+            lhs = builder.CreateSExt(lhs, rhs->getType(), "sext");
+          } else if (rhs->getType()->getIntegerBitWidth() < lhs->getType()->getIntegerBitWidth()) {
+            rhs = builder.CreateSExt(rhs, lhs->getType(), "sext");
+          }
         } else {
           throw runtime_error("Incompatible types in binary expression.");
         }
@@ -246,6 +302,29 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
     llvm::Value *ptr = generateLValue(assign->lhs);
     llvm::Value *rhsVal = generateExpression(assign->rhs);
+    
+    // Get the target type from the LHS expression
+    string targetTypeStr = getEffectiveType(*this, assign->lhs);
+    llvm::Type *targetType = getLLVMType(targetTypeStr);
+    llvm::Type *rhsType = rhsVal->getType();
+    
+    // Perform type conversion if needed
+    if (targetType != rhsType) {
+      if (targetType->isFloatingPointTy() && rhsType->isFloatingPointTy()) {
+        if (targetType->isFloatTy() && rhsType->isDoubleTy()) {
+          rhsVal = builder.CreateFPTrunc(rhsVal, targetType, "fptrunc");
+        } else if (targetType->isDoubleTy() && rhsType->isFloatTy()) {
+          rhsVal = builder.CreateFPExt(rhsVal, targetType, "fpext");
+        }
+      } else if (targetType->isIntegerTy() && rhsType->isFloatingPointTy()) {
+        rhsVal = builder.CreateFPToSI(rhsVal, targetType, "fptosi");
+      } else if (targetType->isFloatingPointTy() && rhsType->isIntegerTy()) {
+        rhsVal = builder.CreateSIToFP(rhsVal, targetType, "sitofp");
+      } else if (targetType->isIntegerTy() && rhsType->isIntegerTy()) {
+        rhsVal = builder.CreateIntCast(rhsVal, targetType, false, "intcast");
+      }
+    }
+    
     builder.CreateStore(rhsVal, ptr);
     return rhsVal;
   } else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
@@ -316,7 +395,7 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
           *module, strConstant->getType(), true,
           llvm::GlobalValue::PrivateLinkage, strConstant, "str");
       return builder.CreateBitCast(
-          gVar, PointerType::get(Type::getInt8Ty(context), 0), "strptr");
+          gVar, PointerType::get(context, 0), "strptr");
     }
     default:
       throw runtime_error("Cannot infer type for literal.");
@@ -359,6 +438,8 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     PointerType *ptrType = dyn_cast<PointerType>(elemPtr->getType());
     if (!ptrType)
       throw runtime_error("Array access did not return a pointer.");
+    
+    // Handle array access on identifiers (e.g., arr[i])
     if (auto baseId = std::dynamic_pointer_cast<Identifier>(arrAccess->base)) {
       auto it = declaredTypes.find(baseId->name);
       if (it == declaredTypes.end())
@@ -370,8 +451,22 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
                             baseId->name);
       llvm::Type *elemType = cast<ArrayType>(arrayTy)->getElementType();
       return builder.CreateLoad(elemType, elemPtr, "arrayload");
+    }
+    // Handle array access on member access (e.g., struct.member[i] or union.member[i])
+    else if (auto baseMember = std::dynamic_pointer_cast<MemberAccess>(arrAccess->base)) {
+      string memberType = getEffectiveType(*this, baseMember);
+      
+      // Extract the element type from array type (e.g., "char[20]" -> "char")
+      string elementTypeStr = memberType;
+      size_t bracketPos = memberType.find('[');
+      if (bracketPos != string::npos) {
+        elementTypeStr = memberType.substr(0, bracketPos);
+      }
+      
+      llvm::Type *elementType = getLLVMType(elementTypeStr);
+      return builder.CreateLoad(elementType, elemPtr, "memberarrayload");
     } else {
-      throw runtime_error("Array access on non-identifier base not supported.");
+      throw runtime_error("Array access on unsupported base type.");
     }
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
     llvm::Value *ptr = generateLValue(expr);

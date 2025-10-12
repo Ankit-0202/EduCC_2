@@ -80,6 +80,8 @@ Token Lexer::identifier() {
          (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
     lexeme.push_back(get());
   }
+  for (char c : lexeme) std::cerr << (int)(unsigned char)c << ' ';
+  std::cerr << std::endl;
   Token token;
   if (lexeme == "int")
     token.type = TokenType::KW_INT;
@@ -119,6 +121,12 @@ Token Lexer::identifier() {
     token.type = TokenType::KW_STRUCT;
   else if (lexeme == "sizeof")
     token.type = TokenType::KW_SIZEOF;
+  else if (lexeme == "goto")
+    token.type = TokenType::KW_GOTO;
+  else if (lexeme == "do")
+    token.type = TokenType::KW_DO;
+  else if (lexeme == "void")
+    token.type = TokenType::KW_VOID;
   else
     token.type = TokenType::IDENTIFIER;
   token.lexeme = lexeme;

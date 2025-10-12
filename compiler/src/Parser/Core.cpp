@@ -62,6 +62,7 @@ void Parser::error(const std::string &message) const {
 
 std::shared_ptr<Program> Parser::parse() {
   auto program = std::make_shared<Program>();
+  int declCount = 0;
   while (!isAtEnd()) {
     std::cerr << "[DEBUG] (parse) current=" << current << ", next tokens: ";
     for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
@@ -70,10 +71,16 @@ std::shared_ptr<Program> Parser::parse() {
     }
     std::cerr << std::endl;
     DeclarationPtr decl = parseDeclaration();
-    if (decl)
+    declCount++;
+    std::cerr << "[DEBUG] (parse) Parsed declaration " << declCount << std::endl;
+    if (decl) {
       program->addDeclaration(decl);
-    else
+      std::cerr << "[DEBUG] (parse) Added declaration to program" << std::endl;
+    } else {
+      std::cerr << "[DEBUG] (parse) Declaration is null, breaking" << std::endl;
       break;
+    }
   }
+  std::cerr << "[DEBUG] (parse) Total declarations parsed: " << declCount << std::endl;
   return program;
 }

@@ -246,7 +246,17 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
     // For unions, all members share the same memory location
     MemberInfo memberInfo;
     memberInfo.name = member->name;
-    memberInfo.type = member->type;
+    
+    // Construct the full type including array dimensions
+    string fullType = member->type;
+    for (const auto& dim : member->dimensions) {
+      if (auto lit = std::dynamic_pointer_cast<Literal>(dim)) {
+        if (lit->type == Literal::LiteralType::Int) {
+          fullType += "[" + std::to_string(lit->intValue) + "]";
+        }
+      }
+    }
+    memberInfo.type = fullType;
     memberInfo.index = memberIndex;
     memberInfo.offset = 0; // All union members start at offset 0
     memberInfo.size = memberSize;

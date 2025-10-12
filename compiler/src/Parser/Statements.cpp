@@ -27,6 +27,10 @@ StatementPtr Parser::parseStatement() {
     return parseBreakStatement();
   } else if (match(TokenType::KW_CONTINUE)) {
     return parseContinueStatement();
+  } else if (match(TokenType::KW_GOTO)) {
+    return parseGotoStatement();
+  } else if (match(TokenType::KW_DO)) {
+    return parseDoWhileStatement();
   } else if (match(TokenType::DELIM_LBRACE)) {
     // If a compound statement is encountered.
     return parseCompoundStatement();
@@ -312,4 +316,23 @@ StatementPtr Parser::parseBreakStatement() {
 StatementPtr Parser::parseContinueStatement() {
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after 'continue'");
   return std::make_shared<ContinueStatement>();
+}
+
+StatementPtr Parser::parseGotoStatement() {
+  if (!check(TokenType::IDENTIFIER)) {
+    error("Expected label name after 'goto'");
+  }
+  string label = advance().lexeme;
+  consume(TokenType::DELIM_SEMICOLON, "Expected ';' after goto statement");
+  return std::make_shared<GotoStatement>(label);
+}
+
+StatementPtr Parser::parseDoWhileStatement() {
+  StatementPtr body = parseStatement();
+  consume(TokenType::KW_WHILE, "Expected 'while' after do-while body");
+  consume(TokenType::DELIM_LPAREN, "Expected '(' after 'while'");
+  ExpressionPtr condition = parseExpression();
+  consume(TokenType::DELIM_RPAREN, "Expected ')' after while condition");
+  consume(TokenType::DELIM_SEMICOLON, "Expected ';' after do-while statement");
+  return std::make_shared<DoWhileStatement>(body, condition);
 }

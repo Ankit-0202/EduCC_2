@@ -43,6 +43,8 @@ public:
   StatementPtr parseReturnStatement();
   StatementPtr parseBreakStatement();
   StatementPtr parseContinueStatement();
+  StatementPtr parseGotoStatement();
+  StatementPtr parseDoWhileStatement();
   StatementPtr parseExpressionStatement();
   StatementPtr parseVariableDeclarationStatement();
 

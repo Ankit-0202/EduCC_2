@@ -242,6 +242,20 @@ public:
   ContinueStatement() = default;
 };
 
+class GotoStatement : public Statement {
+public:
+  std::string label;
+  GotoStatement(const std::string &label) : label(label) {}
+};
+
+class DoWhileStatement : public Statement {
+public:
+  StatementPtr body;
+  ExpressionPtr condition;
+  DoWhileStatement(StatementPtr body, ExpressionPtr condition)
+      : body(body), condition(condition) {}
+};
+
 // For local variable declarations (statements)
 class VariableDeclarationStatement : public Statement {
 public:

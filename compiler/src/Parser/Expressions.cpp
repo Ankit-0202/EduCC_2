@@ -277,8 +277,16 @@ ExpressionPtr Parser::parsePrimary() {
     return std::make_shared<Literal>(value);
   }
   if (match(TokenType::LITERAL_CHAR)) {
-    char value = tokens[current - 1].lexeme[0];
-    return std::make_shared<Literal>(value);
+    string lexeme = tokens[current - 1].lexeme;
+    // Extract the character value from the lexeme (e.g., "'A'" -> 'A')
+    if (lexeme.length() >= 3 && lexeme[0] == '\'' && lexeme[lexeme.length() - 1] == '\'') {
+      char value = lexeme[1]; // Get the character between the quotes
+      return std::make_shared<Literal>(value);
+    } else {
+      // Fallback for malformed character literals
+      char value = lexeme[0];
+      return std::make_shared<Literal>(value);
+    }
   }
   if (match(TokenType::LITERAL_STRING)) {
     string value = tokens[current - 1].lexeme;

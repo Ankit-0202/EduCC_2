@@ -74,6 +74,8 @@ public:
     llvm::BasicBlock *conditionBlock;
     llvm::BasicBlock *bodyBlock;
     llvm::BasicBlock *afterBlock;
+    llvm::BasicBlock *incrementBlock;  // For for loops
+    bool isForLoop;  // To distinguish between while and for loops
   };
   std::vector<LoopContext> loopStack;
 };

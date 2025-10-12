@@ -21,15 +21,6 @@ using std::unordered_map;
 using std::unordered_set;
 using std::vector;
 
-// Helper: find an identified struct type by name in the module.
-static StructType *getStructTypeByName(Module *M, const string &tag) {
-  for (StructType *ST : M->getIdentifiedStructTypes()) {
-    if (ST->getName() == tag)
-      return ST;
-  }
-  return nullptr;
-}
-
 //
 // Local Scope Management
 //
@@ -350,9 +341,44 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       throw runtime_error(
           "CodeGenerator Error: 'continue' statement not in a loop");
     }
-    // Branch to the loop condition block
-    builder.CreateBr(loopStack.back().conditionBlock);
+    // Branch to the appropriate block based on loop type
+    if (loopStack.back().isForLoop) {
+      // For for loops, continue should go to the increment block
+      builder.CreateBr(loopStack.back().incrementBlock);
+    } else {
+      // For while loops, continue should go to the condition block
+      builder.CreateBr(loopStack.back().conditionBlock);
+    }
     return true;
+  } else if (auto gotoStmt = std::dynamic_pointer_cast<GotoStatement>(stmt)) {
+    // For now, we'll just skip goto statements
+    // TODO: Implement proper goto label handling
+    return false;
+  } else if (auto doWhileStmt = std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
+    Function *theFunction = builder.GetInsertBlock()->getParent();
+    BasicBlock *bodyBB = BasicBlock::Create(context, "dowhile_body", theFunction);
+    BasicBlock *condBB = BasicBlock::Create(context, "dowhile_cond", theFunction);
+    BasicBlock *afterBB = BasicBlock::Create(context, "dowhile_after", theFunction);
+    
+    // Branch to the body
+    builder.CreateBr(bodyBB);
+    builder.SetInsertPoint(bodyBB);
+    
+    // Generate the body
+    bool bodyTerminated = generateStatement(doWhileStmt->body);
+    if (!bodyTerminated) {
+      builder.CreateBr(condBB);
+    }
+    
+    builder.SetInsertPoint(condBB);
+    llvm::Value *condVal = generateExpression(doWhileStmt->condition);
+    if (condVal->getType() != Type::getInt1Ty(context))
+      condVal = builder.CreateICmpNE(
+          condVal, ConstantInt::get(condVal->getType(), 0), "dowhilecond");
+    
+    builder.CreateCondBr(condVal, bodyBB, afterBB);
+    builder.SetInsertPoint(afterBB);
+    return false;
   } else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
     llvm::Value *condVal = generateExpression(ifStmt->condition);
     if (condVal->getType() != Type::getInt1Ty(context))
@@ -383,7 +409,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
         BasicBlock::Create(context, "while.after", theFunction);
 
     // Push loop context for break/continue
-    loopStack.push_back({condBB, bodyBB, afterBB});
+    loopStack.push_back({condBB, bodyBB, afterBB, nullptr, false});
 
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
@@ -411,7 +437,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     BasicBlock *afterBB = BasicBlock::Create(context, "for.after", theFunction);
 
     // Push loop context for break/continue
-    loopStack.push_back({condBB, bodyBB, afterBB});
+    loopStack.push_back({condBB, bodyBB, afterBB, incrBB, true});
 
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
@@ -526,8 +552,8 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
         string enumName = enumDecl->enumerators[i].first;
         int value = enumDecl->enumeratorValues[i];
         Constant *initVal = ConstantInt::get(Type::getInt32Ty(context), value);
-        GlobalVariable *gEnum = new GlobalVariable(*module, Type::getInt32Ty(context), true,
-                                                   GlobalValue::ExternalLinkage, initVal, enumName);
+        new GlobalVariable(*module, Type::getInt32Ty(context), true,
+                           GlobalValue::ExternalLinkage, initVal, enumName);
       }
     }
     return false;
@@ -612,9 +638,9 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
                             "' does not contain member '" + mem->member + "'.");
       }
 
-      // For unions, all members share the same memory location
-      // We'll use index 0 since all members start at the same offset
-      return builder.CreateStructGEP(unionTy, basePtr, 0, mem->member);
+      // For unions, we need to use the correct member index
+      // All members are stored in the struct, but we need to access the right one
+      return builder.CreateStructGEP(unionTy, basePtr, memberInfo->index, mem->member);
     }
     // non-struct/union => just get LValue of the base
     else {
@@ -659,7 +685,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
       else if (oldVal->getType()->isPointerTy()) {
         // For pointer increment, use GEP with int8* and cast
         llvm::Value *ptrAsInt8 = builder.CreateBitCast(
-            oldVal, PointerType::get(Type::getInt8Ty(context), 0), "ptrcast");
+            oldVal, PointerType::get(context, 0), "ptrcast");
         newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, one,
                                    "postinc");
         newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
@@ -673,7 +699,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         llvm::Value *negOne = builder.CreateNeg(one, "negindex");
         // For pointer decrement, use GEP with int8* and cast
         llvm::Value *ptrAsInt8 = builder.CreateBitCast(
-            oldVal, PointerType::get(Type::getInt8Ty(context), 0), "ptrcast");
+            oldVal, PointerType::get(context, 0), "ptrcast");
         newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, negOne,
                                    "postdec");
         newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
@@ -768,12 +794,40 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     }
     ty = it->second;
   } else {
-    throw runtime_error("CodeGenerator Error: Unsupported type '" + type +
-                        "'.");
+    // Check if this is an array type (e.g., "char[20]")
+    size_t bracketPos = baseType.find('[');
+    if (bracketPos != string::npos) {
+      string elementType = baseType.substr(0, bracketPos);
+      string sizeStr = baseType.substr(bracketPos + 1);
+      sizeStr = sizeStr.substr(0, sizeStr.find(']'));
+      
+      // Get the element type
+      llvm::Type *elementTy = nullptr;
+      if (elementType == "int")
+        elementTy = Type::getInt32Ty(context);
+      else if (elementType == "float")
+        elementTy = Type::getFloatTy(context);
+      else if (elementType == "char")
+        elementTy = Type::getInt8Ty(context);
+      else if (elementType == "double")
+        elementTy = Type::getDoubleTy(context);
+      else if (elementType == "bool")
+        elementTy = Type::getInt1Ty(context);
+      else {
+        throw runtime_error("CodeGenerator Error: Unsupported array element type '" + elementType + "'.");
+      }
+      
+      // Parse the array size
+      int arraySize = std::stoi(sizeStr);
+      ty = ArrayType::get(elementTy, arraySize);
+    } else {
+      throw runtime_error("CodeGenerator Error: Unsupported type '" + type +
+                          "'.");
+    }
   }
   // Now wrap the base type in pointer types as needed.
   for (int i = 0; i < pointerCount; i++) {
-    ty = PointerType::getUnqual(ty);
+    ty = PointerType::get(context, 0);
   }
   return ty;
 }

@@ -39,9 +39,6 @@ private:
 
   // Helper: read file from disk.
   std::string readFile(const std::string &path);
-
-  // The include processor.
-  class IncludeProcessor includeProcessor;
 };
 
 #endif // PREPROCESSOR_HPP

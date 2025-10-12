@@ -54,6 +54,10 @@ static std::string tokenTypeToString(TokenType type) {
     return "KW_STRUCT";
   case TokenType::KW_SIZEOF:
     return "KW_SIZEOF";
+  case TokenType::KW_DO:
+    return "KW_DO";
+  case TokenType::KW_VOID:
+    return "KW_VOID";
   case TokenType::OP_PLUS:
     return "OP_PLUS";
   case TokenType::OP_PLUS_PLUS:
@@ -154,13 +158,10 @@ static std::string tokenTypeToString(TokenType type) {
 }
 
 int main(int argc, char *argv[]) {
-  std::cerr << "[DEBUG] main: Starting with " << argc << " arguments"
-            << std::endl;
   if (argc != 3) {
     std::cerr << "Usage: " << argv[0] << " <source_file> <output_file>\n";
     return 1;
   }
-  std::cerr << "[DEBUG] main: Arguments parsed successfully" << std::endl;
 
   std::string sourcePath = argv[1];
   std::string outFile = "output.ll";

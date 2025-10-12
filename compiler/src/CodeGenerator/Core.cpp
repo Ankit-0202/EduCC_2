@@ -1,5 +1,3 @@
-// compiler/src/CodeGenerator/Core.cpp
-
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "SymbolTable.hpp"
@@ -34,9 +32,14 @@ CodeGenerator::CodeGenerator()
 
 std::unique_ptr<Module>
 CodeGenerator::generateCode(const shared_ptr<Program> &program) {
+  std::cerr << "[DEBUG] generateCode: Processing " << program->declarations.size() << " declarations\n";
+  
   // Process global declarations first.
   for (const auto &decl : program->declarations) {
+    std::cerr << "[DEBUG] generateCode: Processing declaration\n";
+    
     if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
+      std::cerr << "[DEBUG] generateCode: Variable declaration: " << varDecl->name << "\n";
       // e.g. int x;   or   int array[10];
       llvm::Type *varType = getLLVMType(varDecl->type);
       // If there are array dimensions, wrap them in an ArrayType
@@ -292,9 +295,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
         string enumName = enumDecl->enumerators[i].first;
         int value = enumDecl->enumeratorValues[i];
         Constant *initVal = ConstantInt::get(Type::getInt32Ty(context), value);
-        GlobalVariable *gEnum =
-            new GlobalVariable(*module, Type::getInt32Ty(context), true,
-                               GlobalValue::ExternalLinkage, initVal, enumName);
+        new GlobalVariable(*module, Type::getInt32Ty(context), true,
+                           GlobalValue::ExternalLinkage, initVal, enumName);
       }
     } else if (auto unionDecl =
                    std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
@@ -306,40 +308,48 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
 
       // Create LLVM struct type for the union
       // For unions, we need to find the largest member size
-      int maxSize = 0;
       std::vector<Type *> memberTypes;
 
       for (const auto &member : unionDecl->members) {
         Type *memberType = getLLVMType(member->type);
         memberTypes.push_back(memberType);
-
-        // Calculate member size
-        int memberSize = 0;
-        if (member->type == "int" || member->type == "float")
-          memberSize = 4;
-        else if (member->type == "char" || member->type == "bool")
-          memberSize = 1;
-        else if (member->type == "double")
-          memberSize = 8;
-        else if (member->type.rfind("enum ", 0) == 0)
-          memberSize = 4;
-        else {
-          // For other types, we'll use a conservative size
-          memberSize = 8;
-        }
-        if (memberSize > maxSize)
-          maxSize = memberSize;
       }
 
-      if (maxSize <= 0)
-        maxSize = 1;
-
       // Create a struct type for the union (LLVM doesn't have native union
-      // types) We'll use a struct with the largest member size
+      // types) We'll use a struct with all members, but they'll share the same memory
       StructType *unionType =
           StructType::create(context, unionDecl->tag.value());
-      unionType->setBody(memberTypes,
-                         /*isPacked=*/true); // Packed for union-like behavior
+      
+      // For a union, we need to include all members so they can be accessed
+      // In LLVM, we'll represent this as a struct with all members
+      std::vector<Type *> unionBody;
+      
+      for (const auto &member : unionDecl->members) {
+        Type *memberType = getLLVMType(member->type);
+        
+        // Handle array dimensions for union members
+        if (!member->dimensions.empty()) {
+          for (auto it = member->dimensions.rbegin();
+               it != member->dimensions.rend(); ++it) {
+            llvm::Value *dimVal = generateExpression(*it);
+            ConstantInt *constDim = dyn_cast<ConstantInt>(dimVal);
+            if (!constDim)
+              throw runtime_error("CodeGenerator Error: Array dimension must be "
+                                  "a constant integer.");
+            uint64_t arraySize = constDim->getZExtValue();
+            memberType = ArrayType::get(memberType, arraySize);
+          }
+        }
+        
+        unionBody.push_back(memberType);
+      }
+      
+      // If no members, add a default int type
+      if (unionBody.empty()) {
+        unionBody.push_back(Type::getInt32Ty(context));
+      }
+      
+      unionType->setBody(unionBody, /*isPacked=*/true);
 
       // Register the type in our type registry
       declaredTypes[unionDecl->tag.value()] = unionType;
@@ -364,12 +374,15 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
 
       // Register the type in our type registry
       declaredTypes[structDecl->tag.value()] = structType;
+    } else {
+      std::cerr << "[DEBUG] generateCode: Unknown declaration type\n";
     }
   }
 
   // 2) Then handle function declarations
   for (const auto &decl : program->declarations) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
+      std::cerr << "[DEBUG] generateCode: Function declaration: " << funcDecl->name << "\n";
       generateFunction(funcDecl);
     }
   }
@@ -378,17 +391,4 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
   if (verifyModule(*module, &errs()))
     throw runtime_error("CodeGenerator Error: Module verification failed.");
   return std::move(module);
-}
-
-static bool functionSignaturesMatch(FunctionType *existing,
-                                    FunctionType *candidate) {
-  if (existing->getReturnType() != candidate->getReturnType())
-    return false;
-  if (existing->getNumParams() != candidate->getNumParams())
-    return false;
-  for (unsigned i = 0; i < existing->getNumParams(); ++i) {
-    if (existing->getParamType(i) != candidate->getParamType(i))
-      return false;
-  }
-  return true;
 }

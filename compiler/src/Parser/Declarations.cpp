@@ -118,7 +118,24 @@ DeclarationPtr Parser::parseDeclaration() {
   std::cerr << std::endl;
   // 1) Check for struct / union / enum definitions
   if (peek().lexeme == "struct") {
-    return parseStructDeclaration();
+    std::cerr << "[DEBUG] (parseDeclaration) Found struct keyword" << std::endl;
+    // Check if this is actually a struct definition (has '{' after tag)
+    size_t save = current;
+    advance(); // consume "struct"
+    if (check(TokenType::IDENTIFIER)) {
+      string structTag = advance().lexeme;
+      if (check(TokenType::DELIM_LBRACE)) {
+        // It's a struct definition
+        current = save;
+        return parseStructDeclaration();
+      } else {
+        // It's not a struct definition, fall through to section 4
+        current = save;
+      }
+    } else {
+      // No identifier after struct, fall through to section 4
+      current = save;
+    }
   }
   if (check(TokenType::KW_UNION)) {
     return parseUnionDeclaration();
@@ -142,9 +159,8 @@ DeclarationPtr Parser::parseDeclaration() {
   //    struct"? etc.)
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-      check(TokenType::KW_BOOL)) {
+      check(TokenType::KW_BOOL) || check(TokenType::KW_VOID)) {
     // e.g. int main(...) or int x; ...
-    size_t save = current;
     string baseType;
     if (match(TokenType::KW_INT))
       baseType = "int";
@@ -156,6 +172,8 @@ DeclarationPtr Parser::parseDeclaration() {
       baseType = "double";
     else if (match(TokenType::KW_BOOL))
       baseType = "bool";
+    else if (match(TokenType::KW_VOID))
+      baseType = "void";
     // consume any pointer tokens
     string type = consumePointerTokens(*this, baseType);
 
@@ -202,21 +220,33 @@ DeclarationPtr Parser::parseDeclaration() {
 
   // 4) Possibly "struct" or "union" or "enum" typed
   if (peek().lexeme == "struct") {
+    std::cerr << "[DEBUG] (parseDeclaration) Found struct keyword in section 4" << std::endl;
     size_t save = current;
     advance(); // consume "struct"
     if (check(TokenType::IDENTIFIER)) {
       string structTag = advance().lexeme;
+      std::cerr << "[DEBUG] (parseDeclaration) Struct tag: " << structTag << std::endl;
       // Look ahead: if next token is '{', it's a struct definition
       if (check(TokenType::DELIM_LBRACE)) {
+        std::cerr << "[DEBUG] (parseDeclaration) Found '{', parsing as struct definition" << std::endl;
         current = save;
         return parseStructDeclaration();
       } else if (check(TokenType::IDENTIFIER)) {
-        // struct IDENT IDENT ... => variable declaration
+        std::cerr << "[DEBUG] (parseDeclaration) Found identifier after struct tag" << std::endl;
+        // struct IDENT IDENT ... => variable or function declaration
         string type = "struct " + structTag;
         type = consumePointerTokens(*this, type);
         if (!check(TokenType::IDENTIFIER))
           error("Expected identifier after struct type");
-        return parseVariableDeclarationWithType(type);
+        
+        // Check if next token is '(' to determine if it's a function
+        if (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LPAREN) {
+          std::cerr << "[DEBUG] (parseDeclaration) Next token is '(', parsing as function declaration" << std::endl;
+          return parseFunctionDeclarationWithType(type);
+        } else {
+          std::cerr << "[DEBUG] (parseDeclaration) Next token is not '(', parsing as variable declaration" << std::endl;
+          return parseVariableDeclarationWithType(type);
+        }
       } else {
         // struct IDENT ... (not followed by '{' or identifier): error
         error("Expected '{' for struct definition or identifier for variable declaration after struct tag");
@@ -395,9 +425,18 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
     static int anonCounter = 0;
     name = "anon_" + type + "_" + std::to_string(anonCounter++);
   }
+  
+  // Handle array dimensions
+  vector<ExpressionPtr> dimensions;
+  while (match(TokenType::DELIM_LBRACKET)) {
+    ExpressionPtr dimExpr = parseExpression();
+    consume(TokenType::DELIM_RBRACKET, "Expected ']' after array dimension");
+    dimensions.push_back(dimExpr);
+  }
+  
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after union member declaration");
-  return std::make_shared<VariableDeclaration>(type, name, std::nullopt);
+  return std::make_shared<VariableDeclaration>(type, name, std::nullopt, dimensions);
 }
 
 DeclarationPtr Parser::parseFunctionDeclaration() {
@@ -438,7 +477,8 @@ vector<std::pair<string, string>> Parser::parseParameters() {
   vector<std::pair<string, string>> params;
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-      check(TokenType::KW_BOOL)) {
+      check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
+      peek().lexeme == "struct") {
     do {
       string type;
       if (match(TokenType::KW_INT))
@@ -451,7 +491,15 @@ vector<std::pair<string, string>> Parser::parseParameters() {
         type = "double";
       else if (match(TokenType::KW_BOOL))
         type = "bool";
-      else
+      else if (match(TokenType::KW_VOID))
+        type = "void";
+      else if (peek().lexeme == "struct") {
+        advance(); // consume "struct"
+        if (!check(TokenType::IDENTIFIER))
+          error("Expected struct tag after 'struct'");
+        string structTag = advance().lexeme;
+        type = "struct " + structTag;
+      } else
         error("Expected parameter type");
 
       // pointer tokens
