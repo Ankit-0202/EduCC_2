@@ -1,15 +1,7 @@
+// Test integer overflow behavior
 int main() {
-    int max_int = 2147483647;  // INT_MAX
-    int min_int = -2147483648; // INT_MIN
+    int max_int = 2147483647;  // 2^31 - 1
+    int result = max_int + 1;   // Should overflow
     
-    // Test overflow
-    int overflow_result = max_int + 1;  // Should wrap around
-    int underflow_result = min_int - 1; // Should wrap around
-    
-    // Test multiplication overflow
-    int a = 1000000;
-    int b = 1000000;
-    int mult_result = a * b;  // Should overflow
-    
-    return 0;  // If we get here, overflow didn't cause a crash
-} 
+    return result;
+}

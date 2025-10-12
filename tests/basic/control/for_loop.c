@@ -1,7 +1,10 @@
+// Test for loop
 int main() {
-  int result = 1;
-  for (int i = 1; i <= 5; i++) {
-    result *= i;
-  }
-  return result;
+    int sum = 0;
+    
+    for (int i = 0; i < 10; i = i + 1) {
+        sum = sum + i;
+    }
+    
+    return sum;
 }

@@ -1,3 +1,12 @@
+// Test logical operators
 int main() {
-  return (1 && 0) || (1 && 1); // Expect 1
+    int a = 10;
+    int b = 5;
+    int c = 0;
+    
+    int and_result = (a > b) && (b > c);
+    int or_result = (a < b) || (b > c);
+    int not_result = !(a == b);
+    
+    return and_result + or_result + not_result;
 }

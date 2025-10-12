@@ -1,0 +1,16 @@
+// Test nested loops
+int main() {
+    int sum = 0;
+    
+    for (int i = 0; i < 3; i = i + 1) {
+        for (int j = 0; j < 3; j = j + 1) {
+            if (i == j) {
+                sum = sum + i * j;
+            } else {
+                sum = sum + i + j;
+            }
+        }
+    }
+    
+    return sum;
+}

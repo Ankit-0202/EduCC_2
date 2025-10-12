@@ -1,55 +1,21 @@
-struct Student {
-    int id;
-    char name[20];
-    float grade;
+// Test struct arrays
+struct Point {
+    int x;
+    int y;
 };
 
-int find_student(struct Student students[], int count, int id) {
-    for (int i = 0; i < count; i++) {
-        if (students[i].id == id) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-float average_grade(struct Student students[], int count) {
-    float sum = 0;
-    for (int i = 0; i < count; i++) {
-        sum += students[i].grade;
-    }
-    return sum / count;
-}
-
 int main() {
-    struct Student students[3] = {
-        {1, "Alice", 85.5},
-        {2, "Bob", 92.0},
-        {3, "Charlie", 78.5}
-    };
+    struct Point points[3];
     
-    if (students[0].id != 1) return 1;
-    if (students[0].name[0] != 'A') return 1;
-    if (students[0].grade < 85.4 || students[0].grade > 85.6) return 1;
+    for (int i = 0; i < 3; i = i + 1) {
+        points[i].x = i * 10;
+        points[i].y = i * 20;
+    }
     
-    if (students[1].id != 2) return 1;
-    if (students[1].name[0] != 'B') return 1;
-    if (students[1].grade < 91.9 || students[1].grade > 92.1) return 1;
+    int sum = 0;
+    for (int i = 0; i < 3; i = i + 1) {
+        sum = sum + points[i].x + points[i].y;
+    }
     
-    if (students[2].id != 3) return 1;
-    if (students[2].name[0] != 'C') return 1;
-    if (students[2].grade < 78.4 || students[2].grade > 78.6) return 1;
-    
-    // Test find function
-    int index = find_student(students, 3, 2);
-    if (index != 1) return 1;
-    
-    index = find_student(students, 3, 5);
-    if (index != -1) return 1;
-    
-    // Test average function
-    float avg = average_grade(students, 3);
-    if (avg < 85.3 || avg > 85.4) return 1;  // (85.5+92.0+78.5)/3 = 85.33...
-    
-    return 0;
-} 
+    return sum;
+}

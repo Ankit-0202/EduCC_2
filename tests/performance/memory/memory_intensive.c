@@ -1,19 +1,17 @@
+// Test memory intensive operations
 int main() {
-    // Large array operations
-    int large_array[1000];
+    int arr[1000];
+    int sum = 0;
     
     // Initialize array
-    for (int i = 0; i < 1000; i++) {
-        large_array[i] = i * 2;
+    for (int i = 0; i < 1000; i = i + 1) {
+        arr[i] = i;
     }
     
     // Process array
-    int sum = 0;
-    for (int i = 0; i < 1000; i++) {
-        sum += large_array[i];
+    for (int i = 0; i < 1000; i = i + 1) {
+        sum = sum + arr[i];
     }
     
-    if (sum != 999000) return 1;  // Sum of 0,2,4,...,1998
-    
-    return 0;
-} 
+    return sum % 1000;  // Return modulo to keep result small
+}

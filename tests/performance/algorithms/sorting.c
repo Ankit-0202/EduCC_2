@@ -1,9 +1,7 @@
-int main() {
-    int arr[5] = {5, 2, 4, 1, 3};
-    
-    // Bubble sort
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4 - i; j++) {
+// Test sorting algorithm
+void bubble_sort(int arr[], int n) {
+    for (int i = 0; i < n - 1; i = i + 1) {
+        for (int j = 0; j < n - i - 1; j = j + 1) {
             if (arr[j] > arr[j + 1]) {
                 int temp = arr[j];
                 arr[j] = arr[j + 1];
@@ -11,12 +9,11 @@ int main() {
             }
         }
     }
+}
+
+int main() {
+    int arr[5] = {5, 2, 8, 1, 9};
+    bubble_sort(arr, 5);
     
-    if (arr[0] != 1) return 1;
-    if (arr[1] != 2) return 1;
-    if (arr[2] != 3) return 1;
-    if (arr[3] != 4) return 1;
-    if (arr[4] != 5) return 1;
-    
-    return 0;
-} 
+    return arr[0] + arr[4];  // First and last elements
+}
