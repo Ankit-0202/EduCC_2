@@ -12,7 +12,7 @@ IncludeProcessor::locateHeader(const std::string &filename, bool isSystem) {
   // In a full implementation, these would be configurable.
   std::vector<std::string> searchDirs;
   if (isSystem) {
-    searchDirs = {"/usr/include", "/usr/local/include"};
+    searchDirs = {"sysroot/include", "/usr/include", "/usr/local/include"};
   } else {
     searchDirs = {"."};
   }

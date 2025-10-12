@@ -86,7 +86,7 @@ TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
 # Phony Targets
 # =============================================================================
 
-.PHONY: all clean test test-log run copy lint help
+.PHONY: all clean test test-log run lint help
 
 # =============================================================================
 # Main Targets

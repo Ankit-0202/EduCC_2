@@ -49,7 +49,7 @@ std::string Preprocessor::processIncludes(const std::string &source,
       // Build a list of directories to search.
       std::vector<std::string> searchDirs;
       if (isSystem) {
-        searchDirs = {"/usr/include", "/usr/local/include"};
+        searchDirs = systemIncludePaths;
       } else {
         // For quoted includes, first search the directory of the current file…
         fs::path currentDir = fs::path(currentFile).parent_path();

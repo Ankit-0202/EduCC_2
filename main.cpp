@@ -187,7 +187,7 @@ int main(int argc, char *argv[]) {
   /*
    * Step 1: Preprocessing
    */
-  std::vector<std::string> systemPaths = {"/usr/include", "/usr/local/include"};
+  std::vector<std::string> systemPaths = {"sysroot/include", "/usr/include", "/usr/local/include"};
   std::vector<std::string> userPaths = {"."};
 
   Preprocessor preprocessor(systemPaths, userPaths);
