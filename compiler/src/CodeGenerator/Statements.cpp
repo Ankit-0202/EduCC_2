@@ -121,12 +121,33 @@ void CodeGenerator::generateVariableDeclaration(
             << varDecl->name << "' registered with type '"
             << declaredTypeStrings[varDecl->name] << "'" << std::endl;
 
-  // Handle string literal initializer for char arrays
+  // Handle string literal initializer for char arrays and char* pointers
   if (varDecl->initializer.has_value()) {
     if (auto lit =
             std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
       if (lit->type == Literal::LiteralType::String) {
         auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
+        
+        // Handle char* pointer case
+        if (varDecl->type == "char*") {
+          // Create a global string constant
+          llvm::Constant *strConstant =
+              llvm::ConstantDataArray::getString(context, lit->stringValue, true);
+          llvm::GlobalVariable *gVar = new llvm::GlobalVariable(
+              *module, strConstant->getType(), true,
+              llvm::GlobalValue::PrivateLinkage, strConstant, 
+              varDecl->name + "_str");
+          
+          // Get pointer to the string
+          llvm::Value *strPtr = builder.CreateBitCast(
+              gVar, PointerType::get(context, 0), "strptr");
+          
+          // Store the pointer in the local variable
+          builder.CreateStore(strPtr, alloc);
+          return;
+        }
+        
+        // Handle char array case
         std::string str = lit->stringValue;
         uint64_t arraySize =
             arrayTy ? arrayTy->getNumElements() : (str.size() + 1);
@@ -250,6 +271,28 @@ void CodeGenerator::generateVariableDeclaration(
                 << (int)lit->type << std::endl;
       if (lit->type == Literal::LiteralType::String) {
         auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
+        auto ptrTy = llvm::dyn_cast<llvm::PointerType>(varType);
+        
+        // Handle char* pointer case
+        if (varDecl->type == "char*") {
+          // Create a global string constant
+          llvm::Constant *strConstant =
+              llvm::ConstantDataArray::getString(context, lit->stringValue, true);
+          llvm::GlobalVariable *gVar = new llvm::GlobalVariable(
+              *module, strConstant->getType(), true,
+              llvm::GlobalValue::PrivateLinkage, strConstant, 
+              varDecl->name + "_str");
+          
+          // Get pointer to the string
+          llvm::Value *strPtr = builder.CreateBitCast(
+              gVar, PointerType::get(context, 0), "strptr");
+          
+          // Store the pointer in the local variable
+          builder.CreateStore(strPtr, alloc);
+          return;
+        }
+        
+        // Handle char array case
         if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
           throw std::runtime_error("CodeGenerator Error: String literal "
                                    "initializer for non-char array.");
@@ -263,7 +306,7 @@ void CodeGenerator::generateVariableDeclaration(
               llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
           llvm::Value *elemPtr =
               builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
-                                varDecl->name + "_idx");
+                                        varDecl->name + "_idx");
           builder.CreateStore(elemVal, elemPtr);
         }
         return;

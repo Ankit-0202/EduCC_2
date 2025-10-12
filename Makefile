@@ -211,29 +211,6 @@ run: all
 		$(MAIN_TARGET) $$ARGS; \
 	fi
 
-# Copy source files to clipboard (macOS)
-copy:
-	@echo "Copying source files to clipboard..."
-	@( \
-		echo "### Main Program ###"; \
-		echo "$(MAIN_SRC)"; \
-		cat $(MAIN_SRC); \
-		echo ""; \
-		echo "### Preprocessor ###"; \
-		for file in $(PREPROC_FILES); do \
-			echo "$$file"; \
-			cat "$$file"; \
-			echo ""; \
-		done; \
-		echo "### Compiler ###"; \
-		for file in $(COMPILER_FILES); do \
-			echo "$$file"; \
-			cat "$$file"; \
-			echo ""; \
-		done; \
-	) | pbcopy
-	@echo "All source files copied to clipboard!"
-
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
