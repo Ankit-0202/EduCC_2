@@ -28,8 +28,8 @@ public:
   // Verify that all conditionals have been closed.
   void verifyBalanced() const;
 
-  // Evaluate a constant expression (very simplified).
-  int evaluateExpression(const std::string &expr);
+  // Evaluate a constant expression (supports C-style integer expressions).
+  long long evaluateExpression(const std::string &expr);
 
 private:
   // Record simple macro definitions for conditionals.

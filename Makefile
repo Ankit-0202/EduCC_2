@@ -79,14 +79,19 @@ OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
 # Test Directory Filter
-FILTER := $(filter-out test test-log,$(MAKECMDGOALS))
+TEST_FILTER ?= $(filter-out test test-log test-linker test-linker-only,$(MAKECMDGOALS))
+FILTER := $(TEST_FILTER)
 TEST_SUBDIR := $(if $(FILTER),$(TEST_DIR)/$(firstword $(FILTER)),$(TEST_DIR))
+
+# Linker integration tests
+LINKER_TEST_DIR := $(TEST_DIR)/integration/linker
+LINKER_TEST_BUILD := $(BUILD_DIR)/linker_tests
 
 # =============================================================================
 # Phony Targets
 # =============================================================================
 
-.PHONY: all clean test test-log run copy lint help
+.PHONY: all clean test test-log test-linker test-linker-only clean-linker-tests run copy lint help
 
 # =============================================================================
 # Main Targets
@@ -144,7 +149,7 @@ $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET
 # Test target with terminal output
 test: clean all
 	@echo "Running tests in $(TEST_SUBDIR)..."
-	@find $(TEST_SUBDIR) -type f -name "*.c" | while read -r testfile; do \
+	@find $(TEST_SUBDIR) -type f -name "*.c" -not -path "$(LINKER_TEST_DIR)/*" | while read -r testfile; do \
 		echo "Testing $$testfile..."; \
 		$(MAIN_TARGET) $$testfile $(LLFILE) > /dev/null 2>&1; \
 		if [ ! -f $(LLFILE) ]; then \
@@ -165,6 +170,67 @@ test: clean all
 		fi; \
 	done
 	@echo "Test execution completed."
+ifeq ($(FILTER),)
+	@$(MAKE) --no-print-directory TEST_FILTER="$(FILTER)" test-linker-only
+else ifeq ($(firstword $(FILTER)),integration/linker)
+	@$(MAKE) --no-print-directory TEST_FILTER="$(FILTER)" test-linker-only
+endif
+
+test-linker: clean-linker-tests all
+	@$(MAKE) --no-print-directory TEST_FILTER="$(FILTER)" test-linker-only
+
+test-linker-only:
+	@if [ ! -d $(LINKER_TEST_DIR) ]; then \
+		echo "No linker integration tests found."; \
+		exit 0; \
+	fi
+	@mkdir -p $(LINKER_TEST_BUILD)
+	@echo "Running linker integration tests in $(LINKER_TEST_DIR)..."
+	@find $(LINKER_TEST_DIR) -type f -name "*.c" | while read -r testfile; do \
+		if [ -n "$(FILTER)" ] && printf "%s" "$$testfile" | grep -qv "$(FILTER)"; then \
+			continue; \
+		fi; \
+		rel_path=$$(echo $$testfile | sed "s|^$(LINKER_TEST_DIR)/||"); \
+		test_name=$$(echo $$rel_path | tr '/' '_'); \
+		ir_file=$(LINKER_TEST_BUILD)/$$test_name.ll; \
+		exe_file=$(LINKER_TEST_BUILD)/$$test_name.out; \
+		gcc_exe=$(LINKER_TEST_BUILD)/gcc_$$test_name.out; \
+		log_file=$(LINKER_TEST_BUILD)/$$test_name.log; \
+		echo "Testing $$testfile (linker integration)..."; \
+		clang -S -emit-llvm $$testfile -o $$ir_file > $$log_file.clang 2>&1; \
+		if [ ! -f $$ir_file ]; then \
+			echo "[FAILED] $$testfile - IR not produced by clang" >&2; \
+			cat $$log_file.clang >&2; \
+			continue; \
+		fi; \
+		$(MAIN_TARGET) --link-from-ir $$ir_file --exe $$exe_file > $$log_file 2>&1; \
+		if [ ! -x $$exe_file ]; then \
+			echo "[FAILED] $$testfile - Executable not produced" >&2; \
+			cat $$log_file >&2; \
+			continue; \
+		fi; \
+		our_output=$$($$exe_file 2>&1); \
+		our_ret=$$?; \
+		$(NATIVE_CC) $$testfile -o $$gcc_exe > $${log_file}.gcc 2>&1; \
+		if [ ! -x $$gcc_exe ]; then \
+			echo "[FAILED] $$testfile - GCC executable not produced" >&2; \
+			cat $${log_file}.gcc >&2; \
+			continue; \
+		fi; \
+		gcc_output=$$($$gcc_exe 2>&1); \
+		gcc_ret=$$?; \
+		if [ $$our_ret -ne $$gcc_ret ] || [ "$$our_output" != "$$gcc_output" ]; then \
+			echo "[FAILED] $$testfile - Output mismatch" >&2; \
+			echo "  ours (ret $$our_ret): $$our_output" >&2; \
+			echo "  gcc  (ret $$gcc_ret): $$gcc_output" >&2; \
+			echo "  See $$log_file and $${log_file}.gcc for details." >&2; \
+		else \
+			echo "[PASSED] $$testfile"; \
+		fi; \
+	done
+
+clean-linker-tests:
+	@rm -rf $(LINKER_TEST_BUILD)
 
 # Test target with log files
 test-log: clean all

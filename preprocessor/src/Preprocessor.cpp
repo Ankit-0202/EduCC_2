@@ -2,11 +2,16 @@
 #include "ConditionalProcessor.hpp"
 #include "IncludeProcessor.hpp"
 #include "MacroExpander.hpp"
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream> // Added to provide std::ifstream
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/Program.h>
 
 namespace fs = std::filesystem;
 
@@ -46,17 +51,36 @@ std::string Preprocessor::processIncludes(const std::string &source,
       std::string headerName = trimmed.substr(start + 1, end - start - 1);
       bool isSystem = (trimmed[start] == '<');
 
-      // Build a list of directories to search.
       std::vector<std::string> searchDirs;
+      auto addSearchDir = [&searchDirs](const std::string &dir) {
+        if (dir.empty())
+          return;
+        if (std::find(searchDirs.begin(), searchDirs.end(), dir) ==
+            searchDirs.end()) {
+          searchDirs.push_back(dir);
+        }
+      };
+
       if (isSystem) {
-        searchDirs = {"/usr/include", "/usr/local/include"};
+        if (systemIncludePaths.empty()) {
+          addSearchDir("/usr/include");
+          addSearchDir("/usr/local/include");
+        } else {
+          for (const auto &dir : systemIncludePaths)
+            addSearchDir(dir);
+        }
       } else {
-        // For quoted includes, first search the directory of the current file…
         fs::path currentDir = fs::path(currentFile).parent_path();
         if (!currentDir.empty())
-          searchDirs.push_back(currentDir.string());
-        // …then fall back to the current working directory.
-        searchDirs.push_back(".");
+          addSearchDir(currentDir.string());
+
+        for (const auto &dir : userIncludePaths)
+          addSearchDir(dir);
+
+        for (const auto &dir : systemIncludePaths)
+          addSearchDir(dir);
+
+        addSearchDir(".");
       }
 
       // Look for the header in the search directories.
@@ -132,5 +156,75 @@ std::string Preprocessor::processFile(const std::string &path) {
 }
 
 std::string Preprocessor::preprocess(const std::string &topLevelPath) {
-  return processFile(topLevelPath);
+  try {
+    return processFile(topLevelPath);
+  } catch (const std::exception &ex) {
+    std::cerr << "[INFO] Preprocessor fallback to system clang: " << ex.what()
+              << "\n";
+    return preprocessWithSystemClang(topLevelPath);
+  }
+}
+
+std::string
+Preprocessor::preprocessWithSystemClang(const std::string &topLevelPath) const {
+  auto clangPathOrErr = llvm::sys::findProgramByName("clang");
+  if (!clangPathOrErr) {
+    throw std::runtime_error(
+        "Preprocessor Error: Unable to locate system 'clang' executable.");
+  }
+  std::string clangPath = *clangPathOrErr;
+
+  auto timestamp =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  fs::path outputPath =
+      fs::temp_directory_path() /
+      ("educc-preprocessed-" + std::to_string(timestamp) + ".i");
+
+  std::vector<std::string> args;
+  args.push_back(clangPath);
+  args.push_back("-E");
+  args.push_back("-P");
+  args.push_back("-x");
+  args.push_back("c");
+
+  for (const auto &userDir : userIncludePaths) {
+    if (!userDir.empty())
+      args.push_back("-I" + userDir);
+  }
+  for (const auto &sysDir : systemIncludePaths) {
+    if (!sysDir.empty())
+      args.push_back("-isystem" + sysDir);
+  }
+
+  args.push_back(topLevelPath);
+  args.push_back("-o");
+  args.push_back(outputPath.string());
+
+  llvm::SmallVector<llvm::StringRef, 16> llvmArgs;
+  llvmArgs.reserve(args.size());
+  for (const auto &arg : args) {
+    llvmArgs.push_back(arg);
+  }
+
+  int result = llvm::sys::ExecuteAndWait(clangPath, llvmArgs);
+  if (result != 0) {
+    throw std::runtime_error(
+        "Preprocessor Error: 'clang -E' failed with exit code " +
+        std::to_string(result));
+  }
+
+  std::ifstream in(outputPath);
+  if (!in.is_open()) {
+    throw std::runtime_error("Preprocessor Error: Unable to read system "
+                             "preprocessor output at " +
+                             outputPath.string());
+  }
+  std::stringstream buffer;
+  buffer << in.rdbuf();
+  in.close();
+
+  std::error_code ec;
+  fs::remove(outputPath, ec);
+
+  return buffer.str();
 }

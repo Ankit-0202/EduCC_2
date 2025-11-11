@@ -4,13 +4,24 @@
 #include "TypeRegistry.hpp"
 
 #include <iostream>
+#include <optional>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/MC/TargetRegistry.h>
+#if __has_include(<llvm/Support/Host.h>)
+#include <llvm/Support/Host.h>
+#elif __has_include(<llvm/TargetParser/Host.h>)
+#include <llvm/TargetParser/Host.h>
+#else
+#error "Neither llvm/Support/Host.h nor llvm/TargetParser/Host.h is available."
+#endif
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -24,8 +35,33 @@ using std::vector;
 CodeGenerator::CodeGenerator()
     : builder(context),
       module(std::make_unique<Module>("main_module", context)) {
-  // Set a default data layout for the module.
-  module->setDataLayout("e-m:o-i64:64-f80:128-n8:16:32:64-S128");
+  std::string targetTriple = llvm::sys::getDefaultTargetTriple();
+  llvm::Triple triple(targetTriple);
+  module->setTargetTriple(triple);
+
+  std::string error;
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(triple.getTriple(), error);
+  if (!target) {
+    throw runtime_error("CodeGenerator Error: Unable to lookup target for "
+                        "triple '" +
+                        targetTriple + "': " + error);
+  }
+
+  std::string cpu = "generic";
+  std::string features = "";
+  llvm::TargetOptions opt;
+  std::optional<llvm::Reloc::Model> relocModel;
+
+  std::unique_ptr<llvm::TargetMachine> targetMachine(
+      target->createTargetMachine(triple, cpu, features, opt, relocModel));
+  if (!targetMachine) {
+    throw runtime_error("CodeGenerator Error: Failed to create target machine "
+                        "for triple '" +
+                        targetTriple + "'.");
+  }
+
+  module->setDataLayout(targetMachine->createDataLayout());
   // NOTE: Opaque pointers are enabled by default in LLVM 15+.
   // To call getElementType(), your LLVM must disable opaque pointers.
 }

@@ -39,6 +39,9 @@ private:
 
   // Helper: read file from disk.
   std::string readFile(const std::string &path);
+
+  // Fallback: use system clang preprocessor if our preprocessor fails.
+  std::string preprocessWithSystemClang(const std::string &topLevelPath) const;
 };
 
 #endif // PREPROCESSOR_HPP
