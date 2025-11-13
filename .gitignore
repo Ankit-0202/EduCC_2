@@ -19,6 +19,20 @@ our_executable
 # macOS system files
 .DS_Store
 
+# Python virtual environments
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest cache and coverage artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 # LLVM intermediate files (if any)
 *.bc
 *.bc.*

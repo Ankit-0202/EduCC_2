@@ -68,22 +68,20 @@ available without bespoke vendor copies.
 ## Testing
 
 Integration tests live under `tests/` with a dedicated linker suite in
-`tests/integration/linker`.  Run them via:
+`tests/integration/linker`.  The entire suite is driven by `pytest`, which
+compares the exit code **and** the standard output of each test program as
+produced by EduCC versus the system toolchain (`gcc` by default).
 
-```sh
-make test-linker-only
+```
+pip install pytest             # once
+make test                      # run the full suite
+make test-linker               # only the linker integration tests
+pytest -k arrays               # ad-hoc selections
 ```
 
-The linker suite now:
-
-1. Uses `clang -S -emit-llvm` to generate LLVM IR for test programs that include
-   real system headers.
-2. Invokes `build/educc --link-from-ir` to confirm the linker integration can
-   produce working executables linked against the system runtime.
-3. Compares exit codes and output against a native toolchain (`gcc` by default).
-
-Use `make clean-linker-tests` to remove temporary artefacts under
-`build/linker_tests`.
+Each PyTest case is individually named after the relative path of the input
+`.c` file, making it straightforward to apply markers or overrides for
+per-test behaviour in the future.
 
 ## Notes
 
