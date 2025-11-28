@@ -8,7 +8,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 C_TESTS_ROOT = PROJECT_ROOT / "tests"
-LINKER_TEST_ROOT = C_TESTS_ROOT / "integration" / "linker"
+LINKER_TEST_ROOT = C_TESTS_ROOT / "linker"
 
 
 @dataclass(frozen=True, slots=True)
