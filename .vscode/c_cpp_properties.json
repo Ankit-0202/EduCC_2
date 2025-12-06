@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "name": "EduCC",
+      "compilerPath": "/usr/bin/clang++",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "clang-x64",
+      "defines": [
+        "LLVM_ENABLE_OPAQUE_POINTERS=0"
+      ],
+      "includePath": [
+        "${workspaceFolder}/common/include",
+        "${workspaceFolder}/preprocessor/include",
+        "${workspaceFolder}/compiler/include",
+        "/opt/homebrew/opt/llvm/include",
+        "/usr/local/include",
+        "/usr/include",
+        "${workspaceFolder}/**"
+      ]
+    }
+  ],
+  "version": 4
+}

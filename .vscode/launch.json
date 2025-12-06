@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug EduCC (lldb)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/educc",
+      "args": [
+        "${file}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Build: make",
+      "stopOnEntry": false,
+      "env": {}
+    },
+    {
+      "name": "Debug EduCC (gdb)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/educc",
+      "args": [
+        "${file}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Build: make",
+      "stopAtEntry": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "externalConsole": false
+    }
+  ]
+}
