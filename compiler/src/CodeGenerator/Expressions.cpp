@@ -25,6 +25,41 @@ using std::shared_ptr;
 using std::string;
 using std::vector;
 
+namespace {
+MemberInfo *resolveMemberInfo(CodeGenerator &CG,
+                              const MemberAccess &mem) {
+  string baseType = getEffectiveType(CG, mem.base);
+  if (baseType.rfind("struct ", 0) == 0) {
+    string tag = normalizeTag(baseType.substr(7));
+    return getMemberInfo(tag, mem.member);
+  }
+  if (baseType.rfind("union ", 0) == 0) {
+    string tag = normalizeTag(baseType.substr(6));
+    return getMemberInfo(tag, mem.member);
+  }
+  return nullptr;
+}
+
+llvm::Value *maskBitfieldValue(llvm::IRBuilder<> &builder, llvm::Value *value,
+                               unsigned width, bool isUnsigned) {
+  if (!value->getType()->isIntegerTy() || width == 0)
+    return value;
+  unsigned rawBits = value->getType()->getIntegerBitWidth();
+  if (width >= rawBits)
+    return value;
+  auto *mask =
+      llvm::ConstantInt::get(value->getType(), (1ULL << width) - 1);
+  llvm::Value *masked = builder.CreateAnd(value, mask, "bf.mask");
+  if (isUnsigned)
+    return masked;
+
+  unsigned shift = rawBits - width;
+  auto *shiftVal = llvm::ConstantInt::get(value->getType(), shift);
+  llvm::Value *shifted = builder.CreateShl(masked, shiftVal, "bf.shl");
+  return builder.CreateAShr(shifted, shiftVal, "bf.sext");
+}
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Array Access Helper
 //===----------------------------------------------------------------------===//
@@ -300,15 +335,32 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     }
     throw runtime_error("Unsupported binary operator: " + binExpr->op);
   } else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
+    if (auto mem = std::dynamic_pointer_cast<MemberAccess>(assign->lhs)) {
+      if (auto *info = resolveMemberInfo(*this, *mem)) {
+        if (info->bitWidth > 0) {
+          llvm::Value *ptr = generateLValue(assign->lhs);
+          llvm::Value *rhsVal = generateExpression(assign->rhs);
+          llvm::Type *fieldType = getLLVMType(info->type);
+          if (fieldType->isIntegerTy() && rhsVal->getType() != fieldType) {
+            rhsVal = builder.CreateIntCast(rhsVal, fieldType, !info->isUnsigned,
+                                           "bf.cast");
+          }
+          rhsVal = maskBitfieldValue(builder, rhsVal,
+                                     static_cast<unsigned>(info->bitWidth),
+                                     info->isUnsigned);
+          builder.CreateStore(rhsVal, ptr);
+          return rhsVal;
+        }
+      }
+    }
+
     llvm::Value *ptr = generateLValue(assign->lhs);
     llvm::Value *rhsVal = generateExpression(assign->rhs);
-    
-    // Get the target type from the LHS expression
+
     string targetTypeStr = getEffectiveType(*this, assign->lhs);
     llvm::Type *targetType = getLLVMType(targetTypeStr);
     llvm::Type *rhsType = rhsVal->getType();
-    
-    // Perform type conversion if needed
+
     if (targetType != rhsType) {
       if (targetType->isFloatingPointTy() && rhsType->isFloatingPointTy()) {
         if (targetType->isFloatTy() && rhsType->isDoubleTy()) {
@@ -324,7 +376,7 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         rhsVal = builder.CreateIntCast(rhsVal, targetType, false, "intcast");
       }
     }
-    
+
     builder.CreateStore(rhsVal, ptr);
     return rhsVal;
   } else if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
@@ -472,15 +524,36 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     llvm::Value *ptr = generateLValue(expr);
     string effType = getEffectiveType(*this, expr);
     llvm::Type *loadType = getLLVMType(effType);
-    return builder.CreateLoad(loadType, ptr, "memberload");
-  } else if (auto call = std::dynamic_pointer_cast<FunctionCall>(expr)) {
-    llvm::Function *callee = module->getFunction(call->functionName);
-    if (!callee) {
-      throw runtime_error("Undefined function in IR: " + call->functionName);
+    llvm::Value *loaded = builder.CreateLoad(loadType, ptr, "memberload");
+    if (auto *info = resolveMemberInfo(*this, *mem)) {
+      if (info->bitWidth > 0 && loaded->getType()->isIntegerTy()) {
+        loaded = maskBitfieldValue(builder, loaded,
+                                   static_cast<unsigned>(info->bitWidth),
+                                   info->isUnsigned);
+      }
     }
+    return loaded;
+  } else if (auto call = std::dynamic_pointer_cast<FunctionCall>(expr)) {
     vector<llvm::Value *> args;
     for (auto &argExpr : call->arguments) {
       args.push_back(generateExpression(argExpr));
+    }
+
+    llvm::Function *callee = module->getFunction(call->functionName);
+    if (!callee) {
+      vector<llvm::Type *> paramTypes;
+      if (call->functionName == "printf") {
+        paramTypes.push_back(llvm::PointerType::get(context, 0));
+      } else {
+        paramTypes.reserve(args.size());
+        for (auto *argVal : args) {
+          paramTypes.push_back(argVal->getType());
+        }
+      }
+      llvm::FunctionType *funcType = llvm::FunctionType::get(
+          llvm::Type::getInt32Ty(context), paramTypes, true);
+      callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
+                                      call->functionName, module.get());
     }
     if (callee->getReturnType()->isVoidTy()) {
       builder.CreateCall(callee, args);

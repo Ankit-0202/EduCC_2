@@ -15,7 +15,6 @@
         "${workspaceFolder}/compiler/include",
         "/opt/homebrew/opt/llvm/include",
         "/usr/local/include",
-        "/usr/include",
         "${workspaceFolder}/**"
       ]
     }

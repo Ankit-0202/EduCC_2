@@ -64,7 +64,7 @@ Parser::parseVariableDeclarationWithType(const string &givenType) {
         initializer = parseExpression();
     }
     decls.push_back(std::make_shared<VariableDeclaration>(
-        type, varName, initializer, dimensions));
+        type, varName, std::nullopt, initializer, dimensions));
   } while (match(TokenType::DELIM_COMMA));
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");
@@ -116,6 +116,16 @@ DeclarationPtr Parser::parseDeclaration() {
               << tokens[current + i].lexeme << "') ";
   }
   std::cerr << std::endl;
+  bool hasConstQualifier = false;
+  bool hasStaticQualifier = false;
+  while (!isAtEnd() && check(TokenType::IDENTIFIER) &&
+         (peek().lexeme == "const" || peek().lexeme == "static")) {
+    if (peek().lexeme == "const")
+      hasConstQualifier = true;
+    else if (peek().lexeme == "static")
+      hasStaticQualifier = true;
+    advance();
+  }
   // 1) Check for struct / union / enum definitions
   if (peek().lexeme == "struct") {
     std::cerr << "[DEBUG] (parseDeclaration) Found struct keyword" << std::endl;
@@ -160,6 +170,16 @@ DeclarationPtr Parser::parseDeclaration() {
   if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
       check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
       check(TokenType::KW_BOOL) || check(TokenType::KW_VOID)) {
+    bool sawUnsigned = false;
+    bool sawSigned = false;
+    while (!isAtEnd() && check(TokenType::IDENTIFIER) &&
+           (peek().lexeme == "unsigned" || peek().lexeme == "signed")) {
+      if (peek().lexeme == "unsigned")
+        sawUnsigned = true;
+      else
+        sawSigned = true;
+      advance();
+    }
     // e.g. int main(...) or int x; ...
     string baseType;
     if (match(TokenType::KW_INT))
@@ -174,6 +194,24 @@ DeclarationPtr Parser::parseDeclaration() {
       baseType = "bool";
     else if (match(TokenType::KW_VOID))
       baseType = "void";
+    else if (check(TokenType::IDENTIFIER)) {
+      string lex = peek().lexeme;
+      if (lex == "int" || lex == "char" || lex == "float" ||
+          lex == "double" || lex == "bool" || lex == "void") {
+        advance();
+        baseType = lex;
+      }
+    }
+    if (baseType.empty())
+      error("Expected type specifier in declaration");
+    if (sawUnsigned)
+      baseType = "unsigned " + baseType;
+    else if (sawSigned)
+      baseType = "signed " + baseType;
+    if (hasConstQualifier)
+      baseType = "const " + baseType;
+    if (hasStaticQualifier)
+      baseType = "static " + baseType;
     // consume any pointer tokens
     string type = consumePointerTokens(*this, baseType);
 
@@ -286,6 +324,34 @@ DeclarationPtr Parser::parseStructDeclaration() {
     vector<std::shared_ptr<VariableDeclaration>> members;
     while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
       string memberType;
+      bool hasConst = false;
+      bool hasStatic = false;
+      bool sawUnsigned = false;
+      bool sawSigned = false;
+      while (!isAtEnd() && check(TokenType::IDENTIFIER)) {
+        std::string lex = peek().lexeme;
+        if (lex == "const") {
+          hasConst = true;
+          advance();
+          continue;
+        }
+        if (lex == "static") {
+          hasStatic = true;
+          advance();
+          continue;
+        }
+        if (lex == "unsigned") {
+          sawUnsigned = true;
+          advance();
+          continue;
+        }
+        if (lex == "signed") {
+          sawSigned = true;
+          advance();
+          continue;
+        }
+        break;
+      }
       if ((check(TokenType::KW_STRUCT)) ||
           (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
         advance(); // consume "struct"
@@ -311,6 +377,15 @@ DeclarationPtr Parser::parseStructDeclaration() {
       else
         error("Expected type specifier in struct member declaration");
 
+      if (sawUnsigned)
+        memberType = "unsigned " + memberType;
+      else if (sawSigned)
+        memberType = "signed " + memberType;
+      if (hasConst)
+        memberType = "const " + memberType;
+      if (hasStatic)
+        memberType = "static " + memberType;
+
       memberType = consumePointerTokens(*this, memberType);
 
       if (!check(TokenType::IDENTIFIER))
@@ -323,10 +398,19 @@ DeclarationPtr Parser::parseStructDeclaration() {
                 "Expected ']' after array dimension");
         dimensions.push_back(dimExpr);
       }
+      std::optional<int> bitWidth = std::nullopt;
+      if (match(TokenType::DELIM_COLON)) {
+        ExpressionPtr widthExpr = parseExpression();
+        if (auto lit = std::dynamic_pointer_cast<Literal>(widthExpr)) {
+          bitWidth = lit->intValue;
+        } else {
+          error("Expected constant expression for bitfield width");
+        }
+      }
       consume(TokenType::DELIM_SEMICOLON,
               "Expected ';' after struct member declaration");
       members.push_back(std::make_shared<VariableDeclaration>(
-          memberType, memberName, std::nullopt, dimensions));
+          memberType, memberName, bitWidth, std::nullopt, dimensions));
     }
     consume(TokenType::DELIM_RBRACE,
             "Expected '}' to close struct declaration");
@@ -436,7 +520,8 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
   
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after union member declaration");
-  return std::make_shared<VariableDeclaration>(type, name, std::nullopt, dimensions);
+  return std::make_shared<VariableDeclaration>(type, name, std::nullopt,
+                                               std::nullopt, dimensions);
 }
 
 DeclarationPtr Parser::parseFunctionDeclaration() {
@@ -481,7 +566,13 @@ vector<std::pair<string, string>> Parser::parseParameters() {
       peek().lexeme == "struct") {
     do {
       string type;
-      if (match(TokenType::KW_INT))
+      if (match(TokenType::KW_VOID)) {
+        // Handle "void" as an empty parameter list (e.g., int main(void)).
+        if (check(TokenType::DELIM_RPAREN)) {
+          return params;
+        }
+        type = "void";
+      } else if (match(TokenType::KW_INT))
         type = "int";
       else if (match(TokenType::KW_FLOAT))
         type = "float";

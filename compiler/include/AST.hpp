@@ -261,12 +261,15 @@ class VariableDeclarationStatement : public Statement {
 public:
   std::string type;
   std::string name;
+  std::optional<int> bitWidth;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
   VariableDeclarationStatement(const std::string &type, const std::string &name,
+                               std::optional<int> bitWidth,
                                std::optional<ExpressionPtr> initializer,
                                const std::vector<ExpressionPtr> &dimensions)
-      : type(type), name(name), initializer(initializer),
+      : type(type), name(name), bitWidth(bitWidth),
+        initializer(initializer),
         dimensions(dimensions) {}
 };
 
@@ -291,12 +294,15 @@ class VariableDeclaration : public Declaration {
 public:
   std::string type;
   std::string name;
+  std::optional<int> bitWidth;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
   VariableDeclaration(const std::string &type, const std::string &name,
+                      std::optional<int> bitWidth = std::nullopt,
                       std::optional<ExpressionPtr> initializer = std::nullopt,
                       const std::vector<ExpressionPtr> &dimensions = {})
-      : type(type), name(name), initializer(initializer),
+      : type(type), name(name), bitWidth(bitWidth),
+        initializer(initializer),
         dimensions(dimensions) {}
 };
 

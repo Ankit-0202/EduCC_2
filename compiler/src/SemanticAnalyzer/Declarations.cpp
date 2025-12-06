@@ -331,6 +331,12 @@ void SemanticAnalyzer::analyzeStructDeclaration(
     MemberInfo memberInfo;
     memberInfo.name = member->name;
     memberInfo.type = member->type;
+    memberInfo.bitWidth = member->bitWidth.has_value()
+                              ? static_cast<size_t>(member->bitWidth.value())
+                              : 0;
+    memberInfo.isUnsigned =
+        (member->type.rfind("unsigned", 0) == 0) ||
+        (member->type.find(" unsigned") != std::string::npos);
     memberInfo.index = memberIndex;
     memberInfo.offset = currentOffset;
     memberInfo.size = memberSize;

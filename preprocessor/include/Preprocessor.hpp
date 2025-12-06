@@ -19,6 +19,7 @@ public:
 private:
   std::vector<std::string> systemIncludePaths;
   std::vector<std::string> userIncludePaths;
+  MacroExpander expander;
 
   // Caches to avoid reprocessing files.
   std::unordered_map<std::string, std::string> fileCache;

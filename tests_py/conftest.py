@@ -56,3 +56,57 @@ def toolchain() -> dict[str, str]:
 @pytest.fixture(scope="session")
 def base_env() -> dict[str, str]:
     return os.environ.copy()
+
+
+REGRESSION_CACHE_KEY = "educc/last_status"
+_previous_status: dict[str, str] = {}
+_current_status: dict[str, str] = {}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    global _previous_status, _current_status
+    if getattr(config, "cache", None) is None:
+        _previous_status = {}
+        _current_status = {}
+        return
+    _previous_status = config.cache.get(REGRESSION_CACHE_KEY, {})
+    _current_status = {}
+
+
+def _status_from_report(report: pytest.TestReport) -> str:
+    if report.failed:
+        return "xfailed" if getattr(report, "wasxfail", False) else "failed"
+    if report.passed:
+        return "xpassed" if getattr(report, "wasxfail", False) else "passed"
+    return "skipped"
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if report.when not in ("setup", "call", "teardown"):
+        return
+    outcome = _status_from_report(report)
+    if (
+        report.when == "call"
+        or report.nodeid not in _current_status
+        or outcome == "failed"
+    ):
+        _current_status[report.nodeid] = outcome
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter, exitstatus: int
+) -> None:
+    regressions = [
+        nodeid
+        for nodeid, status in _current_status.items()
+        if status == "failed" and _previous_status.get(nodeid) == "passed"
+    ]
+    if regressions:
+        terminalreporter.write_sep("=", "New test regressions (previously passed)")
+        for nodeid in regressions:
+            terminalreporter.write_line(f"- {nodeid}")
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    if getattr(session.config, "cache", None) is not None:
+        session.config.cache.set(REGRESSION_CACHE_KEY, _current_status)

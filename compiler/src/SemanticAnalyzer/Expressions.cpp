@@ -240,12 +240,15 @@ void SemanticAnalyzer::analyzeExpression(
     }
     analyzeExpression(assign->rhs);
   } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
-    auto sym = getSymbolTable().lookup(funcCall->functionName);
+    auto sym = symbolTable.lookup(funcCall->functionName);
     if (!sym.has_value() || !sym->isFunction) {
-      throw runtime_error("Semantic Analysis Error: Undefined function '" +
-                          funcCall->functionName + "'.");
+      Symbol implicit(funcCall->functionName, "int", true, {}, false);
+      symbolTable.declare(implicit);
+      sym = implicit;
     }
-    if (sym->parameterTypes.size() != funcCall->arguments.size()) {
+    // If the function has an explicit prototype, enforce the arity.
+    if (!sym->parameterTypes.empty() &&
+        sym->parameterTypes.size() != funcCall->arguments.size()) {
       throw runtime_error("Semantic Analysis Error: Function '" +
                           funcCall->functionName +
                           "' called with an incorrect number of arguments.");

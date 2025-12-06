@@ -289,11 +289,15 @@ ExpressionPtr Parser::parsePrimary() {
     }
   }
   if (match(TokenType::LITERAL_STRING)) {
-    string value = tokens[current - 1].lexeme;
-    // Remove the surrounding quotes
-    if (value.length() >= 2 && value[0] == '"' &&
-        value[value.length() - 1] == '"') {
-      value = value.substr(1, value.length() - 2);
+    auto stripQuotes = [](const string &raw) {
+      if (raw.length() >= 2 && raw.front() == '"' && raw.back() == '"')
+        return raw.substr(1, raw.length() - 2);
+      return raw;
+    };
+    string value = stripQuotes(tokens[current - 1].lexeme);
+    while (check(TokenType::LITERAL_STRING)) {
+      advance();
+      value += stripQuotes(tokens[current - 1].lexeme);
     }
     return std::make_shared<Literal>(value);
   }

@@ -8,6 +8,8 @@
 struct MemberInfo {
   std::string name;
   std::string type;
+  size_t bitWidth{0};
+  bool isUnsigned{false};
   size_t index;
   size_t offset;
   size_t size;

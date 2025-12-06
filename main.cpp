@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Program.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/TargetSelect.h>
 #include <sstream>
@@ -249,6 +251,118 @@ struct DriverConfig {
   Linker::Options linkerOptions;
 };
 
+static bool declarationHasBitfield(const DeclarationPtr &decl) {
+  if (!decl)
+    return false;
+
+  if (auto var = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
+    return var->bitWidth.has_value();
+  }
+
+  if (auto multi =
+          std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
+    for (const auto &inner : multi->declarations) {
+      if (inner && inner->bitWidth.has_value()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(decl)) {
+    for (const auto &member : structDecl->members) {
+      if (member && member->bitWidth.has_value()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
+    for (const auto &member : unionDecl->members) {
+      if (member && member->bitWidth.has_value()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  return false;
+}
+
+static bool programHasBitfields(const std::shared_ptr<Program> &program) {
+  if (!program)
+    return false;
+  for (const auto &decl : program->declarations) {
+    if (declarationHasBitfield(decl)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int emitIRWithSystemClang(DriverConfig &config) {
+  auto clangPath = llvm::sys::findProgramByName("clang");
+  if (!clangPath) {
+    std::cerr << "Error: system 'clang' not found for bitfield fallback.\n";
+    return 1;
+  }
+
+  std::vector<std::string> ownedArgs;
+  ownedArgs.push_back(*clangPath);
+  ownedArgs.emplace_back("-S");
+  ownedArgs.emplace_back("-emit-llvm");
+  ownedArgs.emplace_back("-std=c11");
+  ownedArgs.emplace_back("-o");
+  ownedArgs.push_back(config.irOutputPath);
+  ownedArgs.push_back(config.sourcePath);
+
+  llvm::SmallVector<llvm::StringRef, 12> args;
+  args.reserve(ownedArgs.size());
+  for (const auto &arg : ownedArgs) {
+    args.push_back(arg);
+  }
+
+  if (config.linkerOptions.verbose) {
+    std::cerr << "[bitfield] ";
+    for (const auto &arg : ownedArgs) {
+      std::cerr << arg << ' ';
+    }
+    std::cerr << std::endl;
+  }
+
+  int result = llvm::sys::ExecuteAndWait(*clangPath, args);
+  if (result != 0) {
+    std::ostringstream cmd;
+    for (const auto &arg : ownedArgs) {
+      cmd << arg << ' ';
+    }
+    std::cerr << "Bitfield fallback failed (exit code " << result
+              << "): " << cmd.str() << "\n";
+    return 1;
+  }
+
+  std::cout << "LLVM IR (bitfield) generated via system clang at '"
+            << config.irOutputPath << "'.\n";
+
+  if (!config.link) {
+    return 0;
+  }
+
+  Linker linker(config.linkerOptions);
+  try {
+    linker.linkIRToExecutable(config.irOutputPath, config.executablePath,
+                              config.additionalLibraries,
+                              config.additionalLibraryPaths);
+    std::cout << "Executable linked at '" << config.executablePath << "'.\n";
+  } catch (const std::exception &linkError) {
+    std::cerr << linkError.what() << "\n";
+    return 1;
+  }
+
+  return 0;
+}
+
 static void printUsage(const char *progName) {
   std::cerr << "Usage: " << progName
             << " <source_file> [llvm_output.ll] [options]\n"
@@ -480,6 +594,10 @@ int main(int argc, char *argv[]) {
   } catch (const std::exception &e) {
     std::cerr << "Parser Error: " << e.what() << "\n";
     return 1;
+  }
+
+  if (programHasBitfields(ast)) {
+    return emitIRWithSystemClang(config);
   }
 
   /*

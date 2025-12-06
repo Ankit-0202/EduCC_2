@@ -297,8 +297,8 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     // For local variable declarations, wrap the declaration in a
     // VariableDeclaration node.
     auto varDecl = std::make_shared<VariableDeclaration>(
-        varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer,
-        varDeclStmt->dimensions);
+        varDeclStmt->type, varDeclStmt->name, varDeclStmt->bitWidth,
+        varDeclStmt->initializer, varDeclStmt->dimensions);
     generateVariableDeclaration(varDecl);
     return false;
   } else if (auto multiVarDeclStmt =
@@ -306,8 +306,8 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
                      stmt)) {
     for (auto &singleDecl : multiVarDeclStmt->declarations) {
       auto varDecl = std::make_shared<VariableDeclaration>(
-          singleDecl->type, singleDecl->name, singleDecl->initializer,
-          singleDecl->dimensions);
+          singleDecl->type, singleDecl->name, singleDecl->bitWidth,
+          singleDecl->initializer, singleDecl->dimensions);
       generateVariableDeclaration(varDecl);
     }
     return false;
@@ -762,8 +762,29 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   while (!baseType.empty() && isspace(baseType.back()))
     baseType.pop_back();
 
+  auto stripPrefix = [](string &s, const string &prefix) {
+    while (s.rfind(prefix, 0) == 0) {
+      s = s.substr(prefix.size());
+      while (!s.empty() && isspace(s.front()))
+        s.erase(s.begin());
+    }
+  };
+
+  bool isUnsigned = false;
+  bool isSigned = false;
+  stripPrefix(baseType, "const ");
+  stripPrefix(baseType, "static ");
+  stripPrefix(baseType, "const ");
+  if (baseType.rfind("unsigned ", 0) == 0) {
+    isUnsigned = true;
+    stripPrefix(baseType, "unsigned ");
+  } else if (baseType.rfind("signed ", 0) == 0) {
+    isSigned = true;
+    stripPrefix(baseType, "signed ");
+  }
+
   llvm::Type *ty = nullptr;
-  if (baseType == "int")
+  if (baseType == "int" || baseType.empty())
     ty = Type::getInt32Ty(context);
   else if (baseType == "float")
     ty = Type::getFloatTy(context);
@@ -794,12 +815,21 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     }
     ty = it->second;
   } else {
+    (void)isUnsigned;
+    (void)isSigned;
     // Check if this is an array type (e.g., "char[20]")
     size_t bracketPos = baseType.find('[');
     if (bracketPos != string::npos) {
       string elementType = baseType.substr(0, bracketPos);
       string sizeStr = baseType.substr(bracketPos + 1);
       sizeStr = sizeStr.substr(0, sizeStr.find(']'));
+      stripPrefix(elementType, "const ");
+      stripPrefix(elementType, "static ");
+      if (elementType.rfind("unsigned ", 0) == 0) {
+        stripPrefix(elementType, "unsigned ");
+      } else if (elementType.rfind("signed ", 0) == 0) {
+        stripPrefix(elementType, "signed ");
+      }
       
       // Get the element type
       llvm::Type *elementTy = nullptr;

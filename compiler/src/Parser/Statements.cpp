@@ -199,6 +199,35 @@ StatementPtr Parser::parseExpressionStatement() {
 StatementPtr Parser::parseVariableDeclarationStatement() {
   string type;
 
+  bool hasConstQualifier = false;
+  bool hasStaticQualifier = false;
+  bool sawUnsigned = false;
+  bool sawSigned = false;
+  while (!isAtEnd() && check(TokenType::IDENTIFIER)) {
+    std::string lex = peek().lexeme;
+    if (lex == "const") {
+      hasConstQualifier = true;
+      advance();
+      continue;
+    }
+    if (lex == "static") {
+      hasStaticQualifier = true;
+      advance();
+      continue;
+    }
+    if (lex == "unsigned") {
+      sawUnsigned = true;
+      advance();
+      continue;
+    }
+    if (lex == "signed") {
+      sawSigned = true;
+      advance();
+      continue;
+    }
+    break;
+  }
+
   // Attempt to match basic type keywords...
   if (match(TokenType::KW_INT))
     type = "int";
@@ -252,6 +281,15 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     error("Expected type specifier in variable declaration");
   }
 
+  if (sawUnsigned)
+    type = "unsigned " + type;
+  else if (sawSigned)
+    type = "signed " + type;
+  if (hasConstQualifier)
+    type = "const " + type;
+  if (hasStaticQualifier)
+    type = "static " + type;
+
   // Now consume any pointer tokens
   while (check(TokenType::OP_MULTIPLY) && peek().lexeme == "*") {
     advance(); // consume '*'
@@ -295,7 +333,7 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     }
 
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
-        type, varName, initializer, dimensions));
+        type, varName, std::nullopt, initializer, dimensions));
 
   } while (match(TokenType::DELIM_COMMA));
 

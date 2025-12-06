@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream> // Added to provide std::ifstream
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -41,7 +42,6 @@ std::string Preprocessor::processIncludes(const std::string &source,
     std::string trimmed = line;
     trimmed.erase(0, trimmed.find_first_not_of(" \t"));
     if (trimmed.compare(0, 8, "#include") == 0) {
-      // Extract the header file name.
       size_t start = trimmed.find_first_of("\"<");
       size_t end = trimmed.find_last_of("\">");
       if (start == std::string::npos || end == std::string::npos ||
@@ -50,6 +50,14 @@ std::string Preprocessor::processIncludes(const std::string &source,
             "Preprocessor Error: Malformed #include directive: " + line);
       std::string headerName = trimmed.substr(start + 1, end - start - 1);
       bool isSystem = (trimmed[start] == '<');
+
+      // For system headers, skip expansion to avoid pulling in complex
+      // platform headers that the teaching parser cannot handle. External
+      // calls will be resolved at link time.
+      if (isSystem) {
+        oss << "/* skipped system header: " << headerName << " */\n";
+        continue;
+      }
 
       std::vector<std::string> searchDirs;
       auto addSearchDir = [&searchDirs](const std::string &dir) {
@@ -61,29 +69,18 @@ std::string Preprocessor::processIncludes(const std::string &source,
         }
       };
 
-      if (isSystem) {
-        if (systemIncludePaths.empty()) {
-          addSearchDir("/usr/include");
-          addSearchDir("/usr/local/include");
-        } else {
-          for (const auto &dir : systemIncludePaths)
-            addSearchDir(dir);
-        }
-      } else {
-        fs::path currentDir = fs::path(currentFile).parent_path();
-        if (!currentDir.empty())
-          addSearchDir(currentDir.string());
+      fs::path currentDir = fs::path(currentFile).parent_path();
+      if (!currentDir.empty())
+        addSearchDir(currentDir.string());
 
-        for (const auto &dir : userIncludePaths)
-          addSearchDir(dir);
+      for (const auto &dir : userIncludePaths)
+        addSearchDir(dir);
 
-        for (const auto &dir : systemIncludePaths)
-          addSearchDir(dir);
+      for (const auto &dir : systemIncludePaths)
+        addSearchDir(dir);
 
-        addSearchDir(".");
-      }
+      addSearchDir(".");
 
-      // Look for the header in the search directories.
       std::optional<std::string> headerPath;
       for (const auto &dir : searchDirs) {
         fs::path trial = fs::path(dir) / headerName;
@@ -118,7 +115,6 @@ std::string Preprocessor::processConditionals(const std::string &source) {
 }
 
 std::string Preprocessor::processMacros(const std::string &source) {
-  MacroExpander expander;
   // First, run through the source to let the expander process all macro
   // directives.
   std::istringstream iss(source);
@@ -157,6 +153,8 @@ std::string Preprocessor::processFile(const std::string &path) {
 
 std::string Preprocessor::preprocess(const std::string &topLevelPath) {
   try {
+    expander = MacroExpander();
+    fileCache.clear();
     return processFile(topLevelPath);
   } catch (const std::exception &ex) {
     std::cerr << "[INFO] Preprocessor fallback to system clang: " << ex.what()
