@@ -256,6 +256,9 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   vector<std::shared_ptr<VariableDeclarationStatement>> decls;
   do {
     ParsedDeclarator declInfo = parseDeclarator(*this, baseType, true);
+    std::cerr << "[DEBUG] (parseVarDeclStmt) after declarator current="
+              << current << " token='" << peek().lexeme << "' type="
+              << static_cast<int>(peek().type) << std::endl;
 
     // Detect a function declaration/definition that appears inside a compound
     // statement. After parsing the declarator, a '(' means we're looking at a
@@ -277,6 +280,15 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
 
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
+      std::cerr << "[DEBUG] (parseVarDeclStmt) parsing initializer at token '"
+                << peek().lexeme << "' type=" << static_cast<int>(peek().type)
+                << std::endl;
+      if (current < tokens.size()) {
+        std::cerr << "[DEBUG] (parseVarDeclStmt) raw token index " << current
+                  << " lexeme='" << tokens[current].lexeme
+                  << "' type=" << static_cast<int>(tokens[current].type)
+                  << " total=" << tokens.size() << std::endl;
+      }
       if (check(TokenType::DELIM_LBRACE)) {
         initializer = parseInitializerList();
       } else {

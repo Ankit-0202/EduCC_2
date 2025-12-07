@@ -33,13 +33,54 @@ ExpressionPtr Parser::parseAssignment() {
     return std::make_shared<TernaryExpression>(expr, trueExpr, falseExpr);
   }
 
-  if (!isAtEnd() && (peek().type == TokenType::OP_PLUS_ASSIGN ||
-                     peek().type == TokenType::OP_MINUS_ASSIGN ||
-                     peek().type == TokenType::OP_MULTIPLY_ASSIGN ||
-                     peek().type == TokenType::OP_DIVIDE_ASSIGN)) {
+  TokenType t = peek().type;
+  if (!isAtEnd() &&
+      (t == TokenType::OP_PLUS_ASSIGN || t == TokenType::OP_MINUS_ASSIGN ||
+       t == TokenType::OP_MULTIPLY_ASSIGN || t == TokenType::OP_DIVIDE_ASSIGN ||
+       t == TokenType::OP_MODULO_ASSIGN ||
+       t == TokenType::OP_BITWISE_AND_ASSIGN ||
+       t == TokenType::OP_BITWISE_OR_ASSIGN ||
+       t == TokenType::OP_BITWISE_XOR_ASSIGN ||
+       t == TokenType::OP_LEFT_SHIFT_ASSIGN ||
+       t == TokenType::OP_RIGHT_SHIFT_ASSIGN)) {
     Token opToken = advance();
     ExpressionPtr rhs = parseAssignment();
-    string op = opToken.lexeme.substr(0, 1);
+    string op;
+    switch (opToken.type) {
+    case TokenType::OP_PLUS_ASSIGN:
+      op = "+";
+      break;
+    case TokenType::OP_MINUS_ASSIGN:
+      op = "-";
+      break;
+    case TokenType::OP_MULTIPLY_ASSIGN:
+      op = "*";
+      break;
+    case TokenType::OP_DIVIDE_ASSIGN:
+      op = "/";
+      break;
+    case TokenType::OP_MODULO_ASSIGN:
+      op = "%";
+      break;
+    case TokenType::OP_BITWISE_AND_ASSIGN:
+      op = "&";
+      break;
+    case TokenType::OP_BITWISE_OR_ASSIGN:
+      op = "|";
+      break;
+    case TokenType::OP_BITWISE_XOR_ASSIGN:
+      op = "^";
+      break;
+    case TokenType::OP_LEFT_SHIFT_ASSIGN:
+      op = "<<";
+      break;
+    case TokenType::OP_RIGHT_SHIFT_ASSIGN:
+      op = ">>";
+      break;
+    default:
+      op = opToken.lexeme;
+      break;
+    }
     ExpressionPtr binaryExpr =
         std::make_shared<BinaryExpression>(op, expr, rhs);
     return std::make_shared<Assignment>(expr, binaryExpr);
@@ -195,9 +236,22 @@ ExpressionPtr Parser::parseUnary() {
         peek().lexeme == "int64_t") {
       std::string castType =
           parseSimpleType(*this, hasConst, hasStatic, hasVolatile);
+      std::vector<ExpressionPtr> dimensions;
+      while (match(TokenType::DELIM_LBRACKET)) {
+        ExpressionPtr dimExpr = nullptr;
+        if (!check(TokenType::DELIM_RBRACKET))
+          dimExpr = parseExpression();
+        consume(TokenType::DELIM_RBRACKET, "Expected ']' after array size");
+        dimensions.push_back(dimExpr);
+      }
       while (match(TokenType::OP_MULTIPLY))
         castType += "*";
       if (match(TokenType::DELIM_RPAREN)) {
+        if (check(TokenType::DELIM_LBRACE)) {
+          ExpressionPtr initList = parseInitializerList();
+          return std::make_shared<CompoundLiteral>(castType, dimensions,
+                                                   initList);
+        }
         ExpressionPtr operand = parseUnary();
         return std::make_shared<CastExpression>(castType, operand);
       }
@@ -294,8 +348,30 @@ ExpressionPtr Parser::parsePostfix() {
 
 // Primary (literals, identifiers, grouping)
 ExpressionPtr Parser::parsePrimary() {
+  std::cerr << "[DEBUG] (parsePrimary) peek type=" << static_cast<int>(peek().type)
+            << " lexeme='" << peek().lexeme << "'\n";
   if (match(TokenType::LITERAL_INT)) {
-    int value = std::stoi(tokens[current - 1].lexeme);
+    std::string lexeme = tokens[current - 1].lexeme;
+    auto stripSuffixes = [](std::string s) {
+      while (!s.empty()) {
+        char last = s.back();
+        if (last == 'u' || last == 'U' || last == 'l' || last == 'L')
+          s.pop_back();
+        else
+          break;
+      }
+      return s;
+    };
+    lexeme = stripSuffixes(lexeme);
+    int value = 0;
+    try {
+      if (lexeme.rfind("0b", 0) == 0 || lexeme.rfind("0B", 0) == 0)
+        value = std::stoi(lexeme.substr(2), nullptr, 2);
+      else
+        value = std::stoi(lexeme, nullptr, 0);
+    } catch (const std::exception &) {
+      value = 0;
+    }
     return std::make_shared<Literal>(value);
   }
   if (match(TokenType::LITERAL_FLOAT)) {

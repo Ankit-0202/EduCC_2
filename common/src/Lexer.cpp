@@ -80,9 +80,6 @@ Token Lexer::identifier() {
          (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
     lexeme.push_back(get());
   }
-  for (char c : lexeme)
-    std::cerr << (int)(unsigned char)c << ' ';
-  std::cerr << std::endl;
   Token token;
   if (lexeme == "int")
     token.type = TokenType::KW_INT;
@@ -144,12 +141,34 @@ Token Lexer::number() {
   int startColumn = column;
   std::string lexeme;
   bool sawDot = false;
+  bool sawExponent = false;
 
   // Handle hexadecimal literals (0x...)
-  if (peek() == '0' && !isAtEnd() && peekNext() == 'x') {
+  if (peek() == '0' && !isAtEnd() &&
+      (peekNext() == 'x' || peekNext() == 'X')) {
     lexeme.push_back(get()); // consume '0'
     lexeme.push_back(get()); // consume 'x'
     while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(peek())))) {
+      lexeme.push_back(get());
+    }
+    while (!isAtEnd() &&
+           (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
+      lexeme.push_back(get());
+    }
+    Token token;
+    token.type = TokenType::LITERAL_INT;
+    token.lexeme = lexeme;
+    token.line = startLine;
+    token.column = startColumn;
+    return token;
+  }
+
+  // Handle binary literals (0b... or 0B...)
+  if (peek() == '0' && !isAtEnd() &&
+      (peekNext() == 'b' || peekNext() == 'B')) {
+    lexeme.push_back(get()); // consume '0'
+    lexeme.push_back(get()); // consume 'b' or 'B'
+    while (!isAtEnd() && (peek() == '0' || peek() == '1')) {
       lexeme.push_back(get());
     }
     while (!isAtEnd() &&
@@ -174,6 +193,15 @@ Token Lexer::number() {
       lexeme.push_back(get());
     }
   }
+  if (!isAtEnd() && (peek() == 'e' || peek() == 'E')) {
+    sawExponent = true;
+    lexeme.push_back(get()); // consume 'e' or 'E'
+    if (!isAtEnd() && (peek() == '+' || peek() == '-'))
+      lexeme.push_back(get());
+    while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
+      lexeme.push_back(get());
+    }
+  }
   bool isFloatLiteral = false;
   if (!isAtEnd() && (peek() == 'f' || peek() == 'F')) {
     isFloatLiteral = true;
@@ -184,7 +212,7 @@ Token Lexer::number() {
     lexeme.push_back(get());
   }
   Token token;
-  if (!sawDot) {
+  if (!sawDot && !sawExponent) {
     token.type = TokenType::LITERAL_INT;
   } else if (isFloatLiteral) {
     token.type = TokenType::LITERAL_FLOAT;
@@ -358,7 +386,13 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '%': {
-    token.type = TokenType::OP_MODULO;
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_MODULO_ASSIGN;
+    } else {
+      token.type = TokenType::OP_MODULO;
+    }
     break;
   }
   case '=': {
@@ -385,7 +419,13 @@ Token Lexer::opOrDelim() {
     if (!isAtEnd() && peek() == '<') {
       get();
       lexeme = "<<";
-      token.type = TokenType::OP_LEFT_SHIFT;
+      if (!isAtEnd() && peek() == '=') {
+        get();
+        lexeme += "=";
+        token.type = TokenType::OP_LEFT_SHIFT_ASSIGN;
+      } else {
+        token.type = TokenType::OP_LEFT_SHIFT;
+      }
     } else if (!isAtEnd() && peek() == '=') {
       get();
       lexeme += "=";
@@ -399,7 +439,13 @@ Token Lexer::opOrDelim() {
     if (!isAtEnd() && peek() == '>') {
       get();
       lexeme = ">>";
-      token.type = TokenType::OP_RIGHT_SHIFT;
+      if (!isAtEnd() && peek() == '=') {
+        get();
+        lexeme += "=";
+        token.type = TokenType::OP_RIGHT_SHIFT_ASSIGN;
+      } else {
+        token.type = TokenType::OP_RIGHT_SHIFT;
+      }
     } else if (!isAtEnd() && peek() == '=') {
       get();
       lexeme += "=";
@@ -410,7 +456,11 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '&': {
-    if (!isAtEnd() && peek() == '&') {
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_BITWISE_AND_ASSIGN;
+    } else if (!isAtEnd() && peek() == '&') {
       get();
       lexeme += "&";
       token.type = TokenType::OP_LOGICAL_AND;
@@ -420,7 +470,11 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '|': {
-    if (!isAtEnd() && peek() == '|') {
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_BITWISE_OR_ASSIGN;
+    } else if (!isAtEnd() && peek() == '|') {
       get();
       lexeme += "|";
       token.type = TokenType::OP_LOGICAL_OR;
@@ -430,7 +484,13 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '^': {
-    token.type = TokenType::OP_BITWISE_XOR;
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_BITWISE_XOR_ASSIGN;
+    } else {
+      token.type = TokenType::OP_BITWISE_XOR;
+    }
     break;
   }
   case '~': {

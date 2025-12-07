@@ -164,6 +164,17 @@ public:
   InitializerList(const std::vector<ExpressionPtr> &elems) : elements(elems) {}
 };
 
+class CompoundLiteral : public Expression {
+public:
+  std::string type;
+  std::vector<ExpressionPtr> dimensions;
+  ExpressionPtr initializer;
+  CompoundLiteral(const std::string &type,
+                  const std::vector<ExpressionPtr> &dimensions,
+                  ExpressionPtr initializer)
+      : type(type), dimensions(dimensions), initializer(initializer) {}
+};
+
 //--------------------//
 //   Statement Base   //
 //--------------------//

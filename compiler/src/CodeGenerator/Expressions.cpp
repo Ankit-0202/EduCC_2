@@ -95,6 +95,25 @@ CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
 
     if (baseType->isPointerTy()) {
       std::string effTypeStr = getEffectiveType(*this, arr->base);
+      size_t lb = effTypeStr.find('[');
+      size_t rb = effTypeStr.find(']', lb == std::string::npos ? 0 : lb);
+      if (lb != std::string::npos && rb != std::string::npos && rb > lb + 1) {
+        std::string lenStr = effTypeStr.substr(lb + 1, rb - lb - 1);
+        uint64_t len = std::stoull(lenStr);
+        std::string elemTypeStr = effTypeStr.substr(0, lb);
+        llvm::Type *elemTy = getLLVMType(elemTypeStr);
+        llvm::ArrayType *arrTy = llvm::ArrayType::get(elemTy, len);
+        llvm::Value *ptrValue = basePtr;
+        if (auto *allocaInst = dyn_cast<AllocaInst>(basePtr)) {
+          ptrValue = builder.CreateLoad(baseType, allocaInst,
+                                        baseId->name + "_ptr");
+        } else if (auto *global = dyn_cast<GlobalVariable>(basePtr)) {
+          ptrValue = builder.CreateLoad(baseType, global, baseId->name + "_ptr");
+        }
+        std::vector<llvm::Value *> indices = {
+            ConstantInt::get(Type::getInt32Ty(context), 0), indexVal};
+        return builder.CreateGEP(arrTy, ptrValue, indices, "arrayidx");
+      }
       while (!effTypeStr.empty() && effTypeStr.back() == '*')
         effTypeStr.pop_back();
       llvm::Type *elemType = getLLVMType(effTypeStr);
@@ -136,7 +155,36 @@ CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
     llvm::Value *gep =
         builder.CreateGEP(elementType, basePtr, indices, "memberarraygep");
     return gep;
+  } else if (auto nested = std::dynamic_pointer_cast<ArrayAccess>(arr->base)) {
+    llvm::Value *baseElemPtr = generateArrayElementPointer(nested);
+    auto *ptrTy = llvm::dyn_cast<llvm::PointerType>(baseElemPtr->getType());
+    if (!ptrTy)
+      throw runtime_error("Array access on unsupported base type.");
+    std::string elemTypeStr = getEffectiveType(*this, arr->base);
+    if (!elemTypeStr.empty() && elemTypeStr.back() == '*')
+      elemTypeStr.pop_back();
+    llvm::Type *elemTy = getLLVMType(elemTypeStr);
+    llvm::Value *indexVal = generateExpression(arr->index);
+    if (!indexVal->getType()->isIntegerTy(32))
+      indexVal = builder.CreateIntCast(indexVal, Type::getInt32Ty(context),
+                                       true, "arrayidxcast");
+    return builder.CreateGEP(elemTy, baseElemPtr, indexVal, "arrayidxnested");
   } else {
+    llvm::Value *baseVal = generateLValue(arr->base);
+    if (baseVal->getType()->isPointerTy()) {
+      std::string elemTypeStr = getEffectiveType(*this, arr->base);
+      size_t lb = elemTypeStr.find('[');
+      if (lb != std::string::npos)
+        elemTypeStr = elemTypeStr.substr(0, lb);
+      if (!elemTypeStr.empty() && elemTypeStr.back() == '*')
+        elemTypeStr.pop_back();
+      llvm::Type *elemTy = getLLVMType(elemTypeStr);
+      llvm::Value *indexVal = generateExpression(arr->index);
+      if (!indexVal->getType()->isIntegerTy(32))
+        indexVal = builder.CreateIntCast(indexVal, Type::getInt32Ty(context),
+                                         true, "arrayidxcast");
+      return builder.CreateGEP(elemTy, baseVal, indexVal, "arrayidxgeneric");
+    }
     throw runtime_error("Array access on unsupported base type.");
   }
 }
@@ -493,6 +541,44 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     default:
       throw runtime_error("Cannot infer type for literal.");
     }
+  } else if (auto compLit =
+                 std::dynamic_pointer_cast<CompoundLiteral>(expr)) {
+    std::string baseType = compLit->type;
+    // Strip pointer stars for array compound literals.
+    while (!baseType.empty() && baseType.back() == '*')
+      baseType.pop_back();
+    llvm::Type *elemTy = getLLVMType(baseType);
+    uint64_t length = compLit->dimensions.empty()
+                          ? compLit->initializer
+                                    ? std::dynamic_pointer_cast<InitializerList>(
+                                          compLit->initializer)
+                                              ->elements.size()
+                                    : 0
+                          : 0;
+    if (!compLit->dimensions.empty()) {
+      auto dimExpr = compLit->dimensions.front();
+      if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
+        length = static_cast<uint64_t>(lit->intValue);
+      } else if (auto dimInit =
+                     std::dynamic_pointer_cast<InitializerList>(dimExpr)) {
+        length = dimInit->elements.size();
+      }
+    }
+    if (length == 0 && compLit->initializer) {
+      if (auto initList =
+              std::dynamic_pointer_cast<InitializerList>(compLit->initializer))
+        length = initList->elements.size();
+    }
+    if (length == 0)
+      length = 1;
+    auto *arrTy = llvm::ArrayType::get(elemTy, length);
+    AllocaInst *alloca =
+        builder.CreateAlloca(arrTy, nullptr, "compound.literal");
+    storeInitializerValue(compLit->initializer, arrTy, alloca);
+    vector<llvm::Value *> indices;
+    indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+    indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+    return builder.CreateGEP(arrTy, alloca, indices, "compound.decay");
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
     auto enumIt = enumRegistry.find(id->name);
     if (enumIt != enumRegistry.end()) {
@@ -684,9 +770,14 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
           paramTypes.push_back(argVal->getType());
         }
       }
-      llvm::FunctionType *funcType =
-          llvm::FunctionType::get(llvm::Type::getInt32Ty(context), paramTypes,
-                                  call->functionName == "printf");
+      llvm::Type *retTy = llvm::Type::getInt32Ty(context);
+      if (!args.empty()) {
+        llvm::Type *firstTy = args[0]->getType();
+        if (firstTy->isDoubleTy() || firstTy->isFloatTy())
+          retTy = firstTy;
+      }
+      llvm::FunctionType *funcType = llvm::FunctionType::get(
+          retTy, paramTypes, call->functionName == "printf");
       callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
                                       call->functionName, module.get());
     }
@@ -787,12 +878,16 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       llvm::Value *operand = generateExpression(sizeofExpr->operand);
       llvm::Type *operandType = operand->getType();
       if (operandType->isPointerTy()) {
-        string effectiveType = getEffectiveType(*this, sizeofExpr->operand);
-        while (!effectiveType.empty() && effectiveType.back() == '*')
-          effectiveType.pop_back();
-        llvm::Type *pointeeType = getLLVMType(effectiveType);
         auto DL = module->getDataLayout();
-        uint64_t size = DL.getTypeAllocSize(pointeeType);
+        if (auto id =
+                std::dynamic_pointer_cast<Identifier>(sizeofExpr->operand)) {
+          auto it = declaredTypes.find(id->name);
+          if (it != declaredTypes.end() && it->second->isArrayTy()) {
+            uint64_t size = DL.getTypeAllocSize(it->second);
+            return ConstantInt::get(Type::getInt32Ty(context), size);
+          }
+        }
+        uint64_t size = DL.getTypeAllocSize(operandType);
         return ConstantInt::get(Type::getInt32Ty(context), size);
       } else {
         auto DL = module->getDataLayout();

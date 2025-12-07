@@ -266,9 +266,14 @@ std::string MacroExpander::expand(const std::string &source) {
   std::string prev;
   std::string curr = source;
   std::unordered_map<std::string, bool> disabled;
+  size_t iteration = 0;
   do {
     prev = curr;
     curr = expandTokens(prev, disabled);
+    if (++iteration > 10000) {
+      throw std::runtime_error(
+          "Macro expansion did not converge after 10000 iterations.");
+    }
   } while (curr != prev);
   return curr;
 }

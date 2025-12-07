@@ -797,6 +797,13 @@ DeclarationPtr Parser::parseDeclaration() {
     pointerBeforeFunc++;
     tmp++;
   }
+  if (tmp + 1 < tokens.size()) {
+    std::cerr << "[DEBUG] (parseDeclaration) lookahead token=" << tokens[tmp].lexeme
+              << " (" << static_cast<int>(tokens[tmp].type)
+              << ") next=" << tokens[tmp + 1].lexeme << " ("
+              << static_cast<int>(tokens[tmp + 1].type)
+              << ") pointerBeforeFunc=" << pointerBeforeFunc << std::endl;
+  }
   if (tmp < tokens.size() && tokens[tmp].type == TokenType::IDENTIFIER &&
       tmp + 1 < tokens.size() &&
       tokens[tmp + 1].type == TokenType::DELIM_LPAREN) {

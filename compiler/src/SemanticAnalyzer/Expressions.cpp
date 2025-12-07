@@ -51,6 +51,11 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
       throw runtime_error("Cannot infer type for literal");
     }
   }
+  if (auto comp = std::dynamic_pointer_cast<CompoundLiteral>(expr)) {
+    if (!comp->dimensions.empty())
+      return comp->type + "*";
+    return comp->type;
+  }
   // For an identifier, look it up using the public getter.
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
     auto symOpt = analyzer.getSymbolTable().lookup(id->name);
@@ -322,6 +327,8 @@ void SemanticAnalyzer::analyzeExpression(
       // sizeof(expression) - analyze the operand
       analyzeExpression(sizeofExpr->operand);
     }
+  } else if (std::dynamic_pointer_cast<CompoundLiteral>(expr)) {
+    // Elements will be analyzed via initializer parsing if needed.
   } else {
     throw runtime_error(
         "Semantic Analysis Error: Unsupported expression type encountered.");

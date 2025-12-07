@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <fstream> // Added to provide std::ifstream
+#include <fstream>
 #include <iostream>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Program.h>
@@ -139,11 +139,15 @@ std::string Preprocessor::processFile(const std::string &path) {
   if (fileCache.find(path) != fileCache.end())
     return fileCache[path];
 
+  std::cerr << "[DEBUG] preprocess: processing file " << path << std::endl;
   std::string source = readFile(path);
+  std::cerr << "[DEBUG] preprocess: includes for " << path << std::endl;
   // First, process includes.
   std::string included = processIncludes(source, path);
+  std::cerr << "[DEBUG] preprocess: conditionals for " << path << std::endl;
   // Then process conditionals.
   std::string conditioned = processConditionals(included);
+  std::cerr << "[DEBUG] preprocess: macros for " << path << std::endl;
   // Finally, process macros.
   std::string expanded = processMacros(conditioned);
 
@@ -153,6 +157,8 @@ std::string Preprocessor::processFile(const std::string &path) {
 
 std::string Preprocessor::preprocess(const std::string &topLevelPath) {
   try {
+    std::cerr << "[DEBUG] preprocess: starting with top-level " << topLevelPath
+              << std::endl;
     expander = MacroExpander();
     fileCache.clear();
     return processFile(topLevelPath);

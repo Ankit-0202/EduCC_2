@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run pytest with fast defaults. If pytest-xdist is available, parallelise.
 EXTRA_OPTS=()
 
 PYTEST_BIN=${PYTEST_BIN:-pytest}
