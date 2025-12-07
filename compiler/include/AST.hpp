@@ -11,6 +11,10 @@
 class Expression;
 class Statement;
 class Declaration;
+class StructDeclaration;
+class UnionDeclaration;
+class EnumDeclaration;
+class TypedefDeclaration;
 
 using ExpressionPtr = std::shared_ptr<Expression>;
 using StatementPtr = std::shared_ptr<Statement>;
@@ -107,9 +111,13 @@ public:
 class FunctionCall : public Expression {
 public:
   std::string functionName;
+  ExpressionPtr calleeExpr;
   std::vector<ExpressionPtr> arguments;
   FunctionCall(const std::string &name, const std::vector<ExpressionPtr> &args)
-      : functionName(name), arguments(args) {}
+      : functionName(name), calleeExpr(nullptr), arguments(args) {}
+  FunctionCall(ExpressionPtr callee, const std::vector<ExpressionPtr> &args)
+      : functionName(""), calleeExpr(callee), arguments(args) {}
+  bool hasCalleeExpr() const { return calleeExpr != nullptr; }
 };
 
 class CastExpression : public Expression {
@@ -268,8 +276,7 @@ public:
                                std::optional<int> bitWidth,
                                std::optional<ExpressionPtr> initializer,
                                const std::vector<ExpressionPtr> &dimensions)
-      : type(type), name(name), bitWidth(bitWidth),
-        initializer(initializer),
+      : type(type), name(name), bitWidth(bitWidth), initializer(initializer),
         dimensions(dimensions) {}
 };
 
@@ -297,13 +304,22 @@ public:
   std::optional<int> bitWidth;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
-  VariableDeclaration(const std::string &type, const std::string &name,
-                      std::optional<int> bitWidth = std::nullopt,
-                      std::optional<ExpressionPtr> initializer = std::nullopt,
-                      const std::vector<ExpressionPtr> &dimensions = {})
-      : type(type), name(name), bitWidth(bitWidth),
-        initializer(initializer),
-        dimensions(dimensions) {}
+  bool isAnonymousUnionField;
+  bool isAnonymousStructField;
+  std::shared_ptr<StructDeclaration> inlineStructDecl;
+  std::shared_ptr<UnionDeclaration> inlineUnionDecl;
+  VariableDeclaration(
+      const std::string &type, const std::string &name,
+      std::optional<int> bitWidth = std::nullopt,
+      std::optional<ExpressionPtr> initializer = std::nullopt,
+      const std::vector<ExpressionPtr> &dimensions = {},
+      bool isAnonymousUnionField = false, bool isAnonymousStructField = false,
+      std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr,
+      std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr)
+      : type(type), name(name), bitWidth(bitWidth), initializer(initializer),
+        dimensions(dimensions), isAnonymousUnionField(isAnonymousUnionField),
+        isAnonymousStructField(isAnonymousStructField),
+        inlineStructDecl(inlineStructDecl), inlineUnionDecl(inlineUnionDecl) {}
 };
 
 // NEW: Multiple variable declarations in a single declaration.
@@ -333,10 +349,15 @@ class StructDeclaration : public Declaration {
 public:
   std::optional<std::string> tag;
   std::vector<std::shared_ptr<VariableDeclaration>> members;
+  std::vector<std::shared_ptr<UnionDeclaration>> nestedUnions;
+  std::vector<std::shared_ptr<StructDeclaration>> nestedStructs;
   StructDeclaration(
       std::optional<std::string> tag,
-      const std::vector<std::shared_ptr<VariableDeclaration>> &members)
-      : tag(tag), members(members) {}
+      const std::vector<std::shared_ptr<VariableDeclaration>> &members,
+      const std::vector<std::shared_ptr<UnionDeclaration>> &nestedUnions = {},
+      const std::vector<std::shared_ptr<StructDeclaration>> &nestedStructs = {})
+      : tag(tag), members(members), nestedUnions(nestedUnions),
+        nestedStructs(nestedStructs) {}
 };
 
 class UnionDeclaration : public Declaration {
@@ -359,6 +380,30 @@ public:
       const std::vector<std::pair<std::string, std::optional<ExpressionPtr>>>
           &enumerators)
       : tag(tag), enumerators(enumerators) {}
+};
+
+class TypedefDeclaration : public Declaration {
+public:
+  std::string alias;
+  std::string underlyingType;
+  std::vector<ExpressionPtr> dimensions;
+  bool isFunctionPointer;
+  std::vector<std::string> functionParamTypes;
+  std::shared_ptr<StructDeclaration> structDecl;
+  std::shared_ptr<UnionDeclaration> unionDecl;
+  std::shared_ptr<EnumDeclaration> enumDecl;
+  TypedefDeclaration(const std::string &alias,
+                     const std::string &underlyingType,
+                     const std::vector<ExpressionPtr> &dimensions,
+                     bool isFunctionPointer,
+                     const std::vector<std::string> &functionParamTypes,
+                     std::shared_ptr<StructDeclaration> structDecl = nullptr,
+                     std::shared_ptr<UnionDeclaration> unionDecl = nullptr,
+                     std::shared_ptr<EnumDeclaration> enumDecl = nullptr)
+      : alias(alias), underlyingType(underlyingType), dimensions(dimensions),
+        isFunctionPointer(isFunctionPointer),
+        functionParamTypes(functionParamTypes), structDecl(structDecl),
+        unionDecl(unionDecl), enumDecl(enumDecl) {}
 };
 
 #endif // AST_HPP

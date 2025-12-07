@@ -1,5 +1,7 @@
 #include "AST.hpp"
 #include "Parser.hpp"
+#include "TypeRegistry.hpp"
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -8,7 +10,17 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
-ExpressionPtr Parser::parseExpression() { return parseAssignment(); }
+std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
+                            bool &hasStaticQualifier,
+                            bool &hasVolatileQualifier);
+
+ExpressionPtr Parser::parseExpression() {
+  std::string startLex = peek().lexeme;
+  ExpressionPtr expr = parseAssignment();
+  std::cerr << "[DEBUG] (parseExpression) start='" << startLex << "' end='"
+            << peek().lexeme << "'\n";
+  return expr;
+}
 
 ExpressionPtr Parser::parseAssignment() {
   ExpressionPtr expr = parseLogicalOr();
@@ -160,9 +172,38 @@ ExpressionPtr Parser::parseFactor() {
   return expr;
 }
 
-// Modified parseUnary() to support cast expressions, address-of ('&'), 
+// Modified parseUnary() to support cast expressions, address-of ('&'),
 // dereference ('*'), logical NOT ('!'), and unary minus ('-') operators.
 ExpressionPtr Parser::parseUnary() {
+  // Handle cast expressions of the form "(type) expr"
+  size_t save = current;
+  if (match(TokenType::DELIM_LPAREN)) {
+    bool hasConst = false;
+    bool hasStatic = false;
+    bool hasVolatile = false;
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+        check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
+        peek().lexeme == "struct" || peek().lexeme == "union" ||
+        isTypedefName(peek().lexeme) ||
+        peek().lexeme == "size_t" || peek().lexeme == "uintptr_t" ||
+        peek().lexeme == "intptr_t" || peek().lexeme == "ptrdiff_t" ||
+        peek().lexeme == "ssize_t" || peek().lexeme == "uint8_t" ||
+        peek().lexeme == "uint16_t" || peek().lexeme == "uint32_t" ||
+        peek().lexeme == "uint64_t" || peek().lexeme == "int8_t" ||
+        peek().lexeme == "int16_t" || peek().lexeme == "int32_t" ||
+        peek().lexeme == "int64_t") {
+      std::string castType =
+          parseSimpleType(*this, hasConst, hasStatic, hasVolatile);
+      while (match(TokenType::OP_MULTIPLY))
+        castType += "*";
+      if (match(TokenType::DELIM_RPAREN)) {
+        ExpressionPtr operand = parseUnary();
+        return std::make_shared<CastExpression>(castType, operand);
+      }
+    }
+    current = save; // Not a cast; rewind and parse normally.
+  }
   // Handle logical NOT operator '!'
   if (match(TokenType::OP_LOGICAL_NOT)) {
     ExpressionPtr operand = parseUnary();
@@ -195,33 +236,6 @@ ExpressionPtr Parser::parseUnary() {
     ExpressionPtr operand = parseUnary();
     return std::make_shared<UnaryExpression>("*", operand);
   }
-  // Check for cast expression.
-  if (match(TokenType::DELIM_LPAREN)) {
-    // Check if this is a cast expression: ( type ) cast-expression
-    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-        check(TokenType::KW_BOOL)) {
-      string castType;
-      if (match(TokenType::KW_INT))
-        castType = "int";
-      else if (match(TokenType::KW_FLOAT))
-        castType = "float";
-      else if (match(TokenType::KW_CHAR))
-        castType = "char";
-      else if (match(TokenType::KW_DOUBLE))
-        castType = "double";
-      else if (match(TokenType::KW_BOOL))
-        castType = "bool";
-      consume(TokenType::DELIM_RPAREN, "Expected ')' after cast type");
-      ExpressionPtr operand = parseUnary();
-      return std::make_shared<CastExpression>(castType, operand);
-    } else {
-      // Not a cast; treat as a parenthesised expression.
-      ExpressionPtr expr = parseExpression();
-      consume(TokenType::DELIM_RPAREN, "Expected ')' after expression");
-      return expr;
-    }
-  }
   return parsePostfix();
 }
 
@@ -229,7 +243,23 @@ ExpressionPtr Parser::parseUnary() {
 ExpressionPtr Parser::parsePostfix() {
   ExpressionPtr expr = parsePrimary();
   while (!isAtEnd()) {
-    if (match(TokenType::DOT)) {
+    if (match(TokenType::DELIM_LPAREN)) {
+      vector<ExpressionPtr> args;
+      if (!check(TokenType::DELIM_RPAREN)) {
+        do {
+          args.push_back(parseExpression());
+        } while (match(TokenType::DELIM_COMMA));
+      }
+      consume(TokenType::DELIM_RPAREN, "Expected ')' after function arguments");
+      if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+        expr = std::make_shared<FunctionCall>(id->name, args);
+      } else if (auto callExpr =
+                     std::dynamic_pointer_cast<FunctionCall>(expr)) {
+        expr = std::make_shared<FunctionCall>(expr, args);
+      } else {
+        expr = std::make_shared<FunctionCall>(expr, args);
+      }
+    } else if (match(TokenType::DOT)) {
       // Expect an identifier after the dot.
       if (!check(TokenType::IDENTIFIER))
         error("Expected identifier after '.' for member access");
@@ -279,7 +309,8 @@ ExpressionPtr Parser::parsePrimary() {
   if (match(TokenType::LITERAL_CHAR)) {
     string lexeme = tokens[current - 1].lexeme;
     // Extract the character value from the lexeme (e.g., "'A'" -> 'A')
-    if (lexeme.length() >= 3 && lexeme[0] == '\'' && lexeme[lexeme.length() - 1] == '\'') {
+    if (lexeme.length() >= 3 && lexeme[0] == '\'' &&
+        lexeme[lexeme.length() - 1] == '\'') {
       char value = lexeme[1]; // Get the character between the quotes
       return std::make_shared<Literal>(value);
     } else {
@@ -330,34 +361,117 @@ ExpressionPtr Parser::parsePrimary() {
   if (match(TokenType::KW_SIZEOF)) {
     consume(TokenType::DELIM_LPAREN, "Expected '(' after sizeof");
 
-    // Check if it's sizeof(type) or sizeof(expression)
-    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-        check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
-        check(TokenType::KW_STRUCT) || check(TokenType::KW_UNION) ||
-        check(TokenType::KW_ENUM)) {
-      // sizeof(type)
-      Token typeToken = advance();
-      string typeName = typeToken.lexeme;
-
-      // Handle struct/union/enum types
-      if (typeToken.type == TokenType::KW_STRUCT ||
-          typeToken.type == TokenType::KW_UNION ||
-          typeToken.type == TokenType::KW_ENUM) {
-        if (check(TokenType::IDENTIFIER)) {
-          Token tagToken = advance();
-          typeName += " " + tagToken.lexeme;
+    auto parseTypeName = [this](string &out) -> bool {
+      size_t save = current;
+      bool hasConst = false;
+      bool hasVolatile = false;
+      bool hasStatic = false;
+      bool sawUnsigned = false;
+      bool sawSigned = false;
+      while (!isAtEnd() && check(TokenType::IDENTIFIER)) {
+        string lex = peek().lexeme;
+        if (lex == "const") {
+          hasConst = true;
+          advance();
+          continue;
         }
+        if (lex == "volatile") {
+          hasVolatile = true;
+          advance();
+          continue;
+        }
+        if (lex == "static") {
+          hasStatic = true;
+          advance();
+          continue;
+        }
+        if (lex == "unsigned") {
+          sawUnsigned = true;
+          advance();
+          continue;
+        }
+        if (lex == "signed") {
+          sawSigned = true;
+          advance();
+          continue;
+        }
+        break;
       }
 
+      string typeName;
+      if (match(TokenType::KW_INT))
+        typeName = "int";
+      else if (match(TokenType::KW_FLOAT))
+        typeName = "float";
+      else if (match(TokenType::KW_CHAR))
+        typeName = "char";
+      else if (match(TokenType::KW_DOUBLE))
+        typeName = "double";
+      else if (match(TokenType::KW_BOOL))
+        typeName = "bool";
+      else if (match(TokenType::KW_VOID))
+        typeName = "void";
+      else if (match(TokenType::KW_STRUCT) ||
+               (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
+        if (!check(TokenType::IDENTIFIER)) {
+          current = save;
+          return false;
+        }
+        string tag = advance().lexeme;
+        typeName = "struct " + tag;
+      } else if (match(TokenType::KW_UNION) ||
+                 (check(TokenType::IDENTIFIER) && peek().lexeme == "union")) {
+        if (!check(TokenType::IDENTIFIER)) {
+          current = save;
+          return false;
+        }
+        string tag = advance().lexeme;
+        typeName = "union " + tag;
+      } else if (match(TokenType::KW_ENUM) ||
+                 (check(TokenType::IDENTIFIER) && peek().lexeme == "enum")) {
+        if (!check(TokenType::IDENTIFIER)) {
+          current = save;
+          return false;
+        }
+        string tag = advance().lexeme;
+        typeName = "enum " + tag;
+      } else if (check(TokenType::IDENTIFIER) &&
+                 (peek().lexeme == "long" || peek().lexeme == "short")) {
+        typeName = advance().lexeme;
+      } else {
+        current = save;
+        return false;
+      }
+
+      if (sawUnsigned)
+        typeName = "unsigned " + typeName;
+      else if (sawSigned)
+        typeName = "signed " + typeName;
+      if (hasConst)
+        typeName = "const " + typeName;
+      if (hasVolatile)
+        typeName = "volatile " + typeName;
+      if (hasStatic)
+        typeName = "static " + typeName;
+
+      while (match(TokenType::OP_MULTIPLY) && tokens[current - 1].lexeme == "*")
+        typeName += "*";
+
+      out = typeName;
+      return true;
+    };
+
+    string parsedType;
+    size_t beforeType = current;
+    if (parseTypeName(parsedType)) {
       consume(TokenType::DELIM_RPAREN, "Expected ')' after sizeof type");
-      return std::make_shared<SizeOfExpression>(typeName);
-    } else {
-      // sizeof(expression)
-      ExpressionPtr operand = parseExpression();
-      consume(TokenType::DELIM_RPAREN, "Expected ')' after sizeof expression");
-      return std::make_shared<SizeOfExpression>(operand);
+      return std::make_shared<SizeOfExpression>(parsedType);
     }
+    current = beforeType;
+    // sizeof(expression)
+    ExpressionPtr operand = parseExpression();
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after sizeof expression");
+    return std::make_shared<SizeOfExpression>(operand);
   }
   error("Expected expression");
   return nullptr;

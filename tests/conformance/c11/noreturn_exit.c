@@ -1,9 +1,5 @@
 #include <stdlib.h>
 
-_Noreturn void finish(int code) {
-    exit(code);
-}
+_Noreturn void finish(int code) { exit(code); }
 
-int main(void) {
-    finish(0);
-}
+int main(void) { finish(0); }

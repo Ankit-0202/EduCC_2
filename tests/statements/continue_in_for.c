@@ -1,10 +1,11 @@
 #include <stdio.h>
 
 int main() {
-    int i;
-    for (i = 0; i < 5; i++) {
-        if (i == 2) continue;
-        printf("i = %d\n", i);
-    }
-    return 0;
+  int i;
+  for (i = 0; i < 5; i++) {
+    if (i == 2)
+      continue;
+    printf("i = %d\n", i);
+  }
+  return 0;
 }

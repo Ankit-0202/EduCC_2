@@ -17,9 +17,7 @@
 
 namespace {
 
-bool pathExists(const std::string &path) {
-  return llvm::sys::fs::exists(path);
-}
+bool pathExists(const std::string &path) { return llvm::sys::fs::exists(path); }
 
 std::string normalizeLibraryName(const std::string &lib) {
   if (lib.rfind("-l", 0) == 0) {
@@ -58,7 +56,8 @@ void appendLibraryPathsFromEnv(std::vector<std::string> &paths,
 std::string emitObjectWithClang(const std::string &clangPath,
                                 const std::string &irPath, bool verbose) {
   llvm::SmallString<128> tempObjPath;
-  if (auto ec = llvm::sys::fs::createTemporaryFile("educ_ir", ".o", tempObjPath)) {
+  if (auto ec =
+          llvm::sys::fs::createTemporaryFile("educ_ir", ".o", tempObjPath)) {
     throw std::runtime_error(
         "Linker Error: Unable to create temporary object file: " +
         ec.message());
@@ -123,13 +122,13 @@ void Linker::linkIRToExecutable(
   llvm::StringRef outputDir = llvm::sys::path::parent_path(outputPathStorage);
   if (!outputDir.empty()) {
     if (auto ec = llvm::sys::fs::create_directories(outputDir)) {
-      throw std::runtime_error("Linker Error: Unable to create output directory '" +
-                               outputDir.str() + "': " + ec.message());
+      throw std::runtime_error(
+          "Linker Error: Unable to create output directory '" +
+          outputDir.str() + "': " + ec.message());
     }
   }
 
-  auto linkerPathOrErr =
-      llvm::sys::findProgramByName(options.linkerExecutable);
+  auto linkerPathOrErr = llvm::sys::findProgramByName(options.linkerExecutable);
   if (!linkerPathOrErr) {
     throw std::runtime_error(
         "Linker Error: Could not locate linker executable '" +
@@ -147,16 +146,14 @@ void Linker::linkIRToExecutable(
           "Linker Error: Non-clang linker requested but system 'clang' "
           "executable was not found to lower LLVM IR to an object file.");
     }
-    tempObjectPath =
-        emitObjectWithClang(*clangPath, irPath, options.verbose);
+    tempObjectPath = emitObjectWithClang(*clangPath, irPath, options.verbose);
     inputPath = tempObjectPath;
   }
 
   std::vector<std::string> ownedArgs;
   ownedArgs.reserve(12 + options.forcedLibraries.size() +
                     options.librarySearchPaths.size() +
-                    additionalLibraries.size() +
-                    additionalLibraryPaths.size());
+                    additionalLibraries.size() + additionalLibraryPaths.size());
 
   ownedArgs.push_back(linkerPath);
   if (useClangDriver) {
@@ -215,7 +212,8 @@ void Linker::linkIRToExecutable(
   }
 
   std::unordered_set<std::string> seenLibs;
-  auto appendLibraries = [&ownedArgs, &seenLibs](const std::vector<std::string> &libs) {
+  auto appendLibraries = [&ownedArgs,
+                          &seenLibs](const std::vector<std::string> &libs) {
     for (const auto &lib : libs) {
       if (lib.empty())
         continue;
@@ -261,10 +259,9 @@ void Linker::linkIRToExecutable(
     for (const auto &arg : ownedArgs) {
       cmd << arg << ' ';
     }
-    throw std::runtime_error(
-        "Linker Error: '" + options.linkerExecutable +
-        "' exited with code " + std::to_string(result) +
-        ". Command: " + cmd.str());
+    throw std::runtime_error("Linker Error: '" + options.linkerExecutable +
+                             "' exited with code " + std::to_string(result) +
+                             ". Command: " + cmd.str());
   }
 
   if (!tempObjectPath.empty()) {

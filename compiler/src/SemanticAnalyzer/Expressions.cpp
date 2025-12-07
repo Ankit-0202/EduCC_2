@@ -80,14 +80,8 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
     // If the base is a struct.
     else if (baseType.rfind("struct ", 0) == 0) {
       string tag = baseType.substr(7);
-      auto structIt = structRegistry.find(tag);
-      if (structIt == structRegistry.end())
-        throw runtime_error("Semantic Analysis Error: Unknown struct type '" +
-                            baseType + "'.");
-      for (auto &member : structIt->second->members) {
-        if (member->name == mem->member)
-          return member->type;
-      }
+      if (auto *memberInfo = getMemberInfo(tag, mem->member))
+        return memberInfo->type;
       throw runtime_error("Semantic Analysis Error: Struct type '" + baseType +
                           "' does not contain a member named '" + mem->member +
                           "'.");
@@ -98,11 +92,34 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
   }
   // For a function call, return the function's return type.
   if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
+    if (funcCall->hasCalleeExpr()) {
+      std::string calleeType =
+          inferExpressionType(funcCall->calleeExpr, analyzer);
+      std::string retType;
+      std::vector<std::string> paramTypes;
+      if (!parseFunctionPointerType(calleeType, retType, paramTypes)) {
+        if (!calleeType.empty() && calleeType.back() == '*') {
+          std::string stripped = calleeType.substr(0, calleeType.size() - 1);
+          parseFunctionPointerType(stripped, retType, paramTypes);
+        }
+      }
+      if (retType.empty())
+        throw runtime_error(
+            "Semantic Analysis Error: Expression is not callable.");
+      return retType;
+    }
     auto symOpt = analyzer.getSymbolTable().lookup(funcCall->functionName);
     if (!symOpt.has_value())
       throw runtime_error("Semantic Analysis Error: Undefined function '" +
                           funcCall->functionName + "'.");
-    return symOpt.value().type;
+    if (symOpt->isFunction)
+      return symOpt.value().type;
+    std::string retType;
+    std::vector<std::string> paramTypes;
+    if (parseFunctionPointerType(symOpt->type, retType, paramTypes))
+      return retType;
+    throw runtime_error("Semantic Analysis Error: '" + funcCall->functionName +
+                        "' is not callable.");
   }
   // For sizeof expressions, return "int" (sizeof returns size_t which is
   // typically int)
@@ -200,18 +217,10 @@ void SemanticAnalyzer::analyzeExpression(
                             mem->member + "'.");
     } else if (baseType.rfind("struct ", 0) == 0) {
       string tag = baseType.substr(7);
-      auto structIt = structRegistry.find(tag);
-      if (structIt == structRegistry.end())
+      if (!getAggregateTypeInfo(tag))
         throw runtime_error("Semantic Analysis Error: Unknown struct type '" +
                             baseType + "'.");
-      bool found = false;
-      for (auto &member : structIt->second->members) {
-        if (member->name == mem->member) {
-          found = true;
-          break;
-        }
-      }
-      if (!found)
+      if (!getMemberInfo(tag, mem->member))
         throw runtime_error("Semantic Analysis Error: Struct type '" +
                             baseType + "' does not contain a member named '" +
                             mem->member + "'.");
@@ -240,18 +249,62 @@ void SemanticAnalyzer::analyzeExpression(
     }
     analyzeExpression(assign->rhs);
   } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
+    if (funcCall->hasCalleeExpr()) {
+      analyzeExpression(funcCall->calleeExpr);
+      std::string calleeType = inferExpressionType(funcCall->calleeExpr, *this);
+      std::string retType;
+      std::vector<std::string> paramTypes;
+      bool parsed = parseFunctionPointerType(calleeType, retType, paramTypes);
+      if (!parsed && !calleeType.empty() && calleeType.back() == '*') {
+        std::string stripped = calleeType.substr(0, calleeType.size() - 1);
+        parsed = parseFunctionPointerType(stripped, retType, paramTypes);
+      }
+      if (!parsed) {
+        throw runtime_error(
+            "Semantic Analysis Error: Expression is not callable.");
+      }
+      if (!paramTypes.empty() &&
+          paramTypes.size() != funcCall->arguments.size()) {
+        throw runtime_error(
+            "Semantic Analysis Error: Function called with an incorrect "
+            "number of arguments.");
+      }
+      for (const auto &arg : funcCall->arguments) {
+        analyzeExpression(arg);
+      }
+      return;
+    }
     auto sym = symbolTable.lookup(funcCall->functionName);
-    if (!sym.has_value() || !sym->isFunction) {
+    std::vector<std::string> fpParamTypes;
+    bool callableViaPointer = false;
+    if (!sym.has_value()) {
       Symbol implicit(funcCall->functionName, "int", true, {}, false);
       symbolTable.declare(implicit);
       sym = implicit;
+    } else if (!sym->isFunction) {
+      std::string retType;
+      if (parseFunctionPointerType(sym->type, retType, fpParamTypes)) {
+        callableViaPointer = true;
+      } else {
+        throw runtime_error("Semantic Analysis Error: '" +
+                            funcCall->functionName +
+                            "' is not a function or function pointer.");
+      }
     }
-    // If the function has an explicit prototype, enforce the arity.
-    if (!sym->parameterTypes.empty() &&
-        sym->parameterTypes.size() != funcCall->arguments.size()) {
-      throw runtime_error("Semantic Analysis Error: Function '" +
-                          funcCall->functionName +
-                          "' called with an incorrect number of arguments.");
+    if (sym->isFunction) {
+      if (!sym->parameterTypes.empty() &&
+          sym->parameterTypes.size() != funcCall->arguments.size()) {
+        throw runtime_error("Semantic Analysis Error: Function '" +
+                            funcCall->functionName +
+                            "' called with an incorrect number of arguments.");
+      }
+    } else if (callableViaPointer) {
+      if (!fpParamTypes.empty() &&
+          fpParamTypes.size() != funcCall->arguments.size()) {
+        throw runtime_error("Semantic Analysis Error: Function pointer '" +
+                            funcCall->functionName +
+                            "' called with an incorrect number of arguments.");
+      }
     }
     for (const auto &arg : funcCall->arguments) {
       analyzeExpression(arg);

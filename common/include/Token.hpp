@@ -27,6 +27,7 @@ enum class TokenType {
   KW_SIZEOF,
   KW_GOTO,
   KW_DO,
+  KW_TYPEDEF,
 
   // Operators
   OP_PLUS,

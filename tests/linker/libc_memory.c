@@ -21,4 +21,3 @@ int main(void) {
   free(buffer);
   return ok ? 0 : 2;
 }
-

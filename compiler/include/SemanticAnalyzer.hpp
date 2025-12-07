@@ -21,6 +21,8 @@ public:
   // NEW: Declaration for struct declarations
   void analyzeStructDeclaration(
       const std::shared_ptr<StructDeclaration> &structDecl);
+  void analyzeTypedefDeclaration(
+      const std::shared_ptr<TypedefDeclaration> &typedefDecl);
   void analyzeStatement(const StatementPtr &stmt);
   void analyzeExpression(const ExpressionPtr &expr);
 

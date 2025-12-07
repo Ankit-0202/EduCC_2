@@ -11,12 +11,37 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
+static string normalizeBaseType(string type) {
+  auto stripPrefix = [](string &s, const string &prefix) {
+    if (s.rfind(prefix, 0) == 0) {
+      s = s.substr(prefix.size());
+      while (!s.empty() && s.front() == ' ')
+        s.erase(s.begin());
+    }
+  };
+  stripPrefix(type, "const ");
+  stripPrefix(type, "volatile ");
+  stripPrefix(type, "static ");
+  stripPrefix(type, "const ");
+  stripPrefix(type, "volatile ");
+  if (type.rfind("unsigned ", 0) == 0)
+    stripPrefix(type, "unsigned ");
+  else if (type.rfind("signed ", 0) == 0)
+    stripPrefix(type, "signed ");
+  auto bracket = type.find('[');
+  if (bracket != string::npos)
+    type = type.substr(0, bracket);
+  return type;
+}
+
 SemanticAnalyzer::SemanticAnalyzer() {
   // Create the global scope.
   symbolTable.enterScope();
 }
 
 void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
+  std::cerr << "[DEBUG] semantic: analyze start, decl count="
+            << program->declarations.size() << std::endl;
   // Pre-declare all function prototypes in the global scope.
   for (const auto &decl : program->declarations) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
@@ -38,8 +63,10 @@ void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
 
   // Now analyze each declaration.
   for (const auto &decl : program->declarations) {
+    std::cerr << "[DEBUG] semantic: analyzing declaration" << std::endl;
     analyzeDeclaration(decl);
   }
+  std::cerr << "[DEBUG] semantic: analyze done" << std::endl;
 }
 
 void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
@@ -61,6 +88,9 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
   } else if (auto structDecl =
                  std::dynamic_pointer_cast<StructDeclaration>(decl)) {
     analyzeStructDeclaration(structDecl);
+  } else if (auto typedefDecl =
+                 std::dynamic_pointer_cast<TypedefDeclaration>(decl)) {
+    analyzeTypedefDeclaration(typedefDecl);
   } else {
     throw runtime_error(
         "Semantic Analysis Error: Unknown declaration type encountered.");
@@ -204,71 +234,73 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
   unionInfo.isUnion = true;
   unionInfo.totalSize = 0;
 
+  auto computeMemberSize =
+      [&](const std::shared_ptr<VariableDeclaration> &member) -> size_t {
+    string baseType = normalizeBaseType(member->type);
+    size_t baseSize = 0;
+    if (baseType == "int" || baseType == "float")
+      baseSize = 4;
+    else if (baseType == "char" || baseType == "bool")
+      baseSize = 1;
+    else if (baseType == "double")
+      baseSize = 8;
+    else if (baseType == "long long")
+      baseSize = 8;
+    else if (baseType == "short")
+      baseSize = 2;
+    else if (baseType == "long")
+      baseSize = 8;
+    else if (baseType.rfind("enum ", 0) == 0)
+      baseSize = 4;
+    else if (baseType.rfind("struct ", 0) == 0) {
+      std::string structTag = baseType.substr(7);
+      auto *info = getAggregateTypeInfo(structTag);
+      baseSize = info ? info->totalSize : 4;
+    } else if (baseType.rfind("union ", 0) == 0) {
+      std::string nestedTag = baseType.substr(6);
+      auto *info = getAggregateTypeInfo(nestedTag);
+      baseSize = info ? info->totalSize : 4;
+    } else {
+      baseSize = 4;
+    }
+    size_t multiplier = 1;
+    for (const auto &dim : member->dimensions) {
+      analyzeExpression(dim);
+      if (auto lit = std::dynamic_pointer_cast<Literal>(dim)) {
+        multiplier *= static_cast<size_t>(lit->intValue);
+      }
+    }
+    return baseSize * multiplier;
+  };
+
+  symbolTable.enterScope();
   size_t memberIndex = 0;
   for (auto &member : unionDecl->members) {
-    analyzeVariableDeclaration(member);
+    size_t memberSize = computeMemberSize(member);
 
-    // Calculate member size (simplified)
-    size_t memberSize = 0;
-    if (member->type == "int" || member->type == "float")
-      memberSize = 4;
-    else if (member->type == "char" || member->type == "bool")
-      memberSize = 1;
-    else if (member->type == "double")
-      memberSize = 8;
-    else if (member->type.rfind("enum ", 0) == 0)
-      memberSize = 4;
-    else if (member->type.rfind("struct ", 0) == 0) {
-      std::string structTag = member->type.substr(7);
-      auto structIt = structRegistry.find(structTag);
-      if (structIt != structRegistry.end()) {
-        // Calculate struct size based on members
-        memberSize = 0;
-        for (const auto &structMember : structIt->second->members) {
-          size_t structMemberSize = 0;
-          if (structMember->type == "int" || structMember->type == "float")
-            structMemberSize = 4;
-          else if (structMember->type == "char" || structMember->type == "bool")
-            structMemberSize = 1;
-          else if (structMember->type == "double")
-            structMemberSize = 8;
-          else
-            structMemberSize = 4; // Default
-          memberSize += structMemberSize;
-        }
-      } else {
-        memberSize = 4; // Default size
-      }
-    } else {
-      memberSize = 4; // Default size
-    }
-
-    // For unions, all members share the same memory location
     MemberInfo memberInfo;
     memberInfo.name = member->name;
-    
+
     // Construct the full type including array dimensions
     string fullType = member->type;
-    for (const auto& dim : member->dimensions) {
+    for (const auto &dim : member->dimensions) {
       if (auto lit = std::dynamic_pointer_cast<Literal>(dim)) {
-        if (lit->type == Literal::LiteralType::Int) {
-          fullType += "[" + std::to_string(lit->intValue) + "]";
-        }
+        fullType += "[" + std::to_string(lit->intValue) + "]";
       }
     }
     memberInfo.type = fullType;
-    memberInfo.index = memberIndex;
+    memberInfo.index = 0;
     memberInfo.offset = 0; // All union members start at offset 0
     memberInfo.size = memberSize;
     unionInfo.members.push_back(memberInfo);
 
-    // Union size is the size of the largest member
     if (memberSize > unionInfo.totalSize) {
       unionInfo.totalSize = memberSize;
     }
 
     memberIndex++;
   }
+  symbolTable.exitScope();
 
   if (unionDecl->tag.has_value()) {
     std::cerr << "[DEBUG] analyzeUnionDeclaration: Registering union '"
@@ -289,48 +321,70 @@ void SemanticAnalyzer::analyzeStructDeclaration(
   size_t memberIndex = 0;
   size_t currentOffset = 0;
 
-  for (auto &member : structDecl->members) {
-    analyzeVariableDeclaration(member);
+  for (const auto &nestedUnion : structDecl->nestedUnions) {
+    analyzeUnionDeclaration(nestedUnion);
+  }
+  for (const auto &nestedStruct : structDecl->nestedStructs) {
+    analyzeStructDeclaration(nestedStruct);
+  }
 
-    // Calculate member size (simplified)
-    size_t memberSize = 0;
-    if (member->type == "int" || member->type == "float")
-      memberSize = 4;
-    else if (member->type == "char" || member->type == "bool")
-      memberSize = 1;
-    else if (member->type == "double")
-      memberSize = 8;
-    else if (member->type.rfind("enum ", 0) == 0)
-      memberSize = 4;
-    else if (member->type.rfind("struct ", 0) == 0) {
-      std::string structTag = member->type.substr(7);
-      auto structIt = structRegistry.find(structTag);
-      if (structIt != structRegistry.end()) {
-        // Calculate struct size based on members
-        memberSize = 0;
-        for (const auto &structMember : structIt->second->members) {
-          size_t structMemberSize = 0;
-          if (structMember->type == "int" || structMember->type == "float")
-            structMemberSize = 4;
-          else if (structMember->type == "char" || structMember->type == "bool")
-            structMemberSize = 1;
-          else if (structMember->type == "double")
-            structMemberSize = 8;
-          else
-            structMemberSize = 4; // Default
-          memberSize += structMemberSize;
-        }
-      } else {
-        memberSize = 4; // Default size
-      }
+  auto computeMemberSize =
+      [&](const std::shared_ptr<VariableDeclaration> &member) -> size_t {
+    string baseType = normalizeBaseType(member->type);
+    size_t baseSize = 0;
+    if (baseType == "int" || baseType == "float")
+      baseSize = 4;
+    else if (baseType == "char" || baseType == "bool")
+      baseSize = 1;
+    else if (baseType == "double")
+      baseSize = 8;
+    else if (baseType == "long long")
+      baseSize = 8;
+    else if (baseType == "short")
+      baseSize = 2;
+    else if (baseType == "long")
+      baseSize = 8;
+    else if (baseType.rfind("enum ", 0) == 0)
+      baseSize = 4;
+    else if (baseType.rfind("struct ", 0) == 0) {
+      std::string structTag = baseType.substr(7);
+      auto *info = getAggregateTypeInfo(structTag);
+      baseSize = info ? info->totalSize : 4;
+    } else if (baseType.rfind("union ", 0) == 0) {
+      std::string unionTag = baseType.substr(6);
+      auto *info = getAggregateTypeInfo(unionTag);
+      baseSize = info ? info->totalSize : 4;
     } else {
-      memberSize = 4; // Default size
+      baseSize = 4;
     }
+    size_t multiplier = 1;
+    for (const auto &dim : member->dimensions) {
+      analyzeExpression(dim);
+      if (auto lit = std::dynamic_pointer_cast<Literal>(dim)) {
+        multiplier *= static_cast<size_t>(lit->intValue);
+      }
+    }
+    return baseSize * multiplier;
+  };
 
-    // For structs, members are laid out sequentially
+  symbolTable.enterScope();
+  for (auto &member : structDecl->members) {
+    std::cerr << "[DEBUG] semantic: struct member '" << member->name << "'"
+              << (member->bitWidth ? " (bitfield)" : "") << std::endl;
+
+    string baseType = normalizeBaseType(member->type);
+    size_t memberSize = computeMemberSize(member);
+
     MemberInfo memberInfo;
     memberInfo.name = member->name;
     memberInfo.type = member->type;
+    for (const auto &dimExpr : member->dimensions) {
+      if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
+        memberInfo.type += "[" + std::to_string(lit->intValue) + "]";
+      } else {
+        memberInfo.type += "[]";
+      }
+    }
     memberInfo.bitWidth = member->bitWidth.has_value()
                               ? static_cast<size_t>(member->bitWidth.value())
                               : 0;
@@ -342,15 +396,60 @@ void SemanticAnalyzer::analyzeStructDeclaration(
     memberInfo.size = memberSize;
     structInfo.members.push_back(memberInfo);
 
+    if (baseType.rfind("union ", 0) == 0 && member->isAnonymousUnionField) {
+      string unionTag = baseType.substr(6);
+      unionTag = normalizeTag(unionTag);
+      if (auto *unionInfo = getAggregateTypeInfo(unionTag)) {
+        for (const auto &uMember : unionInfo->members) {
+          MemberInfo alias = uMember;
+          alias.index = memberIndex;
+          alias.offset = currentOffset;
+          alias.isUnionMemberAlias = true;
+          alias.unionTag = unionTag;
+          alias.unionFieldIndex = memberIndex;
+          structInfo.members.push_back(alias);
+        }
+      }
+    } else if (baseType.rfind("struct ", 0) == 0 &&
+               member->isAnonymousStructField) {
+      string structTag = baseType.substr(7);
+      structTag = normalizeTag(structTag);
+      if (auto *nestedInfo = getAggregateTypeInfo(structTag)) {
+        for (const auto &sMember : nestedInfo->members) {
+          MemberInfo alias = sMember;
+          alias.index = memberIndex;
+          alias.offset = currentOffset + sMember.offset;
+          structInfo.members.push_back(alias);
+        }
+      }
+    }
+
     currentOffset += memberSize;
     memberIndex++;
   }
+  symbolTable.exitScope();
 
   structInfo.totalSize = currentOffset;
 
   if (structDecl->tag.has_value()) {
     structRegistry[structDecl->tag.value()] = structDecl;
     aggregateTypeRegistry[structDecl->tag.value()] = structInfo;
+  }
+}
+
+void SemanticAnalyzer::analyzeTypedefDeclaration(
+    const std::shared_ptr<TypedefDeclaration> &typedefDecl) {
+  TypedefInfo info{typedefDecl->underlyingType, typedefDecl->dimensions,
+                   typedefDecl->isFunctionPointer,
+                   typedefDecl->functionParamTypes};
+  typedefRegistry[typedefDecl->alias] = info;
+
+  if (typedefDecl->structDecl) {
+    analyzeStructDeclaration(typedefDecl->structDecl);
+  } else if (typedefDecl->unionDecl) {
+    analyzeUnionDeclaration(typedefDecl->unionDecl);
+  } else if (typedefDecl->enumDecl) {
+    analyzeEnumDeclaration(typedefDecl->enumDecl);
   }
 }
 

@@ -36,6 +36,8 @@ public:
   // Helper: generate IR for a local variable declaration.
   void generateVariableDeclaration(
       const std::shared_ptr<VariableDeclaration> &varDecl);
+  void storeInitializerValue(const ExpressionPtr &init, llvm::Type *type,
+                             llvm::Value *ptr);
 
   // Get the LLVM type corresponding to a C type string.
   llvm::Type *getLLVMType(const std::string &type);
@@ -74,8 +76,8 @@ public:
     llvm::BasicBlock *conditionBlock;
     llvm::BasicBlock *bodyBlock;
     llvm::BasicBlock *afterBlock;
-    llvm::BasicBlock *incrementBlock;  // For for loops
-    bool isForLoop;  // To distinguish between while and for loops
+    llvm::BasicBlock *incrementBlock; // For for loops
+    bool isForLoop; // To distinguish between while and for loops
   };
   std::vector<LoopContext> loopStack;
 };

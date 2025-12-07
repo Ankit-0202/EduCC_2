@@ -103,8 +103,33 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
     if (pos != string::npos) {
       return baseType.substr(0, pos);
     }
+    if (!baseType.empty() && baseType.back() == '*') {
+      baseType.pop_back();
+      while (!baseType.empty() &&
+             isspace(static_cast<unsigned char>(baseType.back()))) {
+        baseType.pop_back();
+      }
+      return baseType;
+    }
     throw runtime_error("CodeGenerator Error: Cannot index non-array type '" +
                         baseType + "'.");
+  }
+
+  if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+    switch (lit->type) {
+    case Literal::LiteralType::Int:
+      return "int";
+    case Literal::LiteralType::Float:
+      return "float";
+    case Literal::LiteralType::Double:
+      return "double";
+    case Literal::LiteralType::Char:
+      return "char";
+    case Literal::LiteralType::Bool:
+      return "bool";
+    case Literal::LiteralType::String:
+      return "char*";
+    }
   }
 
   // Case 5: Binary Expression (handle pointer arithmetic)
@@ -126,6 +151,10 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
     }
     // Fallback: return the effective type of the left operand.
     return getEffectiveType(CG, bin->left);
+  }
+
+  if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
+    return castExpr->castType;
   }
 
   // (No branch is provided for function calls, since they are not used in

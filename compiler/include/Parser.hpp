@@ -52,13 +52,16 @@ public:
   DeclarationPtr parseDeclaration();
   DeclarationPtr parseStructDeclaration();
   DeclarationPtr parseVariableDeclaration();
-  DeclarationPtr parseVariableDeclarationWithType(const std::string &givenType);
+  DeclarationPtr parseVariableDeclarationWithType(
+      const std::string &givenType,
+      const std::vector<ExpressionPtr> &typeDimensions = {});
   DeclarationPtr parseFunctionDeclaration();
   DeclarationPtr parseFunctionDeclarationWithType(const std::string &givenType);
   std::vector<std::pair<std::string, std::string>> parseParameters();
   DeclarationPtr parseEnumDeclaration();
   DeclarationPtr parseUnionDeclaration();
   std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
+  DeclarationPtr parseTypedefDeclaration();
   std::vector<Token> tokens;
 
   size_t current;
@@ -72,5 +75,20 @@ public:
   void consume(TokenType type, const std::string &errorMessage);
   void error(const std::string &message) const;
 };
+
+struct ParsedDeclarator {
+  std::string type;
+  std::string name;
+  std::vector<ExpressionPtr> dimensions;
+  bool isFunctionPointer{false};
+  std::vector<std::string> functionParamTypes;
+  bool hasEmptyArrayDimension{false};
+};
+
+std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
+                            bool &hasStaticQualifier,
+                            bool &hasVolatileQualifier);
+ParsedDeclarator parseDeclarator(Parser &parser, const std::string &baseType,
+                                 bool requireName);
 
 #endif // PARSER_HPP

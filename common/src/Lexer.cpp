@@ -80,7 +80,8 @@ Token Lexer::identifier() {
          (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
     lexeme.push_back(get());
   }
-  for (char c : lexeme) std::cerr << (int)(unsigned char)c << ' ';
+  for (char c : lexeme)
+    std::cerr << (int)(unsigned char)c << ' ';
   std::cerr << std::endl;
   Token token;
   if (lexeme == "int")
@@ -127,6 +128,8 @@ Token Lexer::identifier() {
     token.type = TokenType::KW_DO;
   else if (lexeme == "void")
     token.type = TokenType::KW_VOID;
+  else if (lexeme == "typedef")
+    token.type = TokenType::KW_TYPEDEF;
   else
     token.type = TokenType::IDENTIFIER;
   token.lexeme = lexeme;
@@ -141,12 +144,16 @@ Token Lexer::number() {
   int startColumn = column;
   std::string lexeme;
   bool sawDot = false;
-  
+
   // Handle hexadecimal literals (0x...)
   if (peek() == '0' && !isAtEnd() && peekNext() == 'x') {
     lexeme.push_back(get()); // consume '0'
     lexeme.push_back(get()); // consume 'x'
     while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(peek())))) {
+      lexeme.push_back(get());
+    }
+    while (!isAtEnd() &&
+           (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
       lexeme.push_back(get());
     }
     Token token;
@@ -156,7 +163,7 @@ Token Lexer::number() {
     token.column = startColumn;
     return token;
   }
-  
+
   while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
     lexeme.push_back(get());
   }
@@ -170,6 +177,10 @@ Token Lexer::number() {
   bool isFloatLiteral = false;
   if (!isAtEnd() && (peek() == 'f' || peek() == 'F')) {
     isFloatLiteral = true;
+    lexeme.push_back(get());
+  }
+  while (!isAtEnd() &&
+         (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
     lexeme.push_back(get());
   }
   Token token;

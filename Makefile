@@ -77,7 +77,7 @@ GCC_EXE    := gcc_executable
 OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
-PYTEST ?= python3 -m pytest
+PYTEST ?= ./scripts/pytest_runner.sh
 PYTEST_ARGS ?=
 PYTEST_TARGETS ?= tests_py
 

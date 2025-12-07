@@ -5,10 +5,9 @@
 
 int main() {
 #ifdef A
-    printf("Defined\n");
+  printf("Defined\n");
 #else
-    printf("Undefined\n");
+  printf("Undefined\n");
 #endif
-    return 0;
+  return 0;
 }
-

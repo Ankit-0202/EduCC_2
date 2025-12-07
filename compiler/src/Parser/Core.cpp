@@ -72,7 +72,8 @@ std::shared_ptr<Program> Parser::parse() {
     std::cerr << std::endl;
     DeclarationPtr decl = parseDeclaration();
     declCount++;
-    std::cerr << "[DEBUG] (parse) Parsed declaration " << declCount << std::endl;
+    std::cerr << "[DEBUG] (parse) Parsed declaration " << declCount
+              << std::endl;
     if (decl) {
       program->addDeclaration(decl);
       std::cerr << "[DEBUG] (parse) Added declaration to program" << std::endl;
@@ -81,6 +82,7 @@ std::shared_ptr<Program> Parser::parse() {
       break;
     }
   }
-  std::cerr << "[DEBUG] (parse) Total declarations parsed: " << declCount << std::endl;
+  std::cerr << "[DEBUG] (parse) Total declarations parsed: " << declCount
+            << std::endl;
   return program;
 }

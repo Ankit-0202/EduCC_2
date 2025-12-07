@@ -34,7 +34,7 @@ Function *CodeGenerator::generateFunction(
 
   // Create the function
   Function *function = Function::Create(funcType, Function::ExternalLinkage,
-                                       funcDecl->name, module.get());
+                                        funcDecl->name, module.get());
 
   // Set parameter names
   unsigned idx = 0;
@@ -58,14 +58,16 @@ Function *CodeGenerator::generateFunction(
     idx = 0;
     for (auto &arg : function->args()) {
       if (idx < funcDecl->parameters.size()) {
-        string paramName = funcDecl->parameters[idx].second; // param.second is the name
-        
+        string paramName =
+            funcDecl->parameters[idx].second; // param.second is the name
+
         // Create alloca for the parameter
-        AllocaInst *alloca = builder.CreateAlloca(arg.getType(), nullptr, paramName);
-        
+        AllocaInst *alloca =
+            builder.CreateAlloca(arg.getType(), nullptr, paramName);
+
         // Store the argument value
         builder.CreateStore(&arg, alloca);
-        
+
         // Add to local variables
         localVariables[paramName] = alloca;
         localVarStack.back()[paramName] = alloca;
@@ -108,9 +110,10 @@ Function *CodeGenerator::generateFunction(
   return function;
 }
 
-Function *CodeGenerator::getOrCreateFunctionInModule(
-    const string &name, Type *returnType, const vector<Type *> &paramTypes,
-    bool isDefinition) {
+Function *
+CodeGenerator::getOrCreateFunctionInModule(const string &name, Type *returnType,
+                                           const vector<Type *> &paramTypes,
+                                           bool isDefinition) {
   // Check if function already exists
   Function *existingFunction = module->getFunction(name);
   if (existingFunction) {
@@ -118,13 +121,14 @@ Function *CodeGenerator::getOrCreateFunctionInModule(
     FunctionType *existingType = existingFunction->getFunctionType();
     if (existingType->getReturnType() != returnType ||
         existingType->getNumParams() != paramTypes.size()) {
-      throw runtime_error("CodeGenerator Error: Function signature mismatch for " +
-                         name);
+      throw runtime_error(
+          "CodeGenerator Error: Function signature mismatch for " + name);
     }
     for (unsigned i = 0; i < paramTypes.size(); ++i) {
       if (existingType->getParamType(i) != paramTypes[i]) {
-        throw runtime_error("CodeGenerator Error: Function parameter type mismatch for " +
-                           name);
+        throw runtime_error(
+            "CodeGenerator Error: Function parameter type mismatch for " +
+            name);
       }
     }
     return existingFunction;
@@ -132,12 +136,12 @@ Function *CodeGenerator::getOrCreateFunctionInModule(
 
   // Create new function
   FunctionType *funcType = FunctionType::get(returnType, paramTypes, false);
-  Function *function = Function::Create(funcType, Function::ExternalLinkage, name,
-                                       module.get());
-  
+  Function *function =
+      Function::Create(funcType, Function::ExternalLinkage, name, module.get());
+
   if (!isDefinition) {
     function->setLinkage(Function::ExternalLinkage);
   }
-  
+
   return function;
 }

@@ -37,15 +37,36 @@ def compiler_binary(project_root: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def toolchain() -> dict[str, str]:
-    required = ("llc", "clang", "gcc")
     resolved: dict[str, str] = {}
     missing = []
-    for tool in required:
+
+    for tool in ("llc", "clang"):
         path = shutil.which(tool)
         if path is None:
             missing.append(tool)
         else:
             resolved[tool] = path
+
+    # Prefer a real GCC (for GNU extensions like nested functions) if available.
+    gcc_candidates = ["gcc", "gcc-15", "gcc-14", "gcc-13", "gcc-12", "gcc-11"]
+    for candidate in gcc_candidates:
+        path = shutil.which(candidate)
+        if not path:
+            continue
+        try:
+            version = subprocess.run(
+                [path, "--version"], capture_output=True, text=True, check=False
+            ).stdout
+            if "clang" in version and candidate == "gcc":
+                continue
+        except Exception:
+            pass
+        resolved["gcc"] = path
+        break
+
+    if "gcc" not in resolved:
+        missing.append("gcc")
+
     if missing:
         pytest.skip(
             f"Skipping EduCC tests because the following tools are missing: {', '.join(missing)}"

@@ -1,7 +1,7 @@
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
-#include "Linker.hpp"
 #include "Lexer.hpp"
+#include "Linker.hpp"
 #include "Parser.hpp"
 #include "Preprocessor.hpp"
 #include "SemanticAnalyzer.hpp"
@@ -11,158 +11,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/FileSystem.h>
-#include <llvm/Support/Program.h>
-#include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/raw_ostream.h>
 #include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
-
-static std::string tokenTypeToString(TokenType type) {
-  switch (type) {
-  case TokenType::KW_INT:
-    return "KW_INT";
-  case TokenType::KW_FLOAT:
-    return "KW_FLOAT";
-  case TokenType::KW_CHAR:
-    return "KW_CHAR";
-  case TokenType::KW_DOUBLE:
-    return "KW_DOUBLE";
-  case TokenType::KW_BOOL:
-    return "KW_BOOL";
-  case TokenType::KW_RETURN:
-    return "KW_RETURN";
-  case TokenType::KW_IF:
-    return "KW_IF";
-  case TokenType::KW_ELSE:
-    return "KW_ELSE";
-  case TokenType::KW_WHILE:
-    return "KW_WHILE";
-  case TokenType::KW_FOR:
-    return "KW_FOR";
-  case TokenType::KW_SWITCH:
-    return "KW_SWITCH";
-  case TokenType::KW_CASE:
-    return "KW_CASE";
-  case TokenType::KW_DEFAULT:
-    return "KW_DEFAULT";
-  case TokenType::KW_BREAK:
-    return "KW_BREAK";
-  case TokenType::KW_CONTINUE:
-    return "KW_CONTINUE";
-  case TokenType::KW_ENUM:
-    return "KW_ENUM";
-  case TokenType::KW_UNION:
-    return "KW_UNION";
-  case TokenType::KW_STRUCT:
-    return "KW_STRUCT";
-  case TokenType::KW_SIZEOF:
-    return "KW_SIZEOF";
-  case TokenType::KW_DO:
-    return "KW_DO";
-  case TokenType::KW_VOID:
-    return "KW_VOID";
-  case TokenType::OP_PLUS:
-    return "OP_PLUS";
-  case TokenType::OP_PLUS_PLUS:
-    return "OP_PLUS_PLUS";
-  case TokenType::OP_MINUS_MINUS:
-    return "OP_MINUS_MINUS";
-  case TokenType::OP_RIGHT_ARROW:
-    return "OP_RIGHT_ARROW";
-  case TokenType::OP_MINUS:
-    return "OP_MINUS";
-  case TokenType::OP_MULTIPLY:
-    return "OP_MULTIPLY";
-  case TokenType::OP_DIVIDE:
-    return "OP_DIVIDE";
-  case TokenType::OP_MODULO:
-    return "OP_MODULO";
-  case TokenType::OP_ASSIGN:
-    return "OP_ASSIGN";
-  case TokenType::OP_PLUS_ASSIGN:
-    return "OP_PLUS_ASSIGN";
-  case TokenType::OP_MINUS_ASSIGN:
-    return "OP_MINUS_ASSIGN";
-  case TokenType::OP_MULTIPLY_ASSIGN:
-    return "OP_MULTIPLY_ASSIGN";
-  case TokenType::OP_DIVIDE_ASSIGN:
-    return "OP_DIVIDE_ASSIGN";
-  case TokenType::OP_EQUAL:
-    return "OP_EQUAL";
-  case TokenType::OP_NOT_EQUAL:
-    return "OP_NOT_EQUAL";
-  case TokenType::OP_LESS:
-    return "OP_LESS";
-  case TokenType::OP_GREATER:
-    return "OP_GREATER";
-  case TokenType::OP_LESS_EQUAL:
-    return "OP_LESS_EQUAL";
-  case TokenType::OP_GREATER_EQUAL:
-    return "OP_GREATER_EQUAL";
-  case TokenType::OP_LOGICAL_AND:
-    return "OP_LOGICAL_AND";
-  case TokenType::OP_LOGICAL_OR:
-    return "OP_LOGICAL_OR";
-  case TokenType::OP_LOGICAL_NOT:
-    return "OP_LOGICAL_NOT";
-  case TokenType::OP_BITWISE_AND:
-    return "OP_BITWISE_AND";
-  case TokenType::OP_BITWISE_OR:
-    return "OP_BITWISE_OR";
-  case TokenType::OP_BITWISE_XOR:
-    return "OP_BITWISE_XOR";
-  case TokenType::OP_LEFT_SHIFT:
-    return "OP_LEFT_SHIFT";
-  case TokenType::OP_RIGHT_SHIFT:
-    return "OP_RIGHT_SHIFT";
-  case TokenType::OP_BITWISE_NOT:
-    return "OP_BITWISE_NOT";
-  case TokenType::DELIM_SEMICOLON:
-    return "DELIM_SEMICOLON";
-  case TokenType::DELIM_COMMA:
-    return "DELIM_COMMA";
-  case TokenType::DELIM_LPAREN:
-    return "DELIM_LPAREN";
-  case TokenType::DELIM_RPAREN:
-    return "DELIM_RPAREN";
-  case TokenType::DELIM_LBRACE:
-    return "DELIM_LBRACE";
-  case TokenType::DELIM_RBRACE:
-    return "DELIM_RBRACE";
-  case TokenType::DELIM_LBRACKET:
-    return "DELIM_LBRACKET";
-  case TokenType::DELIM_RBRACKET:
-    return "DELIM_RBRACKET";
-  case TokenType::DELIM_COLON:
-    return "DELIM_COLON";
-  case TokenType::DELIM_QUESTION:
-    return "DELIM_QUESTION";
-  case TokenType::DOT:
-    return "DOT";
-  case TokenType::LITERAL_INT:
-    return "LITERAL_INT";
-  case TokenType::LITERAL_FLOAT:
-    return "LITERAL_FLOAT";
-  case TokenType::LITERAL_DOUBLE:
-    return "LITERAL_DOUBLE";
-  case TokenType::LITERAL_CHAR:
-    return "LITERAL_CHAR";
-  case TokenType::LITERAL_STRING:
-    return "LITERAL_STRING";
-  case TokenType::IDENTIFIER:
-    return "IDENTIFIER";
-  case TokenType::EOF_TOKEN:
-    return "EOF_TOKEN";
-  case TokenType::UNKNOWN:
-    return "UNKNOWN";
-  default:
-    return "UNKNOWN";
-  }
-}
 
 static void appendIncludePathIfExists(std::vector<std::string> &paths,
                                       const std::string &candidate) {
@@ -208,8 +63,10 @@ static std::vector<std::string> defaultSystemIncludePaths() {
 
   const char *developerDir = std::getenv("DEVELOPER_DIR");
   if (developerDir && *developerDir) {
-    appendIncludePathIfExists(paths,
-                              std::string(developerDir) + "/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include");
+    appendIncludePathIfExists(
+        paths,
+        std::string(developerDir) +
+            "/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include");
     appendIncludePathIfExists(paths,
                               std::string(developerDir) + "/usr/include");
   }
@@ -251,137 +108,25 @@ struct DriverConfig {
   Linker::Options linkerOptions;
 };
 
-static bool declarationHasBitfield(const DeclarationPtr &decl) {
-  if (!decl)
-    return false;
-
-  if (auto var = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
-    return var->bitWidth.has_value();
-  }
-
-  if (auto multi =
-          std::dynamic_pointer_cast<MultiVariableDeclaration>(decl)) {
-    for (const auto &inner : multi->declarations) {
-      if (inner && inner->bitWidth.has_value()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(decl)) {
-    for (const auto &member : structDecl->members) {
-      if (member && member->bitWidth.has_value()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
-    for (const auto &member : unionDecl->members) {
-      if (member && member->bitWidth.has_value()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  return false;
-}
-
-static bool programHasBitfields(const std::shared_ptr<Program> &program) {
-  if (!program)
-    return false;
-  for (const auto &decl : program->declarations) {
-    if (declarationHasBitfield(decl)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-static int emitIRWithSystemClang(DriverConfig &config) {
-  auto clangPath = llvm::sys::findProgramByName("clang");
-  if (!clangPath) {
-    std::cerr << "Error: system 'clang' not found for bitfield fallback.\n";
-    return 1;
-  }
-
-  std::vector<std::string> ownedArgs;
-  ownedArgs.push_back(*clangPath);
-  ownedArgs.emplace_back("-S");
-  ownedArgs.emplace_back("-emit-llvm");
-  ownedArgs.emplace_back("-std=c11");
-  ownedArgs.emplace_back("-o");
-  ownedArgs.push_back(config.irOutputPath);
-  ownedArgs.push_back(config.sourcePath);
-
-  llvm::SmallVector<llvm::StringRef, 12> args;
-  args.reserve(ownedArgs.size());
-  for (const auto &arg : ownedArgs) {
-    args.push_back(arg);
-  }
-
-  if (config.linkerOptions.verbose) {
-    std::cerr << "[bitfield] ";
-    for (const auto &arg : ownedArgs) {
-      std::cerr << arg << ' ';
-    }
-    std::cerr << std::endl;
-  }
-
-  int result = llvm::sys::ExecuteAndWait(*clangPath, args);
-  if (result != 0) {
-    std::ostringstream cmd;
-    for (const auto &arg : ownedArgs) {
-      cmd << arg << ' ';
-    }
-    std::cerr << "Bitfield fallback failed (exit code " << result
-              << "): " << cmd.str() << "\n";
-    return 1;
-  }
-
-  std::cout << "LLVM IR (bitfield) generated via system clang at '"
-            << config.irOutputPath << "'.\n";
-
-  if (!config.link) {
-    return 0;
-  }
-
-  Linker linker(config.linkerOptions);
-  try {
-    linker.linkIRToExecutable(config.irOutputPath, config.executablePath,
-                              config.additionalLibraries,
-                              config.additionalLibraryPaths);
-    std::cout << "Executable linked at '" << config.executablePath << "'.\n";
-  } catch (const std::exception &linkError) {
-    std::cerr << linkError.what() << "\n";
-    return 1;
-  }
-
-  return 0;
-}
-
 static void printUsage(const char *progName) {
-  std::cerr << "Usage: " << progName
-            << " <source_file> [llvm_output.ll] [options]\n"
-            << "Options:\n"
-            << "  --exe <path>           Set output executable path "
-               "(default derived from source name)\n"
-            << "  --no-link              Skip linking (emit LLVM IR only)\n"
-            << "  --linker <path>        Override linker executable "
-               "(default: clang)\n"
-            << "  --lib <name>           Link against additional library "
-               "(repeatable)\n"
-            << "  --lib-path <path>      Add library search path (repeatable)\n"
-            << "  --linker-arg <arg>     Forward an extra argument to the linker "
-               "(repeatable)\n"
-            << "  --link-from-ir <path>  Link an existing LLVM IR file using the "
-               "configured linker options\n"
-            << "  --no-default-libs      Do not link default system libraries\n"
-            << "  --link-verbose         Print the linker command before running\n"
-            << "  -h, --help             Show this message\n";
+  std::cerr
+      << "Usage: " << progName << " <source_file> [llvm_output.ll] [options]\n"
+      << "Options:\n"
+      << "  --exe <path>           Set output executable path "
+         "(default derived from source name)\n"
+      << "  --no-link              Skip linking (emit LLVM IR only)\n"
+      << "  --linker <path>        Override linker executable "
+         "(default: clang)\n"
+      << "  --lib <name>           Link against additional library "
+         "(repeatable)\n"
+      << "  --lib-path <path>      Add library search path (repeatable)\n"
+      << "  --linker-arg <arg>     Forward an extra argument to the linker "
+         "(repeatable)\n"
+      << "  --link-from-ir <path>  Link an existing LLVM IR file using the "
+         "configured linker options\n"
+      << "  --no-default-libs      Do not link default system libraries\n"
+      << "  --link-verbose         Print the linker command before running\n"
+      << "  -h, --help             Show this message\n";
 }
 
 static std::string deriveDefaultExecutableName(const std::string &sourcePath) {
@@ -573,14 +318,6 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  std::cout << "===== Token Stream =====\n";
-  for (const auto &token : tokens) {
-    std::cout << "Type: " << tokenTypeToString(token.type) << ", Lexeme: '"
-              << token.lexeme << "', Line: " << token.line
-              << ", Column: " << token.column << "\n";
-  }
-  std::cout << "========================\n\n";
-
   /*
    * Step 3: Parsing
    */
@@ -594,10 +331,6 @@ int main(int argc, char *argv[]) {
   } catch (const std::exception &e) {
     std::cerr << "Parser Error: " << e.what() << "\n";
     return 1;
-  }
-
-  if (programHasBitfields(ast)) {
-    return emitIRWithSystemClang(config);
   }
 
   /*
@@ -647,7 +380,8 @@ int main(int argc, char *argv[]) {
         linker.linkIRToExecutable(config.irOutputPath, config.executablePath,
                                   config.additionalLibraries,
                                   config.additionalLibraryPaths);
-        std::cout << "Executable linked at '" << config.executablePath << "'.\n";
+        std::cout << "Executable linked at '" << config.executablePath
+                  << "'.\n";
       } catch (const std::exception &linkError) {
         std::cerr << linkError.what() << "\n";
         return 1;

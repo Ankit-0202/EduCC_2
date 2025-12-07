@@ -7,12 +7,12 @@
 #include <filesystem>
 #include <fstream> // Added to provide std::ifstream
 #include <iostream>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/Program.h>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
-#include <llvm/ADT/SmallVector.h>
-#include <llvm/Support/Program.h>
 
 namespace fs = std::filesystem;
 
@@ -172,8 +172,7 @@ Preprocessor::preprocessWithSystemClang(const std::string &topLevelPath) const {
   }
   std::string clangPath = *clangPathOrErr;
 
-  auto timestamp =
-      std::chrono::steady_clock::now().time_since_epoch().count();
+  auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
   fs::path outputPath =
       fs::temp_directory_path() /
       ("educc-preprocessed-" + std::to_string(timestamp) + ".i");

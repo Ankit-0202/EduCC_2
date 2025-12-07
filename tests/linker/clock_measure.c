@@ -26,5 +26,3 @@ int main(void) {
 
   return sink > 0.0 ? 0 : 5;
 }
-
-

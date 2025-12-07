@@ -8,5 +8,3 @@ int main(void) {
   printf("hypot=%.4f\n", h);
   return (fabs(h - 5.0) < 1e-6) ? 0 : 1;
 }
-
-

@@ -26,8 +26,7 @@ using std::string;
 using std::vector;
 
 namespace {
-MemberInfo *resolveMemberInfo(CodeGenerator &CG,
-                              const MemberAccess &mem) {
+MemberInfo *resolveMemberInfo(CodeGenerator &CG, const MemberAccess &mem) {
   string baseType = getEffectiveType(CG, mem.base);
   if (baseType.rfind("struct ", 0) == 0) {
     string tag = normalizeTag(baseType.substr(7));
@@ -47,8 +46,7 @@ llvm::Value *maskBitfieldValue(llvm::IRBuilder<> &builder, llvm::Value *value,
   unsigned rawBits = value->getType()->getIntegerBitWidth();
   if (width >= rawBits)
     return value;
-  auto *mask =
-      llvm::ConstantInt::get(value->getType(), (1ULL << width) - 1);
+  auto *mask = llvm::ConstantInt::get(value->getType(), (1ULL << width) - 1);
   llvm::Value *masked = builder.CreateAnd(value, mask, "bf.mask");
   if (isUnsigned)
     return masked;
@@ -68,13 +66,19 @@ llvm::Value *
 CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
   // Handle array access on identifiers (e.g., arr[i])
   if (auto baseId = std::dynamic_pointer_cast<Identifier>(arr->base)) {
+    llvm::Type *baseType = nullptr;
+    llvm::Value *basePtr = nullptr;
     auto it = declaredTypes.find(baseId->name);
-    if (it == declaredTypes.end())
+    if (it != declaredTypes.end()) {
+      baseType = it->second;
+      basePtr = generateLValue(arr->base);
+    } else if (auto gVar = module->getGlobalVariable(baseId->name)) {
+      baseType = gVar->getValueType();
+      basePtr = gVar;
+    } else {
       throw runtime_error("Declared type for array variable not found: " +
                           baseId->name);
-    llvm::Type *arrayTy = it->second;
-    if (!arrayTy->isArrayTy())
-      throw runtime_error("Expected array type for variable: " + baseId->name);
+    }
 
     // Evaluate the index expression.
     llvm::Value *indexVal = generateExpression(arr->index);
@@ -82,26 +86,42 @@ CodeGenerator::generateArrayElementPointer(const shared_ptr<ArrayAccess> &arr) {
       indexVal = builder.CreateIntCast(indexVal, Type::getInt32Ty(context),
                                        true, "arrayidxcast");
 
-    vector<llvm::Value *> indices;
-    // First index: 0 (for the pointer to the array itself)
-    indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
-    // Second index: the array index
-    indices.push_back(indexVal);
+    if (baseType->isArrayTy()) {
+      vector<llvm::Value *> indices;
+      indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
+      indices.push_back(indexVal);
+      return builder.CreateGEP(baseType, basePtr, indices, "arraygep");
+    }
 
-    llvm::Value *baseLVal = generateLValue(arr->base);
-    llvm::Value *gep =
-        builder.CreateGEP(arrayTy, baseLVal, indices, "arraygep");
-    return gep;
+    if (baseType->isPointerTy()) {
+      std::string effTypeStr = getEffectiveType(*this, arr->base);
+      while (!effTypeStr.empty() && effTypeStr.back() == '*')
+        effTypeStr.pop_back();
+      llvm::Type *elemType = getLLVMType(effTypeStr);
+      llvm::Value *ptrValue = basePtr;
+      if (auto *allocaInst = dyn_cast<AllocaInst>(basePtr)) {
+        ptrValue =
+            builder.CreateLoad(baseType, allocaInst, baseId->name + "_ptr");
+      } else if (auto *global = dyn_cast<GlobalVariable>(basePtr)) {
+        ptrValue = builder.CreateLoad(baseType, global, baseId->name + "_ptr");
+      }
+      return builder.CreateGEP(elemType, ptrValue, indexVal, "ptridx");
+    }
+
+    throw runtime_error("Expected array or pointer type for variable: " +
+                        baseId->name);
   }
-  // Handle array access on member access (e.g., struct.member[i] or union.member[i])
-  else if (auto baseMember = std::dynamic_pointer_cast<MemberAccess>(arr->base)) {
+  // Handle array access on member access (e.g., struct.member[i] or
+  // union.member[i])
+  else if (auto baseMember =
+               std::dynamic_pointer_cast<MemberAccess>(arr->base)) {
     // Get the base pointer (e.g., pointer to struct/union)
     llvm::Value *basePtr = generateLValue(baseMember);
-    
+
     // Get the effective type of the member to determine array element type
     string memberType = getEffectiveType(*this, baseMember);
     llvm::Type *elementType = getLLVMType(memberType);
-    
+
     // Evaluate the index expression.
     llvm::Value *indexVal = generateExpression(arr->index);
     if (!indexVal->getType()->isIntegerTy(32))
@@ -126,22 +146,32 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
   if (auto binExpr = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
     llvm::Value *lhs = generateExpression(binExpr->left);
     llvm::Value *rhs = generateExpression(binExpr->right);
-    
+
     // Debug output to see what types we're dealing with
     std::cerr << "[DEBUG] Binary expression: " << binExpr->op << std::endl;
-    std::cerr << "[DEBUG] LHS type: " << (lhs->getType()->isPointerTy() ? "pointer" : "value") << std::endl;
-    std::cerr << "[DEBUG] RHS type: " << (rhs->getType()->isPointerTy() ? "pointer" : "value") << std::endl;
-    std::cerr << "[DEBUG] LHS type name: " << (lhs->getType()->isFloatTy() ? "float" : 
-                                                  lhs->getType()->isDoubleTy() ? "double" :
-                                                  lhs->getType()->isIntegerTy(32) ? "int32" :
-                                                  lhs->getType()->isIntegerTy(64) ? "int64" :
-                                                  lhs->getType()->isIntegerTy(8) ? "int8" : "other") << std::endl;
-    std::cerr << "[DEBUG] RHS type name: " << (rhs->getType()->isFloatTy() ? "float" : 
-                                                  rhs->getType()->isDoubleTy() ? "double" :
-                                                  rhs->getType()->isIntegerTy(32) ? "int32" :
-                                                  rhs->getType()->isIntegerTy(64) ? "int64" :
-                                                  rhs->getType()->isIntegerTy(8) ? "int8" : "other") << std::endl;
-    
+    std::cerr << "[DEBUG] LHS type: "
+              << (lhs->getType()->isPointerTy() ? "pointer" : "value")
+              << std::endl;
+    std::cerr << "[DEBUG] RHS type: "
+              << (rhs->getType()->isPointerTy() ? "pointer" : "value")
+              << std::endl;
+    std::cerr << "[DEBUG] LHS type name: "
+              << (lhs->getType()->isFloatTy()       ? "float"
+                  : lhs->getType()->isDoubleTy()    ? "double"
+                  : lhs->getType()->isIntegerTy(32) ? "int32"
+                  : lhs->getType()->isIntegerTy(64) ? "int64"
+                  : lhs->getType()->isIntegerTy(8)  ? "int8"
+                                                    : "other")
+              << std::endl;
+    std::cerr << "[DEBUG] RHS type name: "
+              << (rhs->getType()->isFloatTy()       ? "float"
+                  : rhs->getType()->isDoubleTy()    ? "double"
+                  : rhs->getType()->isIntegerTy(32) ? "int32"
+                  : rhs->getType()->isIntegerTy(64) ? "int64"
+                  : rhs->getType()->isIntegerTy(8)  ? "int8"
+                                                    : "other")
+              << std::endl;
+
     // Only perform conversion if neither operand is a pointer arithmetic case.
     if (!((lhs->getType()->isPointerTy() && rhs->getType()->isIntegerTy()) ||
           (rhs->getType()->isPointerTy() && lhs->getType()->isIntegerTy()))) {
@@ -157,14 +187,18 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
           // Convert between float and double
           if (lhs->getType()->isFloatTy() && rhs->getType()->isDoubleTy()) {
             lhs = builder.CreateFPExt(lhs, rhs->getType(), "fpext");
-          } else if (lhs->getType()->isDoubleTy() && rhs->getType()->isFloatTy()) {
+          } else if (lhs->getType()->isDoubleTy() &&
+                     rhs->getType()->isFloatTy()) {
             rhs = builder.CreateFPExt(rhs, lhs->getType(), "fpext");
           }
-        } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy()) {
+        } else if (lhs->getType()->isIntegerTy() &&
+                   rhs->getType()->isIntegerTy()) {
           // Convert between different integer types
-          if (lhs->getType()->getIntegerBitWidth() < rhs->getType()->getIntegerBitWidth()) {
+          if (lhs->getType()->getIntegerBitWidth() <
+              rhs->getType()->getIntegerBitWidth()) {
             lhs = builder.CreateSExt(lhs, rhs->getType(), "sext");
-          } else if (rhs->getType()->getIntegerBitWidth() < lhs->getType()->getIntegerBitWidth()) {
+          } else if (rhs->getType()->getIntegerBitWidth() <
+                     lhs->getType()->getIntegerBitWidth()) {
             rhs = builder.CreateSExt(rhs, lhs->getType(), "sext");
           }
         } else {
@@ -394,6 +428,12 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     else if (operandType->isFloatingPointTy() &&
              targetType->isFloatingPointTy())
       return builder.CreateFPCast(operandVal, targetType, "casttmp");
+    else if (operandType->isPointerTy() && targetType->isIntegerTy())
+      return builder.CreatePtrToInt(operandVal, targetType, "casttmp");
+    else if (operandType->isIntegerTy() && targetType->isPointerTy())
+      return builder.CreateIntToPtr(operandVal, targetType, "casttmp");
+    else if (operandType->isPointerTy() && targetType->isPointerTy())
+      return builder.CreateBitCast(operandVal, targetType, "casttmp");
     throw runtime_error("Unsupported cast conversion.");
   } else if (auto unExpr = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
     if (unExpr->op == "*") {
@@ -424,7 +464,8 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
     } else if (unExpr->op == "~") {
       llvm::Value *operand = generateExpression(unExpr->operand);
       if (!operand->getType()->isIntegerTy())
-        throw runtime_error("CodeGenerator Error: Bitwise NOT '~' applied to non-integer type");
+        throw runtime_error(
+            "CodeGenerator Error: Bitwise NOT '~' applied to non-integer type");
       return builder.CreateNot(operand, "bnot");
     }
     throw runtime_error("Unsupported unary operator: " + unExpr->op);
@@ -446,8 +487,8 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       llvm::GlobalVariable *gVar = new llvm::GlobalVariable(
           *module, strConstant->getType(), true,
           llvm::GlobalValue::PrivateLinkage, strConstant, "str");
-      return builder.CreateBitCast(
-          gVar, PointerType::get(context, 0), "strptr");
+      return builder.CreateBitCast(gVar, PointerType::get(context, 0),
+                                   "strptr");
     }
     default:
       throw runtime_error("Cannot infer type for literal.");
@@ -484,37 +525,41 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
         return builder.CreateLoad(gType, gVar, id->name.c_str());
       }
     }
+    if (auto *fn = module->getFunction(id->name)) {
+      return fn;
+    }
     throw runtime_error("Undefined identifier: " + id->name);
   } else if (auto arrAccess = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
     llvm::Value *elemPtr = generateArrayElementPointer(arrAccess);
     PointerType *ptrType = dyn_cast<PointerType>(elemPtr->getType());
     if (!ptrType)
       throw runtime_error("Array access did not return a pointer.");
-    
+
     // Handle array access on identifiers (e.g., arr[i])
     if (auto baseId = std::dynamic_pointer_cast<Identifier>(arrAccess->base)) {
-      auto it = declaredTypes.find(baseId->name);
-      if (it == declaredTypes.end())
-        throw runtime_error("Declared type for array var not found: " +
-                            baseId->name);
-      llvm::Type *arrayTy = it->second;
-      if (!arrayTy->isArrayTy())
-        throw runtime_error("Expected array type for variable: " +
-                            baseId->name);
-      llvm::Type *elemType = cast<ArrayType>(arrayTy)->getElementType();
+      std::string elementTypeStr = getEffectiveType(*this, arrAccess->base);
+      size_t bracketPos = elementTypeStr.find('[');
+      if (bracketPos != string::npos) {
+        elementTypeStr = elementTypeStr.substr(0, bracketPos);
+      }
+      while (!elementTypeStr.empty() && elementTypeStr.back() == '*')
+        elementTypeStr.pop_back();
+      llvm::Type *elemType = getLLVMType(elementTypeStr);
       return builder.CreateLoad(elemType, elemPtr, "arrayload");
     }
-    // Handle array access on member access (e.g., struct.member[i] or union.member[i])
-    else if (auto baseMember = std::dynamic_pointer_cast<MemberAccess>(arrAccess->base)) {
+    // Handle array access on member access (e.g., struct.member[i] or
+    // union.member[i])
+    else if (auto baseMember =
+                 std::dynamic_pointer_cast<MemberAccess>(arrAccess->base)) {
       string memberType = getEffectiveType(*this, baseMember);
-      
+
       // Extract the element type from array type (e.g., "char[20]" -> "char")
       string elementTypeStr = memberType;
       size_t bracketPos = memberType.find('[');
       if (bracketPos != string::npos) {
         elementTypeStr = memberType.substr(0, bracketPos);
       }
-      
+
       llvm::Type *elementType = getLLVMType(elementTypeStr);
       return builder.CreateLoad(elementType, elemPtr, "memberarrayload");
     } else {
@@ -539,6 +584,95 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
       args.push_back(generateExpression(argExpr));
     }
 
+    auto resolveCallable = [&](llvm::Value *ptr, const std::string *typeStr)
+        -> std::pair<llvm::Value *, llvm::FunctionType *> {
+      llvm::Value *calleeVal = ptr;
+      llvm::FunctionType *fnTy = nullptr;
+
+      auto applyTypeHint = [&](const std::string *hint) {
+        if (!hint)
+          return;
+        std::string retTypeStr;
+        std::vector<std::string> paramTypeStrs;
+        std::string base = *hint;
+        if (!parseFunctionPointerType(base, retTypeStr, paramTypeStrs)) {
+          if (!base.empty() && base.back() == '*') {
+            base.pop_back();
+            parseFunctionPointerType(base, retTypeStr, paramTypeStrs);
+          }
+        }
+        if (!retTypeStr.empty()) {
+          std::vector<llvm::Type *> paramLLVMTypes;
+          paramLLVMTypes.reserve(paramTypeStrs.size());
+          for (const auto &p : paramTypeStrs) {
+            paramLLVMTypes.push_back(getLLVMType(p));
+          }
+          fnTy = llvm::FunctionType::get(getLLVMType(retTypeStr),
+                                         paramLLVMTypes, false);
+        }
+      };
+
+      applyTypeHint(typeStr);
+
+      if (auto *allocaInst = llvm::dyn_cast<llvm::AllocaInst>(calleeVal)) {
+        calleeVal =
+            builder.CreateLoad(allocaInst->getAllocatedType(), allocaInst,
+                               call->functionName + ".fnptr");
+      } else if (auto *global =
+                     llvm::dyn_cast<llvm::GlobalVariable>(calleeVal)) {
+        calleeVal = builder.CreateLoad(global->getValueType(), global,
+                                       call->functionName + ".fnptr");
+      }
+
+      if (auto *func = llvm::dyn_cast<llvm::Function>(calleeVal)) {
+        fnTy = func->getFunctionType();
+        return {func, fnTy};
+      }
+      return std::make_pair(calleeVal, fnTy);
+    };
+
+    auto emitCall = [&](llvm::FunctionType *fnTy,
+                        llvm::Value *calleeVal) -> llvm::Value * {
+      if (!fnTy || !calleeVal)
+        return nullptr;
+      llvm::CallInst *callInst = builder.CreateCall(
+          fnTy, calleeVal, args,
+          fnTy->getReturnType()->isVoidTy() ? "" : "calltmp");
+      if (fnTy->getReturnType()->isVoidTy()) {
+        return ConstantInt::get(Type::getInt32Ty(context), 0);
+      }
+      return callInst;
+    };
+
+    if (call->hasCalleeExpr()) {
+      std::string calleeType = getEffectiveType(*this, call->calleeExpr);
+      llvm::Value *calleeVal = generateExpression(call->calleeExpr);
+      auto [fnVal, fnTy] = resolveCallable(calleeVal, &calleeType);
+      if (!fnTy) {
+        if (auto *fn = llvm::dyn_cast<llvm::Function>(fnVal))
+          fnTy = fn->getFunctionType();
+      }
+      if (auto *result = emitCall(fnTy, fnVal))
+        return result;
+      throw runtime_error("Attempting to call a non-callable expression.");
+    }
+
+    const std::string *typeStr = nullptr;
+    auto typeIt = declaredTypeStrings.find(call->functionName);
+    if (typeIt != declaredTypeStrings.end())
+      typeStr = &typeIt->second;
+
+    if (llvm::Value *localPtr = lookupLocalVar(call->functionName)) {
+      auto [fnVal, fnTy] = resolveCallable(localPtr, typeStr);
+      if (auto *result = emitCall(fnTy, fnVal))
+        return result;
+    }
+    if (auto *gVar = module->getGlobalVariable(call->functionName)) {
+      auto [fnVal, fnTy] = resolveCallable(gVar, typeStr);
+      if (auto *result = emitCall(fnTy, fnVal))
+        return result;
+    }
+
     llvm::Function *callee = module->getFunction(call->functionName);
     if (!callee) {
       vector<llvm::Type *> paramTypes;
@@ -550,19 +684,76 @@ llvm::Value *CodeGenerator::generateExpression(const ExpressionPtr &expr) {
           paramTypes.push_back(argVal->getType());
         }
       }
-      llvm::FunctionType *funcType = llvm::FunctionType::get(
-          llvm::Type::getInt32Ty(context), paramTypes, true);
+      llvm::FunctionType *funcType =
+          llvm::FunctionType::get(llvm::Type::getInt32Ty(context), paramTypes,
+                                  call->functionName == "printf");
       callee = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage,
                                       call->functionName, module.get());
     }
+    llvm::CallInst *directCall = builder.CreateCall(
+        callee, args, callee->getReturnType()->isVoidTy() ? "" : "calltmp");
     if (callee->getReturnType()->isVoidTy()) {
-      builder.CreateCall(callee, args);
       return ConstantInt::get(Type::getInt32Ty(context), 0);
-    } else {
-      return builder.CreateCall(callee, args, "calltmp");
     }
+    return directCall;
+
   } else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
-    return generateLValue(expr);
+    llvm::Value *ptr = generateLValue(post->operand);
+    string effType = getEffectiveType(*this, post->operand);
+    llvm::Type *valType = getLLVMType(effType);
+    llvm::Value *oldVal = builder.CreateLoad(valType, ptr, "postfix.old");
+
+    llvm::Value *newVal = nullptr;
+    bool treatAsPointer =
+        valType->isPointerTy() || (!effType.empty() && effType.back() == '*');
+    if (treatAsPointer) {
+      string elementTypeStr = effType;
+      while (!elementTypeStr.empty() &&
+             isspace(static_cast<unsigned char>(elementTypeStr.back()))) {
+        elementTypeStr.pop_back();
+      }
+      while (!elementTypeStr.empty() && elementTypeStr.back() == '*') {
+        elementTypeStr.pop_back();
+        while (!elementTypeStr.empty() &&
+               isspace(static_cast<unsigned char>(elementTypeStr.back()))) {
+          elementTypeStr.pop_back();
+        }
+      }
+      if (elementTypeStr.empty())
+        throw runtime_error("Unsupported pointer type for postfix operator.");
+      llvm::Type *elemTy = getLLVMType(elementTypeStr);
+      llvm::Value *step = ConstantInt::get(Type::getInt32Ty(context),
+                                           post->op == "++" ? 1 : -1);
+      llvm::Value *ptrValue = oldVal;
+      if (!oldVal->getType()->isPointerTy()) {
+        ptrValue = builder.CreateIntToPtr(
+            oldVal, llvm::PointerType::getUnqual(elemTy), "postfix.ptrcast");
+      }
+      newVal =
+          builder.CreateGEP(elemTy, ptrValue, step,
+                            post->op == "++" ? "postinc.ptr" : "postdec.ptr");
+    } else {
+      llvm::Value *one = nullptr;
+      if (valType->isFloatingPointTy())
+        one = ConstantFP::get(valType, 1.0);
+      else if (valType->isIntegerTy())
+        one = ConstantInt::get(valType, 1);
+      else
+        throw runtime_error("Unsupported type for postfix operator.");
+
+      if (post->op == "++") {
+        newVal = valType->isFloatingPointTy()
+                     ? builder.CreateFAdd(oldVal, one, "postinc")
+                     : builder.CreateAdd(oldVal, one, "postinc");
+      } else {
+        newVal = valType->isFloatingPointTy()
+                     ? builder.CreateFSub(oldVal, one, "postdec")
+                     : builder.CreateSub(oldVal, one, "postdec");
+      }
+    }
+
+    builder.CreateStore(newVal, ptr);
+    return oldVal;
   } else if (auto ternary =
                  std::dynamic_pointer_cast<TernaryExpression>(expr)) {
     llvm::Value *condVal = generateExpression(ternary->condition);

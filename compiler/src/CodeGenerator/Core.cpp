@@ -4,14 +4,15 @@
 #include "TypeRegistry.hpp"
 
 #include <iostream>
-#include <optional>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <optional>
 #if __has_include(<llvm/Support/Host.h>)
 #include <llvm/Support/Host.h>
 #elif __has_include(<llvm/TargetParser/Host.h>)
@@ -19,6 +20,7 @@
 #else
 #error "Neither llvm/Support/Host.h nor llvm/TargetParser/Host.h is available."
 #endif
+#include <algorithm>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
@@ -68,14 +70,72 @@ CodeGenerator::CodeGenerator()
 
 std::unique_ptr<Module>
 CodeGenerator::generateCode(const shared_ptr<Program> &program) {
-  std::cerr << "[DEBUG] generateCode: Processing " << program->declarations.size() << " declarations\n";
-  
+  std::cerr << "[DEBUG] generateCode: Processing "
+            << program->declarations.size() << " declarations\n";
+
+  auto registerUnionType =
+      [&](const std::shared_ptr<UnionDeclaration> &unionDecl) {
+        if (!unionDecl || !unionDecl->tag.has_value())
+          return;
+
+        const DataLayout &DL = module->getDataLayout();
+        uint64_t maxSize = 0;
+
+        for (const auto &member : unionDecl->members) {
+          Type *memberType = getLLVMType(member->type);
+          for (auto it = member->dimensions.rbegin();
+               it != member->dimensions.rend(); ++it) {
+            auto lit = std::dynamic_pointer_cast<Literal>(*it);
+            if (!lit)
+              throw runtime_error("CodeGenerator Error: Array dimension must "
+                                  "be a constant integer.");
+            uint64_t arraySize = static_cast<uint64_t>(lit->intValue);
+            memberType = ArrayType::get(memberType, arraySize);
+          }
+          maxSize =
+              std::max<uint64_t>(maxSize, DL.getTypeAllocSize(memberType));
+        }
+
+        if (maxSize == 0)
+          maxSize = 1;
+
+        ArrayType *storageType =
+            ArrayType::get(Type::getInt8Ty(context), maxSize);
+        StructType *unionType =
+            StructType::create(context, unionDecl->tag.value());
+        unionType->setBody({storageType}, /*isPacked=*/false);
+        declaredTypes[unionDecl->tag.value()] = unionType;
+      };
+
+  auto registerStructType =
+      [&](const std::shared_ptr<StructDeclaration> &structDecl) {
+        if (!structDecl || !structDecl->tag.has_value())
+          return;
+
+        for (const auto &nestedUnion : structDecl->nestedUnions) {
+          registerUnionType(nestedUnion);
+        }
+
+        std::vector<Type *> memberTypes;
+        for (const auto &member : structDecl->members) {
+          Type *memberType = getLLVMType(member->type);
+          memberTypes.push_back(memberType);
+        }
+
+        StructType *structType =
+            StructType::create(context, structDecl->tag.value());
+        structType->setBody(memberTypes, /*isPacked=*/false);
+
+        declaredTypes[structDecl->tag.value()] = structType;
+      };
+
   // Process global declarations first.
   for (const auto &decl : program->declarations) {
     std::cerr << "[DEBUG] generateCode: Processing declaration\n";
-    
+
     if (auto varDecl = std::dynamic_pointer_cast<VariableDeclaration>(decl)) {
-      std::cerr << "[DEBUG] generateCode: Variable declaration: " << varDecl->name << "\n";
+      std::cerr << "[DEBUG] generateCode: Variable declaration: "
+                << varDecl->name << "\n";
       // e.g. int x;   or   int array[10];
       llvm::Type *varType = getLLVMType(varDecl->type);
       // If there are array dimensions, wrap them in an ArrayType
@@ -95,6 +155,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
       GlobalVariable *gVar = new GlobalVariable(
           *module, varType, /*isConstant=*/false, GlobalValue::ExternalLinkage,
           nullptr, varDecl->name);
+      declaredTypes[varDecl->name] = varType;
+      declaredTypeStrings[varDecl->name] = varDecl->type;
 
       // If it has an initializer
       if (varDecl->initializer) {
@@ -142,9 +204,35 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           gVar->setInitializer(arrayInit);
         } else if (auto lit = std::dynamic_pointer_cast<Literal>(
                        varDecl->initializer.value())) {
-          // single literal init
           Constant *initVal = nullptr;
-          if (lit->type == Literal::LiteralType::Int)
+          if (lit->type == Literal::LiteralType::String) {
+            auto strConst =
+                ConstantDataArray::getString(context, lit->stringValue, true);
+            if (auto arrayTy = dyn_cast<ArrayType>(varType)) {
+              if (!arrayTy->getElementType()->isIntegerTy(8)) {
+                throw runtime_error("CodeGenerator Error: String literal "
+                                    "initializer for non-char array.");
+              }
+              std::vector<Constant *> chars;
+              chars.reserve(arrayTy->getNumElements());
+              for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+                char c =
+                    (i < lit->stringValue.size()) ? lit->stringValue[i] : '\0';
+                chars.push_back(ConstantInt::get(Type::getInt8Ty(context), c));
+              }
+              initVal = ConstantArray::get(arrayTy, chars);
+            } else if (varType->isPointerTy()) {
+              auto *strGV =
+                  new GlobalVariable(*module, strConst->getType(), true,
+                                     GlobalValue::PrivateLinkage, strConst,
+                                     varDecl->name + ".str");
+              initVal = ConstantExpr::getBitCast(strGV, varType);
+            } else {
+              throw runtime_error("CodeGenerator Error: Unsupported string "
+                                  "initializer in global var "
+                                  "declaration.");
+            }
+          } else if (lit->type == Literal::LiteralType::Int)
             initVal =
                 ConstantInt::get(Type::getInt32Ty(context), lit->intValue);
           else if (lit->type == Literal::LiteralType::Float)
@@ -171,6 +259,38 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                                 ? (float)lit->doubleValue
                                 : (double)lit->floatValue;
               initVal = ConstantFP::get(varType, litVal);
+            } else if (initVal->getType()->isPointerTy() &&
+                       varType->isPointerTy()) {
+              initVal = ConstantExpr::getBitCast(initVal, varType);
+            } else if (initVal->getType()->isArrayTy() &&
+                       varType->isArrayTy()) {
+              // Keep array literal as-is when sizes differ.
+              if (auto arrayTy = dyn_cast<ArrayType>(varType)) {
+                std::vector<Constant *> chars;
+                std::string str = lit->stringValue;
+                for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+                  char c = (i < str.size()) ? str[i] : '\0';
+                  chars.push_back(
+                      ConstantInt::get(Type::getInt8Ty(context), c));
+                }
+                initVal = ConstantArray::get(arrayTy, chars);
+              }
+            } else if (initVal->getType()->isIntegerTy() &&
+                       varType->isIntegerTy()) {
+              if (auto *intConst = dyn_cast<ConstantInt>(initVal)) {
+                initVal = ConstantInt::get(varType, intConst->getValue());
+              } else {
+                auto *srcIntTy = cast<IntegerType>(initVal->getType());
+                auto *dstIntTy = cast<IntegerType>(varType);
+                Instruction::CastOps op;
+                if (dstIntTy->getBitWidth() >= srcIntTy->getBitWidth()) {
+                  op = srcIntTy->getBitWidth() == 1 ? Instruction::ZExt
+                                                    : Instruction::SExt;
+                } else {
+                  op = Instruction::Trunc;
+                }
+                initVal = ConstantExpr::getCast(op, initVal, varType);
+              }
             } else {
               throw runtime_error(
                   "CodeGenerator Error: Incompatible initializer type in "
@@ -184,20 +304,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
         }
       } else {
         // no initializer => zero init
-        Constant *defaultVal = nullptr;
-        if (varDecl->type == "int")
-          defaultVal = ConstantInt::get(Type::getInt32Ty(context), 0);
-        else if (varDecl->type == "float")
-          defaultVal = ConstantFP::get(Type::getFloatTy(context), 0.0f);
-        else if (varDecl->type == "char")
-          defaultVal = ConstantInt::get(Type::getInt8Ty(context), 0);
-        else if (varDecl->type == "double")
-          defaultVal = ConstantFP::get(Type::getDoubleTy(context), 0.0);
-        else if (varDecl->type == "bool")
-          defaultVal = ConstantInt::get(Type::getInt1Ty(context), 0);
-        else
-          throw runtime_error("CodeGenerator Error: Unsupported type in global "
-                              "var declaration.");
+        Constant *defaultVal = Constant::getNullValue(varType);
         gVar->setInitializer(defaultVal);
       }
     }
@@ -222,6 +329,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
         GlobalVariable *gVar = new GlobalVariable(*module, varType, false,
                                                   GlobalValue::ExternalLinkage,
                                                   nullptr, singleDecl->name);
+        declaredTypes[singleDecl->name] = varType;
+        declaredTypeStrings[singleDecl->name] = singleDecl->type;
 
         if (singleDecl->initializer) {
           if (auto initList = std::dynamic_pointer_cast<InitializerList>(
@@ -268,7 +377,35 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           } else if (auto lit = std::dynamic_pointer_cast<Literal>(
                          singleDecl->initializer.value())) {
             Constant *initVal = nullptr;
-            if (lit->type == Literal::LiteralType::Int)
+            if (lit->type == Literal::LiteralType::String) {
+              auto strConst =
+                  ConstantDataArray::getString(context, lit->stringValue, true);
+              if (auto arrayTy = dyn_cast<ArrayType>(varType)) {
+                if (!arrayTy->getElementType()->isIntegerTy(8)) {
+                  throw runtime_error("CodeGenerator Error: String literal "
+                                      "initializer for non-char array.");
+                }
+                std::vector<Constant *> chars;
+                chars.reserve(arrayTy->getNumElements());
+                for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+                  char c = (i < lit->stringValue.size()) ? lit->stringValue[i]
+                                                         : '\0';
+                  chars.push_back(
+                      ConstantInt::get(Type::getInt8Ty(context), c));
+                }
+                initVal = ConstantArray::get(arrayTy, chars);
+              } else if (varType->isPointerTy()) {
+                auto *strGV =
+                    new GlobalVariable(*module, strConst->getType(), true,
+                                       GlobalValue::PrivateLinkage, strConst,
+                                       singleDecl->name + ".str");
+                initVal = ConstantExpr::getBitCast(strGV, varType);
+              } else {
+                throw runtime_error(
+                    "CodeGenerator Error: Unsupported string initializer in "
+                    "global var declaration.");
+              }
+            } else if (lit->type == Literal::LiteralType::Int)
               initVal =
                   ConstantInt::get(Type::getInt32Ty(context), lit->intValue);
             else if (lit->type == Literal::LiteralType::Float)
@@ -294,6 +431,37 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                                   ? (float)lit->doubleValue
                                   : (double)lit->floatValue;
                 initVal = ConstantFP::get(varType, litVal);
+              } else if (initVal->getType()->isPointerTy() &&
+                         varType->isPointerTy()) {
+                initVal = ConstantExpr::getBitCast(initVal, varType);
+              } else if (initVal->getType()->isArrayTy() &&
+                         varType->isArrayTy()) {
+                if (auto arrayTy = dyn_cast<ArrayType>(varType)) {
+                  std::vector<Constant *> chars;
+                  std::string str = lit->stringValue;
+                  for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+                    char c = (i < str.size()) ? str[i] : '\0';
+                    chars.push_back(
+                        ConstantInt::get(Type::getInt8Ty(context), c));
+                  }
+                  initVal = ConstantArray::get(arrayTy, chars);
+                }
+              } else if (initVal->getType()->isIntegerTy() &&
+                         varType->isIntegerTy()) {
+                if (auto *intConst = dyn_cast<ConstantInt>(initVal)) {
+                  initVal = ConstantInt::get(varType, intConst->getValue());
+                } else {
+                  auto *srcIntTy = cast<IntegerType>(initVal->getType());
+                  auto *dstIntTy = cast<IntegerType>(varType);
+                  Instruction::CastOps op;
+                  if (dstIntTy->getBitWidth() >= srcIntTy->getBitWidth()) {
+                    op = srcIntTy->getBitWidth() == 1 ? Instruction::ZExt
+                                                      : Instruction::SExt;
+                  } else {
+                    op = Instruction::Trunc;
+                  }
+                  initVal = ConstantExpr::getCast(op, initVal, varType);
+                }
               } else {
                 throw runtime_error(
                     "CodeGenerator Error: Incompatible initializer type in "
@@ -307,20 +475,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           }
         } else {
           // no initializer => zero
-          Constant *defaultVal = nullptr;
-          if (singleDecl->type == "int")
-            defaultVal = ConstantInt::get(Type::getInt32Ty(context), 0);
-          else if (singleDecl->type == "float")
-            defaultVal = ConstantFP::get(Type::getFloatTy(context), 0.0f);
-          else if (singleDecl->type == "char")
-            defaultVal = ConstantInt::get(Type::getInt8Ty(context), 0);
-          else if (singleDecl->type == "double")
-            defaultVal = ConstantFP::get(Type::getDoubleTy(context), 0.0);
-          else if (singleDecl->type == "bool")
-            defaultVal = ConstantInt::get(Type::getInt1Ty(context), 0);
-          else
-            throw runtime_error(
-                "CodeGenerator Error: Unsupported type in global var decl.");
+          Constant *defaultVal = Constant::getNullValue(varType);
           gVar->setInitializer(defaultVal);
         }
       }
@@ -336,80 +491,17 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
       }
     } else if (auto unionDecl =
                    std::dynamic_pointer_cast<UnionDeclaration>(decl)) {
-      // Handle union declarations - register the type for later use
-      if (!unionDecl->tag.has_value()) {
-        // Anonymous union: skip type registration
-        continue;
-      }
-
-      // Create LLVM struct type for the union
-      // For unions, we need to find the largest member size
-      std::vector<Type *> memberTypes;
-
-      for (const auto &member : unionDecl->members) {
-        Type *memberType = getLLVMType(member->type);
-        memberTypes.push_back(memberType);
-      }
-
-      // Create a struct type for the union (LLVM doesn't have native union
-      // types) We'll use a struct with all members, but they'll share the same memory
-      StructType *unionType =
-          StructType::create(context, unionDecl->tag.value());
-      
-      // For a union, we need to include all members so they can be accessed
-      // In LLVM, we'll represent this as a struct with all members
-      std::vector<Type *> unionBody;
-      
-      for (const auto &member : unionDecl->members) {
-        Type *memberType = getLLVMType(member->type);
-        
-        // Handle array dimensions for union members
-        if (!member->dimensions.empty()) {
-          for (auto it = member->dimensions.rbegin();
-               it != member->dimensions.rend(); ++it) {
-            llvm::Value *dimVal = generateExpression(*it);
-            ConstantInt *constDim = dyn_cast<ConstantInt>(dimVal);
-            if (!constDim)
-              throw runtime_error("CodeGenerator Error: Array dimension must be "
-                                  "a constant integer.");
-            uint64_t arraySize = constDim->getZExtValue();
-            memberType = ArrayType::get(memberType, arraySize);
-          }
-        }
-        
-        unionBody.push_back(memberType);
-      }
-      
-      // If no members, add a default int type
-      if (unionBody.empty()) {
-        unionBody.push_back(Type::getInt32Ty(context));
-      }
-      
-      unionType->setBody(unionBody, /*isPacked=*/true);
-
-      // Register the type in our type registry
-      declaredTypes[unionDecl->tag.value()] = unionType;
+      registerUnionType(unionDecl);
     } else if (auto structDecl =
                    std::dynamic_pointer_cast<StructDeclaration>(decl)) {
-      // Handle struct declarations - register the type for later use
-      if (!structDecl->tag.has_value()) {
-        // Anonymous struct: skip type registration
-        continue;
+      registerStructType(structDecl);
+    } else if (auto typedefDecl =
+                   std::dynamic_pointer_cast<TypedefDeclaration>(decl)) {
+      if (typedefDecl->structDecl) {
+        registerStructType(typedefDecl->structDecl);
+      } else if (typedefDecl->unionDecl) {
+        registerUnionType(typedefDecl->unionDecl);
       }
-
-      // Create LLVM struct type for the struct
-      std::vector<Type *> memberTypes;
-      for (const auto &member : structDecl->members) {
-        Type *memberType = getLLVMType(member->type);
-        memberTypes.push_back(memberType);
-      }
-
-      StructType *structType =
-          StructType::create(context, structDecl->tag.value());
-      structType->setBody(memberTypes, /*isPacked=*/false);
-
-      // Register the type in our type registry
-      declaredTypes[structDecl->tag.value()] = structType;
     } else {
       std::cerr << "[DEBUG] generateCode: Unknown declaration type\n";
     }
@@ -418,7 +510,8 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
   // 2) Then handle function declarations
   for (const auto &decl : program->declarations) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
-      std::cerr << "[DEBUG] generateCode: Function declaration: " << funcDecl->name << "\n";
+      std::cerr << "[DEBUG] generateCode: Function declaration: "
+                << funcDecl->name << "\n";
       generateFunction(funcDecl);
     }
   }

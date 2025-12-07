@@ -1,20 +1,22 @@
 int main() {
-    int sum = 0;
-    
-    // Simple loop that could be unrolled
-    for (int i = 0; i < 4; i++) {
-        sum += i;
-    }
-    
-    if (sum != 6) return 1;  // 0+1+2+3 = 6
-    
-    // Loop with multiplication
-    int product = 1;
-    for (int i = 1; i <= 5; i++) {
-        product *= i;
-    }
-    
-    if (product != 120) return 1;  // 1*2*3*4*5 = 120
-    
-    return 0;
-} 
+  int sum = 0;
+
+  // Simple loop that could be unrolled
+  for (int i = 0; i < 4; i++) {
+    sum += i;
+  }
+
+  if (sum != 6)
+    return 1; // 0+1+2+3 = 6
+
+  // Loop with multiplication
+  int product = 1;
+  for (int i = 1; i <= 5; i++) {
+    product *= i;
+  }
+
+  if (product != 120)
+    return 1; // 1*2*3*4*5 = 120
+
+  return 0;
+}

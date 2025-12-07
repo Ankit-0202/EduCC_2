@@ -3,11 +3,8 @@
 int foo(); // Forward decl
 
 int main() {
-    printf("%d\n", foo());
-    return 0;
+  printf("%d\n", foo());
+  return 0;
 }
 
-int foo() {
-    return 42;
-}
-
+int foo() { return 42; }

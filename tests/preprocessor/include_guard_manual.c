@@ -13,7 +13,6 @@ int foo() { return 2; } // Should not be compiled
 #endif
 
 int main() {
-    printf("%d\n", foo());
-    return 0;
+  printf("%d\n", foo());
+  return 0;
 }
-

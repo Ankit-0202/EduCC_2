@@ -1,5 +1,6 @@
 #include "AST.hpp"
 #include "Parser.hpp"
+#include "TypeRegistry.hpp"
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -12,6 +13,8 @@ using std::string;
 using std::vector;
 
 StatementPtr Parser::parseStatement() {
+  std::cerr << "[DEBUG] (parseStatement) current=" << current << " token='"
+            << peek().lexeme << "'\n";
   // First check for control-flow keywords.
   if (match(TokenType::KW_IF)) {
     return parseIfStatement();
@@ -42,7 +45,8 @@ StatementPtr Parser::parseStatement() {
     advance(); // consume KW_ENUM
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
-         (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
       current = save; // revert
       DeclarationPtr enumDecl = parseEnumDeclaration();
       return std::make_shared<DeclarationStatement>(enumDecl);
@@ -55,7 +59,8 @@ StatementPtr Parser::parseStatement() {
     advance(); // consume KW_STRUCT
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
-         (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
       current = save; // revert
       DeclarationPtr structDecl = parseStructDeclaration();
       return std::make_shared<DeclarationStatement>(structDecl);
@@ -68,7 +73,8 @@ StatementPtr Parser::parseStatement() {
     advance(); // consume KW_UNION
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
-         (current + 1 < tokens.size() && tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
+         (current + 1 < tokens.size() &&
+          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
       current = save; // revert
       DeclarationPtr unionDecl = parseUnionDeclaration();
       return std::make_shared<DeclarationStatement>(unionDecl);
@@ -77,13 +83,40 @@ StatementPtr Parser::parseStatement() {
     }
   }
 
+  auto startsWithType = [this]() {
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+        check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
+        check(TokenType::KW_ENUM) || check(TokenType::KW_UNION) ||
+        check(TokenType::KW_STRUCT) ||
+        (check(TokenType::IDENTIFIER) &&
+         (peek().lexeme == "struct" || isTypedefName(peek().lexeme))))
+      return true;
+    if (check(TokenType::IDENTIFIER)) {
+      std::string lex = peek().lexeme;
+      if (lex == "const" || lex == "volatile" || lex == "static" ||
+          lex == "unsigned" || lex == "signed" || lex == "long" ||
+          lex == "short")
+        return true;
+      if (lex == "size_t" || lex == "uintptr_t" || lex == "intptr_t" ||
+          lex == "ptrdiff_t" || lex == "ssize_t" || lex == "uint8_t" ||
+          lex == "uint16_t" || lex == "uint32_t" || lex == "uint64_t" ||
+          lex == "int8_t" || lex == "int16_t" || lex == "int32_t" ||
+          lex == "int64_t")
+        return true;
+    }
+    std::string lx = peek().lexeme;
+    if (lx == "size_t" || lx == "uintptr_t" || lx == "intptr_t" ||
+        lx == "ptrdiff_t" || lx == "ssize_t" || lx == "uint8_t" ||
+        lx == "uint16_t" || lx == "uint32_t" || lx == "uint64_t" ||
+        lx == "int8_t" || lx == "int16_t" || lx == "int32_t" ||
+        lx == "int64_t")
+      return true;
+    return false;
+  };
+
   // Otherwise, if the next token is a type specifier...
-  if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-      check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-      check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
-      check(TokenType::KW_UNION) ||
-      (check(TokenType::KW_STRUCT) ||
-       (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
+  if (startsWithType()) {
     return parseVariableDeclarationStatement();
   }
   // Fall back to an expression statement.
@@ -123,12 +156,25 @@ StatementPtr Parser::parseWhileStatement() {
 StatementPtr Parser::parseForStatement() {
   consume(TokenType::DELIM_LPAREN, "Expected '(' after 'for'");
   StatementPtr initializer = nullptr;
-  if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
-      check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
-      check(TokenType::KW_BOOL) || check(TokenType::KW_ENUM) ||
-      check(TokenType::KW_UNION) ||
-      (check(TokenType::KW_STRUCT) ||
-       (check(TokenType::IDENTIFIER) && peek().lexeme == "struct"))) {
+  auto startsWithType = [this]() {
+    if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
+        check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
+        check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
+        check(TokenType::KW_ENUM) || check(TokenType::KW_UNION) ||
+        check(TokenType::KW_STRUCT) ||
+        (check(TokenType::IDENTIFIER) &&
+         (peek().lexeme == "struct" || isTypedefName(peek().lexeme))))
+      return true;
+    if (check(TokenType::IDENTIFIER)) {
+      std::string lex = peek().lexeme;
+      if (lex == "const" || lex == "volatile" || lex == "static" ||
+          lex == "unsigned" || lex == "signed" || lex == "long" ||
+          lex == "short")
+        return true;
+    }
+    return false;
+  };
+  if (startsWithType()) {
     initializer = parseVariableDeclarationStatement();
   } else {
     initializer = parseExpressionStatement();
@@ -184,7 +230,11 @@ StatementPtr Parser::parseSwitchStatement() {
 }
 
 StatementPtr Parser::parseReturnStatement() {
+  std::cerr << "[DEBUG] (parseReturnStatement) start token='" << peek().lexeme
+            << "'\n";
   ExpressionPtr expr = parseExpression();
+  std::cerr << "[DEBUG] (parseReturnStatement) after expr token='"
+            << peek().lexeme << "'\n";
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after return statement");
   return std::make_shared<ReturnStatement>(expr);
 }
@@ -197,132 +247,34 @@ StatementPtr Parser::parseExpressionStatement() {
 
 // parseVariableDeclarationStatement for local declarations
 StatementPtr Parser::parseVariableDeclarationStatement() {
-  string type;
-
   bool hasConstQualifier = false;
   bool hasStaticQualifier = false;
-  bool sawUnsigned = false;
-  bool sawSigned = false;
-  while (!isAtEnd() && check(TokenType::IDENTIFIER)) {
-    std::string lex = peek().lexeme;
-    if (lex == "const") {
-      hasConstQualifier = true;
-      advance();
-      continue;
-    }
-    if (lex == "static") {
-      hasStaticQualifier = true;
-      advance();
-      continue;
-    }
-    if (lex == "unsigned") {
-      sawUnsigned = true;
-      advance();
-      continue;
-    }
-    if (lex == "signed") {
-      sawSigned = true;
-      advance();
-      continue;
-    }
-    break;
-  }
+  bool hasVolatileQualifier = false;
+  string baseType = parseSimpleType(*this, hasConstQualifier,
+                                    hasStaticQualifier, hasVolatileQualifier);
 
-  // Attempt to match basic type keywords...
-  if (match(TokenType::KW_INT))
-    type = "int";
-  else if (match(TokenType::KW_FLOAT))
-    type = "float";
-  else if (match(TokenType::KW_CHAR))
-    type = "char";
-  else if (match(TokenType::KW_DOUBLE))
-    type = "double";
-  else if (match(TokenType::KW_BOOL))
-    type = "bool";
-
-  // Or match enum
-  else if (match(TokenType::KW_ENUM)) {
-    // If this is an inline enum definition, revert and parse the enum
-    // declaration.
-    if (check(TokenType::DELIM_LBRACE) ||
-        (check(TokenType::IDENTIFIER) &&
-         (current + 1 < tokens.size() &&
-          tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current--; // Revert the consumption of 'enum'
-      DeclarationPtr enumDecl = parseEnumDeclaration();
-      return std::make_shared<DeclarationStatement>(enumDecl);
-    }
-    // Otherwise, forward–declared enum: consume the tag token.
-    string tag = "";
-    if (check(TokenType::IDENTIFIER))
-      tag = advance().lexeme; // Consume the enum tag (e.g. "Color")
-    type = "enum " + tag;
-  }
-
-  // Or match union
-  else if (match(TokenType::KW_UNION)) {
-    if (!check(TokenType::IDENTIFIER))
-      error("Expected union tag after 'union' in variable declaration");
-    string tag = advance().lexeme;
-    type = "union " + tag;
-  }
-
-  // Or match struct
-  else if (match(TokenType::KW_STRUCT) ||
-           (check(TokenType::IDENTIFIER) && peek().lexeme == "struct")) {
-    if (peek().lexeme == "struct")
-      advance(); // consume the literal "struct"
-    if (!check(TokenType::IDENTIFIER)) {
-      error("Expected struct tag after 'struct' in variable declaration");
-    }
-    string tag = advance().lexeme;
-    type = "struct " + tag;
-  } else {
-    error("Expected type specifier in variable declaration");
-  }
-
-  if (sawUnsigned)
-    type = "unsigned " + type;
-  else if (sawSigned)
-    type = "signed " + type;
-  if (hasConstQualifier)
-    type = "const " + type;
-  if (hasStaticQualifier)
-    type = "static " + type;
-
-  // Now consume any pointer tokens
-  while (check(TokenType::OP_MULTIPLY) && peek().lexeme == "*") {
-    advance(); // consume '*'
-    type += "*";
-  }
-
-  // We can now parse the variable name(s)
   vector<std::shared_ptr<VariableDeclarationStatement>> decls;
   do {
-    if (!check(TokenType::IDENTIFIER)) {
-      std::cerr << "[DEBUG] (parseVariableDeclarationStatement) current="
-                << current << ", token: type=" << static_cast<int>(peek().type)
-                << ", lexeme='" << peek().lexeme << "'\n";
-      error("Expected variable name in variable declaration");
-    }
-    Token varNameToken = advance(); // e.g. 'col'
-    string varName = varNameToken.lexeme;
+    ParsedDeclarator declInfo = parseDeclarator(*this, baseType, true);
 
-    // check for array dimensions
-    vector<ExpressionPtr> dimensions;
-    while (match(TokenType::DELIM_LBRACKET)) {
-      if (check(TokenType::DELIM_RBRACKET)) {
-        // unsized array; consume the closing bracket without an expression.
-        advance();
-      } else {
-        ExpressionPtr dimExpr = parseExpression();
-        consume(TokenType::DELIM_RBRACKET,
-                "Expected ']' after array dimension");
-        dimensions.push_back(dimExpr);
+    // Detect a function declaration/definition that appears inside a compound
+    // statement. After parsing the declarator, a '(' means we're looking at a
+    // parameter list rather than an initialiser.
+    if (check(TokenType::DELIM_LPAREN)) {
+      consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
+      vector<std::pair<string, string>> parameters = parseParameters();
+      consume(TokenType::DELIM_RPAREN, "Expected ')' after parameter list");
+
+      StatementPtr body = nullptr;
+      if (!match(TokenType::DELIM_SEMICOLON)) {
+        consume(TokenType::DELIM_LBRACE, "Expected '{' to begin function body");
+        body = parseCompoundStatement();
       }
+      auto funcDecl = std::make_shared<FunctionDeclaration>(
+          declInfo.type, declInfo.name, parameters, body);
+      return std::make_shared<DeclarationStatement>(funcDecl);
     }
 
-    // optional initializer
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
       if (check(TokenType::DELIM_LBRACE)) {
@@ -333,7 +285,8 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
     }
 
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
-        type, varName, std::nullopt, initializer, dimensions));
+        declInfo.type, declInfo.name, std::nullopt, initializer,
+        declInfo.dimensions));
 
   } while (match(TokenType::DELIM_COMMA));
 

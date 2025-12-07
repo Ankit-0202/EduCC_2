@@ -4,10 +4,9 @@
 
 int main() {
 #ifdef FOO
-    printf("FOO defined\n");
+  printf("FOO defined\n");
 #else
-    printf("FOO not defined\n");
+  printf("FOO not defined\n");
 #endif
-    return 0;
+  return 0;
 }
-

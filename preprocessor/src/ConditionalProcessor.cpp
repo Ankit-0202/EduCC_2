@@ -51,7 +51,6 @@ public:
     return condition != 0 ? trueValue : falseValue;
   }
 
-
 private:
   static constexpr int kMaxDepth = 64;
   const std::string &text;
@@ -107,7 +106,8 @@ private:
   std::string parseIdentifier() {
     skipWhitespace();
     if (pos >= text.size() || !isIdentifierStart(text[pos])) {
-      throw std::runtime_error("Expected identifier in conditional expression.");
+      throw std::runtime_error(
+          "Expected identifier in conditional expression.");
     }
     size_t start = pos++;
     while (pos < text.size() && isIdentifierChar(text[pos])) {
@@ -119,8 +119,7 @@ private:
   long long parseNumber() {
     skipWhitespace();
     size_t start = pos;
-    if (pos < text.size() && text[pos] == '0' &&
-        pos + 1 < text.size() &&
+    if (pos < text.size() && text[pos] == '0' && pos + 1 < text.size() &&
         (text[pos + 1] == 'x' || text[pos + 1] == 'X')) {
       pos += 2;
       size_t digitsStart = pos;
@@ -130,13 +129,11 @@ private:
       }
       if (digitsStart == pos)
         throw std::runtime_error("Invalid hexadecimal literal in conditional.");
-    } else if (pos < text.size() && text[pos] == '0' &&
-               pos + 1 < text.size() &&
+    } else if (pos < text.size() && text[pos] == '0' && pos + 1 < text.size() &&
                (text[pos + 1] == 'b' || text[pos + 1] == 'B')) {
       pos += 2;
       size_t digitsStart = pos;
-      while (pos < text.size() &&
-             (text[pos] == '0' || text[pos] == '1')) {
+      while (pos < text.size() && (text[pos] == '0' || text[pos] == '1')) {
         ++pos;
       }
       if (digitsStart == pos)
@@ -146,9 +143,8 @@ private:
       for (char c : digits) {
         value = (value << 1) | (c - '0');
       }
-      while (pos < text.size() &&
-             (text[pos] == 'u' || text[pos] == 'U' ||
-              text[pos] == 'l' || text[pos] == 'L')) {
+      while (pos < text.size() && (text[pos] == 'u' || text[pos] == 'U' ||
+                                   text[pos] == 'l' || text[pos] == 'L')) {
         ++pos;
       }
       return value;
@@ -162,9 +158,8 @@ private:
         throw std::runtime_error("Invalid integer literal in conditional.");
     }
     size_t endDigits = pos;
-    while (pos < text.size() &&
-           (text[pos] == 'u' || text[pos] == 'U' ||
-            text[pos] == 'l' || text[pos] == 'L')) {
+    while (pos < text.size() && (text[pos] == 'u' || text[pos] == 'U' ||
+                                 text[pos] == 'l' || text[pos] == 'L')) {
       ++pos;
     }
     std::string literal = text.substr(start, endDigits - start);
@@ -243,7 +238,8 @@ private:
       } else if (consume("/")) {
         long long rhs = parseUnary();
         if (rhs == 0)
-          throw std::runtime_error("Division by zero in conditional expression.");
+          throw std::runtime_error(
+              "Division by zero in conditional expression.");
         value /= rhs;
       } else if (consume("%")) {
         long long rhs = parseUnary();
@@ -360,9 +356,7 @@ private:
 
 } // namespace
 
-ConditionalProcessor::ConditionalProcessor() {
-  stateStack.push({true, false});
-}
+ConditionalProcessor::ConditionalProcessor() { stateStack.push({true, false}); }
 
 bool ConditionalProcessor::isConditionalDirective(const std::string &line) {
   std::string trimmed = trim(line);
@@ -505,4 +499,3 @@ void ConditionalProcessor::verifyBalanced() const {
         "Preprocessor Error: Unmatched conditional directives.");
   }
 }
-

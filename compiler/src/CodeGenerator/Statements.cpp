@@ -3,9 +3,12 @@
 #include "CodeGenerator/Helpers.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/raw_ostream.h>
 #include <stdexcept>
@@ -20,6 +23,24 @@ using std::string;
 using std::unordered_map;
 using std::unordered_set;
 using std::vector;
+
+namespace {
+llvm::Value *getUnionMemberPointer(CodeGenerator &CG, llvm::StructType *unionTy,
+                                   llvm::Value *unionPtr,
+                                   const std::string &unionTag,
+                                   const std::string &memberName) {
+  MemberInfo *memberInfo = getMemberInfo(unionTag, memberName);
+  if (!memberInfo) {
+    throw runtime_error("Union type '" + unionTag +
+                        "' does not contain member '" + memberName + "'.");
+  }
+  llvm::Type *memberType = CG.getLLVMType(memberInfo->type);
+  llvm::Value *storagePtr =
+      CG.builder.CreateStructGEP(unionTy, unionPtr, 0, memberName + ".storage");
+  return CG.builder.CreateBitCast(
+      storagePtr, llvm::PointerType::get(memberType, 0), memberName + ".ptr");
+}
+} // namespace
 
 //
 // Local Scope Management
@@ -47,6 +68,88 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
       return found->second;
   }
   return nullptr;
+}
+
+void CodeGenerator::storeInitializerValue(const ExpressionPtr &init,
+                                          llvm::Type *type, llvm::Value *ptr) {
+  if (auto initList = std::dynamic_pointer_cast<InitializerList>(init)) {
+    if (auto *arrTy = llvm::dyn_cast<llvm::ArrayType>(type)) {
+      llvm::Type *elemTy = arrTy->getElementType();
+      uint64_t count = arrTy->getNumElements();
+      for (uint64_t i = 0; i < count; ++i) {
+        ExpressionPtr elemInit =
+            (i < initList->elements.size()) ? initList->elements[i] : nullptr;
+        llvm::Value *elemPtr =
+            builder.CreateGEP(type, ptr,
+                              {ConstantInt::get(Type::getInt32Ty(context), 0),
+                               ConstantInt::get(Type::getInt32Ty(context), i)},
+                              "init.gep");
+        if (elemInit) {
+          storeInitializerValue(elemInit, elemTy, elemPtr);
+        } else {
+          builder.CreateStore(Constant::getNullValue(elemTy), elemPtr);
+        }
+      }
+      return;
+    }
+    if (auto *structTy = llvm::dyn_cast<llvm::StructType>(type)) {
+      for (size_t i = 0; i < structTy->getNumElements(); ++i) {
+        ExpressionPtr fieldInit =
+            (i < initList->elements.size()) ? initList->elements[i] : nullptr;
+        llvm::Value *fieldPtr =
+            builder.CreateStructGEP(structTy, ptr, i, "field.gep");
+        llvm::Type *fieldTy = structTy->getElementType(i);
+        if (fieldInit) {
+          storeInitializerValue(fieldInit, fieldTy, fieldPtr);
+        } else {
+          builder.CreateStore(Constant::getNullValue(fieldTy), fieldPtr);
+        }
+      }
+      return;
+    }
+  }
+
+  if (auto lit = std::dynamic_pointer_cast<Literal>(init)) {
+    if (lit->type == Literal::LiteralType::String) {
+      if (auto *arrTy = llvm::dyn_cast<llvm::ArrayType>(type)) {
+        if (arrTy->getElementType()->isIntegerTy(8)) {
+          std::string str = lit->stringValue;
+          uint64_t arraySize = arrTy->getNumElements();
+          for (uint64_t i = 0; i < arraySize; ++i) {
+            char c = (i < str.size()) ? str[i] : '\0';
+            llvm::Value *elemVal =
+                llvm::ConstantInt::get(Type::getInt8Ty(context), c);
+            std::vector<llvm::Value *> indices = {
+                llvm::ConstantInt::get(Type::getInt32Ty(context), 0),
+                llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
+            llvm::Value *elemPtr =
+                builder.CreateGEP(type, ptr, indices, "str.init");
+            builder.CreateStore(elemVal, elemPtr);
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  llvm::Value *val = generateExpression(init);
+  if (val->getType() != type) {
+    if (val->getType()->isFloatingPointTy() && type->isFloatingPointTy()) {
+      if (val->getType()->getFPMantissaWidth() > type->getFPMantissaWidth())
+        val = builder.CreateFPTrunc(val, type, "fptrunc");
+      else
+        val = builder.CreateFPExt(val, type, "fpext");
+    } else if (val->getType()->isFloatingPointTy() && type->isIntegerTy()) {
+      val = builder.CreateFPToSI(val, type, "fptosi");
+    } else if (val->getType()->isIntegerTy() && type->isFloatingPointTy()) {
+      val = builder.CreateSIToFP(val, type, "sitofp");
+    } else if (val->getType()->isIntegerTy() && type->isIntegerTy()) {
+      val = builder.CreateIntCast(val, type, false, "intcast");
+    } else if (val->getType()->isPointerTy() && type->isPointerTy()) {
+      val = builder.CreateBitCast(val, type, "ptrcast");
+    }
+  }
+  builder.CreateStore(val, ptr);
 }
 
 //
@@ -104,6 +207,8 @@ void CodeGenerator::generateVariableDeclaration(
 
   AllocaInst *alloc =
       builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+  const DataLayout &DL = module->getDataLayout();
+  alloc->setAlignment(DL.getABITypeAlign(varType));
   localVarStack.back()[varDecl->name] = alloc;
   declaredVarStack.back().insert(varDecl->name);
   declaredTypes[varDecl->name] = varType;
@@ -121,6 +226,122 @@ void CodeGenerator::generateVariableDeclaration(
             << varDecl->name << "' registered with type '"
             << declaredTypeStrings[varDecl->name] << "'" << std::endl;
 
+  bool isUnionValue = varDecl->type.rfind("union ", 0) == 0;
+  if (varDecl->initializer.has_value() && isUnionValue &&
+      varType->isStructTy()) {
+    string unionTag = normalizeTag(varDecl->type.substr(6));
+    auto unionTy = dyn_cast<StructType>(varType);
+    if (!unionTy)
+      throw runtime_error("CodeGenerator Error: Union type '" + unionTag +
+                          "' is not a struct representation.");
+    AggregateTypeInfo *unionInfo = getAggregateTypeInfo(unionTag);
+    string targetMemberName;
+    string targetMemberType;
+    if (unionInfo && !unionInfo->members.empty()) {
+      targetMemberName = unionInfo->members.front().name;
+      targetMemberType = unionInfo->members.front().type;
+    } else {
+      targetMemberName = "anon_member_0";
+      targetMemberType = "int";
+    }
+
+    auto pickMemberForLiteral = [&](const Literal &lit) -> void {
+      if (!unionInfo)
+        return;
+      for (const auto &memberInfo : unionInfo->members) {
+        string base = memberInfo.type;
+        if (base.rfind("const ", 0) == 0)
+          base = base.substr(6);
+        if (base.rfind("unsigned ", 0) == 0)
+          base = base.substr(9);
+        if (base.rfind("signed ", 0) == 0)
+          base = base.substr(7);
+        if (lit.type == Literal::LiteralType::Float &&
+            base.rfind("float", 0) == 0) {
+          targetMemberName = memberInfo.name;
+          targetMemberType = memberInfo.type;
+          return;
+        }
+        if (lit.type == Literal::LiteralType::Double &&
+            base.rfind("double", 0) == 0) {
+          targetMemberName = memberInfo.name;
+          targetMemberType = memberInfo.type;
+          return;
+        }
+        if (lit.type == Literal::LiteralType::Int &&
+            (base.rfind("int", 0) == 0 || base.rfind("long", 0) == 0 ||
+             base.rfind("short", 0) == 0 || base.rfind("char", 0) == 0 ||
+             base.rfind("bool", 0) == 0)) {
+          targetMemberName = memberInfo.name;
+          targetMemberType = memberInfo.type;
+          return;
+        }
+      }
+    };
+
+    auto castToMemberType = [&](llvm::Value *value,
+                                llvm::Type *memberTy) -> llvm::Value * {
+      if (value->getType() == memberTy)
+        return value;
+      if (value->getType()->isFloatingPointTy() &&
+          memberTy->isFloatingPointTy()) {
+        if (value->getType()->getFPMantissaWidth() >
+            memberTy->getFPMantissaWidth())
+          return builder.CreateFPTrunc(value, memberTy, "fptrunc");
+        return builder.CreateFPExt(value, memberTy, "fpext");
+      }
+      if (value->getType()->isFloatingPointTy() && memberTy->isIntegerTy()) {
+        return builder.CreateFPToSI(value, memberTy, "fptosi");
+      }
+      if (value->getType()->isIntegerTy() && memberTy->isFloatingPointTy()) {
+        return builder.CreateSIToFP(value, memberTy, "sitofp");
+      }
+      if (value->getType()->isIntegerTy() && memberTy->isIntegerTy()) {
+        return builder.CreateIntCast(value, memberTy, true, "intcast");
+      }
+      return builder.CreateBitCast(value, memberTy, "unionbitcast");
+    };
+
+    auto getUnionMemberPtr = [&](llvm::Type *memberTy) -> llvm::Value * {
+      if (unionInfo) {
+        return getUnionMemberPointer(*this, unionTy, alloc, unionTag,
+                                     targetMemberName);
+      }
+      llvm::Value *storagePtr = builder.CreateStructGEP(
+          unionTy, alloc, 0, varDecl->name + ".storage");
+      return builder.CreateBitCast(storagePtr,
+                                   llvm::PointerType::get(memberTy, 0),
+                                   varDecl->name + ".union");
+    };
+
+    if (auto initList = std::dynamic_pointer_cast<InitializerList>(
+            varDecl->initializer.value())) {
+      if (!initList->elements.empty()) {
+        if (auto lit = std::dynamic_pointer_cast<Literal>(
+                initList->elements.front())) {
+          pickMemberForLiteral(*lit);
+        }
+        llvm::Type *memberTy = getLLVMType(targetMemberType);
+        llvm::Value *memberPtr = getUnionMemberPtr(memberTy);
+        llvm::Value *initVal = generateExpression(initList->elements.front());
+        initVal = castToMemberType(initVal, memberTy);
+        builder.CreateStore(initVal, memberPtr);
+      }
+      return;
+    }
+
+    llvm::Value *rhs = generateExpression(varDecl->initializer.value());
+    if (rhs->getType() == unionTy) {
+      builder.CreateStore(rhs, alloc);
+      return;
+    }
+    llvm::Type *memberTy = getLLVMType(targetMemberType);
+    llvm::Value *memberPtr = getUnionMemberPtr(memberTy);
+    rhs = castToMemberType(rhs, memberTy);
+    builder.CreateStore(rhs, memberPtr);
+    return;
+  }
+
   // Handle string literal initializer for char arrays
   if (varDecl->initializer.has_value()) {
     if (auto lit =
@@ -133,6 +354,7 @@ void CodeGenerator::generateVariableDeclaration(
         if (!arrayTy) {
           varType = ArrayType::get(baseType, arraySize);
           alloc = builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+          alloc->setAlignment(DL.getABITypeAlign(varType));
           localVarStack.back()[varDecl->name] = alloc;
           declaredVarStack.back().insert(varDecl->name);
           declaredTypes[varDecl->name] = varType;
@@ -176,41 +398,43 @@ void CodeGenerator::generateVariableDeclaration(
               varDecl->initializer.value())) {
         auto arrayTy = dyn_cast<ArrayType>(varType);
         auto structTy = dyn_cast<StructType>(varType);
-        
+
         if (arrayTy) {
           // Handle array initializer
           uint64_t arraySize = arrayTy->getNumElements();
           for (uint64_t i = 0; i < arraySize; i++) {
-            llvm::Value *elemVal = nullptr;
-            if (i < initList->elements.size()) {
-              elemVal = generateExpression(initList->elements[i]);
-            } else {
-              elemVal = Constant::getNullValue(arrayTy->getElementType());
-            }
             vector<llvm::Value *> indices;
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
             llvm::Value *elemPtr =
                 builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
                                   varDecl->name + "_idx");
-            builder.CreateStore(elemVal, elemPtr);
+            if (i < initList->elements.size()) {
+              storeInitializerValue(initList->elements[i],
+                                    arrayTy->getElementType(), elemPtr);
+            } else {
+              builder.CreateStore(
+                  Constant::getNullValue(arrayTy->getElementType()), elemPtr);
+            }
           }
         } else if (structTy) {
           // Handle struct initializer
-          for (size_t i = 0; i < initList->elements.size() && i < structTy->getNumElements(); i++) {
-            llvm::Value *elemVal = generateExpression(initList->elements[i]);
+          for (size_t i = 0;
+               i < initList->elements.size() && i < structTy->getNumElements();
+               i++) {
             vector<llvm::Value *> indices;
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
             llvm::Value *elemPtr =
                 builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
                                   varDecl->name + "_member");
-            builder.CreateStore(elemVal, elemPtr);
+            storeInitializerValue(initList->elements[i],
+                                  structTy->getElementType(i), elemPtr);
           }
         } else {
-          throw runtime_error(
-              "CodeGenerator Error: Initializer list used for non-array/non-struct "
-              "variable in local variable declaration.");
+          throw runtime_error("CodeGenerator Error: Initializer list used for "
+                              "non-array/non-struct "
+                              "variable in local variable declaration.");
         }
       } else {
         throw runtime_error("CodeGenerator Error: Array initializer must be an "
@@ -235,6 +459,12 @@ void CodeGenerator::generateVariableDeclaration(
                    varType->isFloatingPointTy()) {
           // Handle int-to-float conversion
           initVal = builder.CreateSIToFP(initVal, varType, "sitofp");
+        } else if (initVal->getType()->isIntegerTy() &&
+                   varType->isIntegerTy()) {
+          // Cast between integer widths (extend or truncate).
+          bool sourceIsSigned = !initVal->getType()->isIntegerTy(1);
+          initVal = builder.CreateIntCast(initVal, varType, sourceIsSigned,
+                                          "intcast");
         } else {
           throw runtime_error("CodeGenerator Error: Incompatible initializer "
                               "type in local variable declaration.");
@@ -354,28 +584,32 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     // For now, we'll just skip goto statements
     // TODO: Implement proper goto label handling
     return false;
-  } else if (auto doWhileStmt = std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
+  } else if (auto doWhileStmt =
+                 std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
     Function *theFunction = builder.GetInsertBlock()->getParent();
-    BasicBlock *bodyBB = BasicBlock::Create(context, "dowhile_body", theFunction);
-    BasicBlock *condBB = BasicBlock::Create(context, "dowhile_cond", theFunction);
-    BasicBlock *afterBB = BasicBlock::Create(context, "dowhile_after", theFunction);
-    
+    BasicBlock *bodyBB =
+        BasicBlock::Create(context, "dowhile_body", theFunction);
+    BasicBlock *condBB =
+        BasicBlock::Create(context, "dowhile_cond", theFunction);
+    BasicBlock *afterBB =
+        BasicBlock::Create(context, "dowhile_after", theFunction);
+
     // Branch to the body
     builder.CreateBr(bodyBB);
     builder.SetInsertPoint(bodyBB);
-    
+
     // Generate the body
     bool bodyTerminated = generateStatement(doWhileStmt->body);
     if (!bodyTerminated) {
       builder.CreateBr(condBB);
     }
-    
+
     builder.SetInsertPoint(condBB);
     llvm::Value *condVal = generateExpression(doWhileStmt->condition);
     if (condVal->getType() != Type::getInt1Ty(context))
       condVal = builder.CreateICmpNE(
           condVal, ConstantInt::get(condVal->getType(), 0), "dowhilecond");
-    
+
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(afterBB);
     return false;
@@ -512,11 +746,42 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     }
     builder.SetInsertPoint(mergeBB);
     return false;
-  } else if (auto declStmt = std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
+  } else if (auto declStmt =
+                 std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
     // Handle local declarations (struct, union, enum)
-    if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(declStmt->declaration)) {
+    if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(
+            declStmt->declaration)) {
       // Handle local struct declaration
       if (structDecl->tag.has_value()) {
+        for (const auto &nestedUnion : structDecl->nestedUnions) {
+          if (nestedUnion->tag.has_value()) {
+            const DataLayout &DL = module->getDataLayout();
+            uint64_t maxSize = 0;
+            for (const auto &member : nestedUnion->members) {
+              Type *memberType = getLLVMType(member->type);
+              for (auto it = member->dimensions.rbegin();
+                   it != member->dimensions.rend(); ++it) {
+                auto lit = std::dynamic_pointer_cast<Literal>(*it);
+                if (!lit)
+                  throw runtime_error("CodeGenerator Error: Array dimension "
+                                      "must be a constant integer.");
+                memberType = ArrayType::get(
+                    memberType, static_cast<uint64_t>(lit->intValue));
+              }
+              maxSize =
+                  std::max<uint64_t>(maxSize, DL.getTypeAllocSize(memberType));
+            }
+            if (maxSize == 0)
+              maxSize = 1;
+            ArrayType *storage =
+                ArrayType::get(Type::getInt8Ty(context), maxSize);
+            StructType *unionTy =
+                StructType::create(context, nestedUnion->tag.value());
+            unionTy->setBody({storage}, /*isPacked=*/false);
+            declaredTypes[nestedUnion->tag.value()] = unionTy;
+          }
+        }
+
         // Create LLVM struct type for the struct
         std::vector<Type *> memberTypes;
         for (const auto &member : structDecl->members) {
@@ -524,29 +789,43 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
           memberTypes.push_back(memberType);
         }
 
-        StructType *structType = StructType::create(context, structDecl->tag.value());
+        StructType *structType =
+            StructType::create(context, structDecl->tag.value());
         structType->setBody(memberTypes, /*isPacked=*/false);
 
         // Register the type in our type registry
         declaredTypes[structDecl->tag.value()] = structType;
       }
-    } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(declStmt->declaration)) {
+    } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(
+                   declStmt->declaration)) {
       // Handle local union declaration
       if (unionDecl->tag.has_value()) {
-        // Create LLVM struct type for the union
-        std::vector<Type *> memberTypes;
+        const DataLayout &DL = module->getDataLayout();
+        uint64_t maxSize = 0;
         for (const auto &member : unionDecl->members) {
           Type *memberType = getLLVMType(member->type);
-          memberTypes.push_back(memberType);
+          for (auto it = member->dimensions.rbegin();
+               it != member->dimensions.rend(); ++it) {
+            auto lit = std::dynamic_pointer_cast<Literal>(*it);
+            if (!lit)
+              throw runtime_error("CodeGenerator Error: Array dimension must "
+                                  "be a constant integer.");
+            memberType = ArrayType::get(memberType,
+                                        static_cast<uint64_t>(lit->intValue));
+          }
+          maxSize =
+              std::max<uint64_t>(maxSize, DL.getTypeAllocSize(memberType));
         }
-
-        StructType *unionType = StructType::create(context, unionDecl->tag.value());
-        unionType->setBody(memberTypes, /*isPacked=*/true); // Packed for union-like behavior
-
-        // Register the type in our type registry
+        if (maxSize == 0)
+          maxSize = 1;
+        ArrayType *storage = ArrayType::get(Type::getInt8Ty(context), maxSize);
+        StructType *unionType =
+            StructType::create(context, unionDecl->tag.value());
+        unionType->setBody({storage}, /*isPacked=*/false);
         declaredTypes[unionDecl->tag.value()] = unionType;
       }
-    } else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(declStmt->declaration)) {
+    } else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(
+                   declStmt->declaration)) {
       // Handle local enum declaration
       for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
         string enumName = enumDecl->enumerators[i].first;
@@ -555,6 +834,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
         new GlobalVariable(*module, Type::getInt32Ty(context), true,
                            GlobalValue::ExternalLinkage, initVal, enumName);
       }
+    } else if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(
+                   declStmt->declaration)) {
+      IRBuilder<>::InsertPointGuard guard(builder);
+      generateFunction(funcDecl);
     }
     return false;
   } else {
@@ -610,6 +893,21 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         throw runtime_error("Struct type '" + tag +
                             "' does not contain member '" + mem->member + "'.");
       }
+      if (memberInfo->isUnionMemberAlias) {
+        auto unionIt = declaredTypes.find(memberInfo->unionTag);
+        if (unionIt == declaredTypes.end())
+          throw runtime_error("Unknown union type '" + memberInfo->unionTag +
+                              "' for member '" + mem->member + "'.");
+        StructType *unionTy = dyn_cast<StructType>(unionIt->second);
+        if (!unionTy)
+          throw runtime_error("Type '" + memberInfo->unionTag +
+                              "' is not a union type.");
+        llvm::Value *unionPtr = builder.CreateStructGEP(
+            structTy, basePtr, memberInfo->unionFieldIndex,
+            mem->member + ".union");
+        return getUnionMemberPointer(*this, unionTy, unionPtr,
+                                     memberInfo->unionTag, memberInfo->name);
+      }
 
       return builder.CreateStructGEP(structTy, basePtr, memberInfo->index,
                                      mem->member);
@@ -637,10 +935,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         throw runtime_error("Union type '" + tag +
                             "' does not contain member '" + mem->member + "'.");
       }
-
-      // For unions, we need to use the correct member index
-      // All members are stored in the struct, but we need to access the right one
-      return builder.CreateStructGEP(unionTy, basePtr, memberInfo->index, mem->member);
+      return getUnionMemberPointer(*this, unionTy, basePtr, tag, mem->member);
     }
     // non-struct/union => just get LValue of the base
     else {
@@ -649,65 +944,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   }
   // 3) PostfixExpression: e.g. i++
   else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
-    auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
-    if (!id)
-      throw runtime_error("Postfix operator applied to non-identifier.");
-    llvm::Value *v = lookupLocalVar(id->name);
-    if (!v)
-      throw runtime_error("Undefined variable in postfix expression: " +
-                          id->name);
-    AllocaInst *allocaInst = dyn_cast<AllocaInst>(v);
-    if (!allocaInst)
-      throw runtime_error("Postfix operator on non-alloca variable: " +
-                          id->name);
-    llvm::Value *oldVal =
-        builder.CreateLoad(allocaInst->getAllocatedType(), v, id->name.c_str());
-    llvm::Value *one = nullptr;
-    llvm::Value *newVal = nullptr;
-
-    if (oldVal->getType()->isIntegerTy()) {
-      one = ConstantInt::get(oldVal->getType(), 1);
-    } else if (oldVal->getType()->isFloatingPointTy()) {
-      one = ConstantFP::get(oldVal->getType(), 1.0);
-    } else if (oldVal->getType()->isPointerTy()) {
-      // For pointers, increment/decrement by the size of the pointed-to type
-      // Since we're using opaque pointers, we need to determine the size
-      // differently For now, assume int* (4 bytes) - this is a simplified
-      // approach
-      one = ConstantInt::get(Type::getInt32Ty(context), 4);
-    } else {
-      throw runtime_error("Unsupported type for postfix operator.");
-    }
-
-    if (post->op == "++") {
-      if (oldVal->getType()->isFloatingPointTy())
-        newVal = builder.CreateFAdd(oldVal, one, "postinc");
-      else if (oldVal->getType()->isPointerTy()) {
-        // For pointer increment, use GEP with int8* and cast
-        llvm::Value *ptrAsInt8 = builder.CreateBitCast(
-            oldVal, PointerType::get(context, 0), "ptrcast");
-        newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, one,
-                                   "postinc");
-        newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
-      } else
-        newVal = builder.CreateAdd(oldVal, one, "postinc");
-    } else {
-      // op == "--"
-      if (oldVal->getType()->isFloatingPointTy())
-        newVal = builder.CreateFSub(oldVal, one, "postdec");
-      else if (oldVal->getType()->isPointerTy()) {
-        llvm::Value *negOne = builder.CreateNeg(one, "negindex");
-        // For pointer decrement, use GEP with int8* and cast
-        llvm::Value *ptrAsInt8 = builder.CreateBitCast(
-            oldVal, PointerType::get(context, 0), "ptrcast");
-        newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, negOne,
-                                   "postdec");
-        newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
-      } else
-        newVal = builder.CreateSub(oldVal, one, "postdec");
-    }
-    builder.CreateStore(newVal, v);
-    return oldVal; // The "postfix" expression's value is the oldVal
+    return generateLValue(post->operand);
   }
   // 4) Assignment
   else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
@@ -743,24 +980,30 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
 // getLLVMType: convert a string type (which may contain pointer stars) into an
 // LLVM type. Updated to support multiple pointer levels (e.g. "int **").
 llvm::Type *CodeGenerator::getLLVMType(const string &type) {
-  // Count the number of '*' characters.
+  // Count trailing '*' characters (pointer levels).
   int pointerCount = 0;
-  size_t pos = type.find('*');
-  if (pos != string::npos) {
-    for (char c : type) {
-      if (c == '*')
-        pointerCount++;
-    }
+  size_t end = type.size();
+  while (end > 0 && isspace(static_cast<unsigned char>(type[end - 1])))
+    --end;
+  while (end > 0 && type[end - 1] == '*') {
+    pointerCount++;
+    --end;
+    while (end > 0 && isspace(static_cast<unsigned char>(type[end - 1])))
+      --end;
   }
-  // Remove all '*' and trim whitespace.
-  string baseType = type;
-  baseType.erase(std::remove(baseType.begin(), baseType.end(), '*'),
-                 baseType.end());
-  // Trim leading/trailing spaces.
-  while (!baseType.empty() && isspace(baseType.front()))
+  // Extract base type without trailing pointers and trim whitespace.
+  string baseType = type.substr(0, end);
+  while (!baseType.empty() &&
+         isspace(static_cast<unsigned char>(baseType.front())))
     baseType.erase(baseType.begin());
-  while (!baseType.empty() && isspace(baseType.back()))
+  while (!baseType.empty() &&
+         isspace(static_cast<unsigned char>(baseType.back())))
     baseType.pop_back();
+
+  auto tdIt = typedefRegistry.find(baseType);
+  if (tdIt != typedefRegistry.end()) {
+    baseType = tdIt->second.underlyingType;
+  }
 
   auto stripPrefix = [](string &s, const string &prefix) {
     while (s.rfind(prefix, 0) == 0) {
@@ -773,8 +1016,10 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   bool isUnsigned = false;
   bool isSigned = false;
   stripPrefix(baseType, "const ");
+  stripPrefix(baseType, "volatile ");
   stripPrefix(baseType, "static ");
   stripPrefix(baseType, "const ");
+  stripPrefix(baseType, "volatile ");
   if (baseType.rfind("unsigned ", 0) == 0) {
     isUnsigned = true;
     stripPrefix(baseType, "unsigned ");
@@ -783,8 +1028,17 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     stripPrefix(baseType, "signed ");
   }
 
+  std::string returnType;
+  std::vector<std::string> paramTypes;
   llvm::Type *ty = nullptr;
-  if (baseType == "int" || baseType.empty())
+  if (parseFunctionPointerType(baseType, returnType, paramTypes)) {
+    vector<Type *> paramLLVM;
+    for (const auto &p : paramTypes) {
+      paramLLVM.push_back(getLLVMType(p));
+    }
+    ty = FunctionType::get(getLLVMType(returnType), paramLLVM, false)
+             ->getPointerTo();
+  } else if (baseType == "int" || baseType.empty())
     ty = Type::getInt32Ty(context);
   else if (baseType == "float")
     ty = Type::getFloatTy(context);
@@ -792,6 +1046,23 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     ty = Type::getInt8Ty(context);
   else if (baseType == "double")
     ty = Type::getDoubleTy(context);
+  else if (baseType == "long long")
+    ty = Type::getInt64Ty(context);
+  else if (baseType == "long")
+    ty = Type::getInt64Ty(context);
+  else if (baseType == "short")
+    ty = Type::getInt16Ty(context);
+  else if (baseType == "size_t" || baseType == "uintptr_t" ||
+           baseType == "intptr_t" || baseType == "ptrdiff_t" ||
+           baseType == "ssize_t" || baseType == "uint64_t" ||
+           baseType == "int64_t")
+    ty = Type::getInt64Ty(context);
+  else if (baseType == "uint32_t" || baseType == "int32_t")
+    ty = Type::getInt32Ty(context);
+  else if (baseType == "uint16_t" || baseType == "int16_t")
+    ty = Type::getInt16Ty(context);
+  else if (baseType == "uint8_t" || baseType == "int8_t")
+    ty = Type::getInt8Ty(context);
   else if (baseType == "bool")
     ty = Type::getInt1Ty(context);
   else if (baseType == "void")
@@ -802,8 +1073,17 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     string tag = baseType.substr(6);
     auto it = declaredTypes.find(tag);
     if (it == declaredTypes.end()) {
-      throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
-                          "'.");
+      if (auto *info = getAggregateTypeInfo(tag)) {
+        uint64_t size = info->totalSize ? info->totalSize : 1;
+        ArrayType *storage = ArrayType::get(Type::getInt8Ty(context), size);
+        StructType *unionTy = StructType::create(context, tag);
+        unionTy->setBody({storage}, /*isPacked=*/false);
+        declaredTypes[tag] = unionTy;
+        it = declaredTypes.find(tag);
+      } else {
+        throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
+                            "'.");
+      }
     }
     ty = it->second;
   } else if (baseType.rfind("struct ", 0) == 0) {
@@ -824,13 +1104,14 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
       string sizeStr = baseType.substr(bracketPos + 1);
       sizeStr = sizeStr.substr(0, sizeStr.find(']'));
       stripPrefix(elementType, "const ");
+      stripPrefix(elementType, "volatile ");
       stripPrefix(elementType, "static ");
       if (elementType.rfind("unsigned ", 0) == 0) {
         stripPrefix(elementType, "unsigned ");
       } else if (elementType.rfind("signed ", 0) == 0) {
         stripPrefix(elementType, "signed ");
       }
-      
+
       // Get the element type
       llvm::Type *elementTy = nullptr;
       if (elementType == "int")
@@ -841,12 +1122,20 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
         elementTy = Type::getInt8Ty(context);
       else if (elementType == "double")
         elementTy = Type::getDoubleTy(context);
+      else if (elementType == "long long")
+        elementTy = Type::getInt64Ty(context);
+      else if (elementType == "long")
+        elementTy = Type::getInt64Ty(context);
+      else if (elementType == "short")
+        elementTy = Type::getInt16Ty(context);
       else if (elementType == "bool")
         elementTy = Type::getInt1Ty(context);
       else {
-        throw runtime_error("CodeGenerator Error: Unsupported array element type '" + elementType + "'.");
+        throw runtime_error(
+            "CodeGenerator Error: Unsupported array element type '" +
+            elementType + "'.");
       }
-      
+
       // Parse the array size
       int arraySize = std::stoi(sizeStr);
       ty = ArrayType::get(elementTy, arraySize);
@@ -857,7 +1146,7 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   }
   // Now wrap the base type in pointer types as needed.
   for (int i = 0; i < pointerCount; i++) {
-    ty = PointerType::get(context, 0);
+    ty = PointerType::get(ty, 0);
   }
   return ty;
 }
