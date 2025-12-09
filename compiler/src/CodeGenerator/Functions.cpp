@@ -1,12 +1,15 @@
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
+#include "Debug.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+#include <iostream>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/raw_ostream.h>
 #include <stdexcept>
 #include <vector>
@@ -30,11 +33,26 @@ Function *CodeGenerator::generateFunction(
   }
 
   // Create function type
-  FunctionType *funcType = FunctionType::get(returnType, paramTypes, false);
+  FunctionType *funcType =
+      FunctionType::get(returnType, paramTypes, funcDecl->isVarArgs);
 
-  // Create the function
-  Function *function = Function::Create(funcType, Function::ExternalLinkage,
-                                        funcDecl->name, module.get());
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] generateFunction: '" << funcDecl->name
+              << "' varargs=" << (funcDecl->isVarArgs ? "true" : "false")
+              << std::endl;
+
+  // Reuse an existing prototype if it matches, otherwise recreate.
+  Function *function = module->getFunction(funcDecl->name);
+  if (function) {
+    if (function->getFunctionType() != funcType) {
+      function->eraseFromParent();
+      function = nullptr;
+    }
+  }
+  if (!function) {
+    function = Function::Create(funcType, Function::ExternalLinkage,
+                                funcDecl->name, module.get());
+  }
 
   // Set parameter names
   unsigned idx = 0;
@@ -51,11 +69,58 @@ Function *CodeGenerator::generateFunction(
     BasicBlock *entryBlock = BasicBlock::Create(context, "entry", function);
     builder.SetInsertPoint(entryBlock);
 
+    // Add a small padding buffer to reduce accidental stack corruption from
+    // aggressive local packing.
+    auto *padTy = ArrayType::get(Type::getInt8Ty(context), 64);
+    AllocaInst *framePad = builder.CreateAlloca(padTy, nullptr, "frame.pad");
+    framePad->setAlignment(llvm::Align(16));
+    builder.CreateStore(Constant::getNullValue(padTy), framePad, true);
+
     // Set up local scope
     pushLocalScope();
 
     // Allocate parameters to local variables
     idx = 0;
+    auto extractDimStrings = [](const std::string &typeStr) {
+      std::vector<std::string> dims;
+      size_t pos = 0;
+      while ((pos = typeStr.find('[', pos)) != std::string::npos) {
+        size_t end = typeStr.find(']', pos);
+        if (end == std::string::npos)
+          break;
+        std::string dim = typeStr.substr(pos + 1, end - pos - 1);
+        dims.push_back(dim);
+        pos = end + 1;
+      }
+      return dims;
+    };
+    auto dimValueFromString = [&](const std::string &dim) -> llvm::Value * {
+      if (dim.empty())
+        return nullptr;
+      try {
+        long long v = std::stoll(dim);
+        return llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), v);
+      } catch (...) {
+      }
+      llvm::Value *ptr = lookupLocalVar(dim);
+      if (!ptr)
+        return nullptr;
+      llvm::Type *pointeeTy = nullptr;
+      auto it = declaredTypes.find(dim);
+      if (it != declaredTypes.end())
+        pointeeTy = it->second;
+      if (!pointeeTy)
+        pointeeTy = llvm::Type::getInt32Ty(context);
+      llvm::Value *loaded =
+          builder.CreateLoad(pointeeTy, ptr, dim + ".ld.param");
+      if (loaded->getType()->isIntegerTy(64))
+        return loaded;
+      if (loaded->getType()->isIntegerTy())
+        return builder.CreateIntCast(loaded, llvm::Type::getInt64Ty(context),
+                                     true, dim + ".cast");
+      return builder.CreatePtrToInt(loaded, llvm::Type::getInt64Ty(context),
+                                    dim + ".ptrint");
+    };
     for (auto &arg : function->args()) {
       if (idx < funcDecl->parameters.size()) {
         string paramName =
@@ -72,6 +137,22 @@ Function *CodeGenerator::generateFunction(
         localVariables[paramName] = alloca;
         localVarStack.back()[paramName] = alloca;
         declaredVarStack.back().insert(paramName);
+        auto existingTy = declaredTypes.find(paramName);
+        if (existingTy != declaredTypes.end())
+          typeShadowStack[paramName].push_back(existingTy->second);
+        auto existingStr = declaredTypeStrings.find(paramName);
+        if (existingStr != declaredTypeStrings.end())
+          typeStringShadowStack[paramName].push_back(existingStr->second);
+        declaredTypes[paramName] = arg.getType();
+        declaredTypeStrings[paramName] = funcDecl->parameters[idx].first;
+        auto dimStrs = extractDimStrings(funcDecl->parameters[idx].first);
+        std::vector<llvm::Value *> dimVals;
+        for (const auto &d : dimStrs) {
+          if (auto *v = dimValueFromString(d))
+            dimVals.push_back(v);
+        }
+        if (!dimVals.empty())
+          dynamicArrayDimensions[paramName] = dimVals;
       }
       idx++;
     }

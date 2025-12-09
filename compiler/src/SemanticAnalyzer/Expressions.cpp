@@ -1,7 +1,9 @@
 #include "AST.hpp"
+#include "Debug.hpp"
 #include "SemanticAnalyzer.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -38,7 +40,7 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
   if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     switch (lit->type) {
     case Literal::LiteralType::Int:
-      return "int";
+      return !lit->literalType.empty() ? lit->literalType : "int";
     case Literal::LiteralType::Float:
       return "float";
     case Literal::LiteralType::Double:
@@ -47,9 +49,45 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
       return "char";
     case Literal::LiteralType::Bool:
       return "bool";
+    case Literal::LiteralType::String:
+      return "char*";
     default:
       throw runtime_error("Cannot infer type for literal");
     }
+  }
+  if (auto align = std::dynamic_pointer_cast<AlignOfExpression>(expr)) {
+    return "int";
+  }
+  if (auto gen = std::dynamic_pointer_cast<GenericSelection>(expr)) {
+    auto normalize = [](std::string t) {
+      auto strip = [](std::string &s, const std::string &p) {
+        if (s.rfind(p, 0) == 0) {
+          s = s.substr(p.size());
+          while (!s.empty() && s.front() == ' ')
+            s.erase(s.begin());
+        }
+      };
+      strip(t, "const ");
+      strip(t, "volatile ");
+      strip(t, "static ");
+      strip(t, "_Atomic ");
+      return t;
+    };
+    std::string selectorType =
+        normalize(inferExpressionType(gen->selector, analyzer));
+    if (auto litSel = std::dynamic_pointer_cast<Literal>(gen->selector)) {
+      if (litSel->type == Literal::LiteralType::String)
+        selectorType = "char[]";
+    }
+    for (auto &assoc : gen->associations) {
+      if (normalize(assoc.first) == selectorType)
+        return inferExpressionType(assoc.second, analyzer);
+    }
+    if (gen->defaultExpr)
+      return inferExpressionType(gen->defaultExpr.value(), analyzer);
+    if (!gen->associations.empty())
+      return inferExpressionType(gen->associations.front().second, analyzer);
+    return "int";
   }
   if (auto comp = std::dynamic_pointer_cast<CompoundLiteral>(expr)) {
     if (!comp->dimensions.empty())
@@ -58,6 +96,8 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
   }
   // For an identifier, look it up using the public getter.
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+    if (id->name == "I")
+      return "double complex";
     auto symOpt = analyzer.getSymbolTable().lookup(id->name);
     if (!symOpt.has_value())
       throw runtime_error("Semantic Analysis Error: Undefined variable '" +
@@ -140,6 +180,8 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
     string operandType = inferExpressionType(unExpr->operand, analyzer);
     if (unExpr->op == "*") {
       // Dereference: remove one level of pointer
+      if (operandType.rfind("fnptr:", 0) == 0)
+        return operandType;
       if (!operandType.empty() && operandType.back() == '*')
         return operandType.substr(0, operandType.size() - 1);
       throw runtime_error("Cannot dereference non-pointer type: " +
@@ -241,6 +283,9 @@ void SemanticAnalyzer::analyzeExpression(
   } else if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     // No analysis needed for literals.
   } else if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
+    if (id->name == "I") {
+      return;
+    }
     if (!getSymbolTable().lookup(id->name).has_value()) {
       throw runtime_error(
           "Semantic Analysis Error: Undefined variable or function '" +
@@ -254,6 +299,11 @@ void SemanticAnalyzer::analyzeExpression(
     }
     analyzeExpression(assign->rhs);
   } else if (auto funcCall = std::dynamic_pointer_cast<FunctionCall>(expr)) {
+    if (funcCall->functionName == "__builtin_va_arg") {
+      if (!funcCall->arguments.empty())
+        analyzeExpression(funcCall->arguments[0]);
+      return;
+    }
     if (funcCall->hasCalleeExpr()) {
       analyzeExpression(funcCall->calleeExpr);
       std::string calleeType = inferExpressionType(funcCall->calleeExpr, *this);
@@ -268,7 +318,7 @@ void SemanticAnalyzer::analyzeExpression(
         throw runtime_error(
             "Semantic Analysis Error: Expression is not callable.");
       }
-      if (!paramTypes.empty() &&
+      if (!paramTypes.empty() && !funcCall->arguments.empty() &&
           paramTypes.size() != funcCall->arguments.size()) {
         throw runtime_error(
             "Semantic Analysis Error: Function called with an incorrect "
@@ -283,7 +333,7 @@ void SemanticAnalyzer::analyzeExpression(
     std::vector<std::string> fpParamTypes;
     bool callableViaPointer = false;
     if (!sym.has_value()) {
-      Symbol implicit(funcCall->functionName, "int", true, {}, false);
+      Symbol implicit(funcCall->functionName, "int", true, {}, false, false);
       symbolTable.declare(implicit);
       sym = implicit;
     } else if (!sym->isFunction) {
@@ -297,8 +347,13 @@ void SemanticAnalyzer::analyzeExpression(
       }
     }
     if (sym->isFunction) {
-      if (!sym->parameterTypes.empty() &&
+      if (!sym->parameterTypes.empty() && !sym->isVarArgs &&
           sym->parameterTypes.size() != funcCall->arguments.size()) {
+        if (educcDebugEnabled()) {
+          std::cerr << "[DEBUG] Function call '" << funcCall->functionName
+                    << "' expected " << sym->parameterTypes.size()
+                    << " args but got " << funcCall->arguments.size() << "\n";
+        }
         throw runtime_error("Semantic Analysis Error: Function '" +
                             funcCall->functionName +
                             "' called with an incorrect number of arguments.");
@@ -327,6 +382,16 @@ void SemanticAnalyzer::analyzeExpression(
       // sizeof(expression) - analyze the operand
       analyzeExpression(sizeofExpr->operand);
     }
+  } else if (auto alignExpr =
+                 std::dynamic_pointer_cast<AlignOfExpression>(expr)) {
+    if (!alignExpr->isType)
+      analyzeExpression(alignExpr->operand);
+  } else if (auto gen = std::dynamic_pointer_cast<GenericSelection>(expr)) {
+    analyzeExpression(gen->selector);
+    for (auto &assoc : gen->associations)
+      analyzeExpression(assoc.second);
+    if (gen->defaultExpr)
+      analyzeExpression(gen->defaultExpr.value());
   } else if (std::dynamic_pointer_cast<CompoundLiteral>(expr)) {
     // Elements will be analyzed via initializer parsing if needed.
   } else {

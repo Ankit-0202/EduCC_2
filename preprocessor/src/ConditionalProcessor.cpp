@@ -489,6 +489,10 @@ std::string ConditionalProcessor::processLine(const std::string &line) {
     return "";
   }
 
+  if (directive == "#line") {
+    return parentActive ? line : "";
+  }
+
   // Unknown directive – ignore.
   return "";
 }

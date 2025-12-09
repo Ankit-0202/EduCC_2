@@ -1,8 +1,8 @@
-inline int square(int x) { return x * x; }
+static inline int square(int x) { return x * x; }
 
-inline int cube(int x) { return x * x * x; }
+static inline int cube(int x) { return x * x * x; }
 
-inline int max(int a, int b) { return (a > b) ? a : b; }
+static inline int max(int a, int b) { return (a > b) ? a : b; }
 
 int main() {
   if (square(5) != 25)

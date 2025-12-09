@@ -4,6 +4,7 @@
 #include "AST.hpp"
 #include "Token.hpp"
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -54,7 +55,9 @@ public:
   DeclarationPtr parseVariableDeclaration();
   DeclarationPtr parseVariableDeclarationWithType(
       const std::string &givenType,
-      const std::vector<ExpressionPtr> &typeDimensions = {});
+      const std::vector<ExpressionPtr> &typeDimensions = {},
+      std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr,
+      std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr);
   DeclarationPtr parseFunctionDeclaration();
   DeclarationPtr parseFunctionDeclarationWithType(const std::string &givenType);
   std::vector<std::pair<std::string, std::string>> parseParameters();
@@ -65,6 +68,10 @@ public:
   std::vector<Token> tokens;
 
   size_t current;
+  std::string currentFunctionName;
+  std::optional<int> pendingAlignment;
+  bool structPackedFlag;
+  bool varArgsPending;
 
   // Utility parsing methods.
   Token advance();
@@ -85,9 +92,11 @@ struct ParsedDeclarator {
   bool hasEmptyArrayDimension{false};
 };
 
-std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
-                            bool &hasStaticQualifier,
-                            bool &hasVolatileQualifier);
+std::string
+parseSimpleType(Parser &parser, bool &hasConstQualifier,
+                bool &hasStaticQualifier, bool &hasVolatileQualifier,
+                std::shared_ptr<StructDeclaration> *inlineStructDecl = nullptr,
+                std::shared_ptr<UnionDeclaration> *inlineUnionDecl = nullptr);
 ParsedDeclarator parseDeclarator(Parser &parser, const std::string &baseType,
                                  bool requireName);
 

@@ -1,4 +1,5 @@
 #include <stdalign.h>
+#include <stddef.h>
 #include <stdint.h>
 
 alignas(32) unsigned char buffer[32];

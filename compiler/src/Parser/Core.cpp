@@ -1,3 +1,4 @@
+#include "Debug.hpp"
 #include "Parser.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -5,7 +6,10 @@
 
 // --- Basic Parser utilities and the overall parse() method ---
 
-Parser::Parser(const std::vector<Token> &tokens) : tokens(tokens), current(0) {}
+Parser::Parser(const std::vector<Token> &tokens)
+    : tokens(tokens), current(0), currentFunctionName(""),
+      pendingAlignment(std::nullopt), structPackedFlag(false),
+      varArgsPending(false) {}
 
 bool Parser::match(TokenType type) {
   if (check(type)) {
@@ -64,7 +68,8 @@ std::shared_ptr<Program> Parser::parse() {
   auto program = std::make_shared<Program>();
   int declCount = 0;
   while (!isAtEnd()) {
-    std::cerr << "[DEBUG] (parse) current=" << current << ", next tokens: ";
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] (parse) current=" << current << ", next tokens: ";
     for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
       std::cerr << static_cast<int>(tokens[current + i].type) << "('"
                 << tokens[current + i].lexeme << "') ";
@@ -72,17 +77,23 @@ std::shared_ptr<Program> Parser::parse() {
     std::cerr << std::endl;
     DeclarationPtr decl = parseDeclaration();
     declCount++;
-    std::cerr << "[DEBUG] (parse) Parsed declaration " << declCount
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] (parse) Parsed declaration " << declCount
+                << std::endl;
     if (decl) {
       program->addDeclaration(decl);
-      std::cerr << "[DEBUG] (parse) Added declaration to program" << std::endl;
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] (parse) Added declaration to program"
+                  << std::endl;
     } else {
-      std::cerr << "[DEBUG] (parse) Declaration is null, breaking" << std::endl;
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] (parse) Declaration is null, breaking"
+                  << std::endl;
       break;
     }
   }
-  std::cerr << "[DEBUG] (parse) Total declarations parsed: " << declCount
-            << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parse) Total declarations parsed: " << declCount
+              << std::endl;
   return program;
 }

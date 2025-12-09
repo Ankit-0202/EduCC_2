@@ -144,8 +144,7 @@ Token Lexer::number() {
   bool sawExponent = false;
 
   // Handle hexadecimal literals (0x...)
-  if (peek() == '0' && !isAtEnd() &&
-      (peekNext() == 'x' || peekNext() == 'X')) {
+  if (peek() == '0' && !isAtEnd() && (peekNext() == 'x' || peekNext() == 'X')) {
     lexeme.push_back(get()); // consume '0'
     lexeme.push_back(get()); // consume 'x'
     while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(peek())))) {
@@ -164,8 +163,7 @@ Token Lexer::number() {
   }
 
   // Handle binary literals (0b... or 0B...)
-  if (peek() == '0' && !isAtEnd() &&
-      (peekNext() == 'b' || peekNext() == 'B')) {
+  if (peek() == '0' && !isAtEnd() && (peekNext() == 'b' || peekNext() == 'B')) {
     lexeme.push_back(get()); // consume '0'
     lexeme.push_back(get()); // consume 'b' or 'B'
     while (!isAtEnd() && (peek() == '0' || peek() == '1')) {
@@ -254,6 +252,24 @@ Token Lexer::character() {
     case '\\':
       ch = '\\';
       break;
+    case '0':
+      ch = '\0';
+      break;
+    case 'r':
+      ch = '\r';
+      break;
+    case 'a':
+      ch = '\a';
+      break;
+    case 'b':
+      ch = '\b';
+      break;
+    case 'f':
+      ch = '\f';
+      break;
+    case 'v':
+      ch = '\v';
+      break;
     default:
       ch = escapeChar;
       break;
@@ -279,38 +295,18 @@ Token Lexer::string() {
   // Consume the opening quote.
   get(); // consume '"'
   lexeme = "\"";
-  // Read characters until closing quote.
+  // Read characters until closing quote. Keep escape sequences verbatim so the
+  // parser can handle unescaping while preserving the original spelling.
   while (!isAtEnd() && peek() != '"') {
     char ch = get();
     if (ch == '\\') {
-      // Handle escape sequences.
       if (isAtEnd())
         throw std::runtime_error(
             "Lexer Error: Unterminated escape sequence in string literal");
       char escapeChar = get();
-      switch (escapeChar) {
-      case 'n':
-        ch = '\n';
-        break;
-      case 't':
-        ch = '\t';
-        break;
-      case 'r':
-        ch = '\r';
-        break;
-      case '\\':
-        ch = '\\';
-        break;
-      case '"':
-        ch = '"';
-        break;
-      case '\'':
-        ch = '\'';
-        break;
-      default:
-        ch = escapeChar;
-        break;
-      }
+      lexeme += '\\';
+      lexeme += escapeChar;
+      continue;
     }
     lexeme += ch;
   }

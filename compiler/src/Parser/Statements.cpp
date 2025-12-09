@@ -1,4 +1,5 @@
 #include "AST.hpp"
+#include "Debug.hpp"
 #include "Parser.hpp"
 #include "TypeRegistry.hpp"
 #include <iostream>
@@ -13,8 +14,9 @@ using std::string;
 using std::vector;
 
 StatementPtr Parser::parseStatement() {
-  std::cerr << "[DEBUG] (parseStatement) current=" << current << " token='"
-            << peek().lexeme << "'\n";
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parseStatement) current=" << current << " token='"
+              << peek().lexeme << "'\n";
   // First check for control-flow keywords.
   if (match(TokenType::KW_IF)) {
     return parseIfStatement();
@@ -57,16 +59,35 @@ StatementPtr Parser::parseStatement() {
   if (check(TokenType::KW_STRUCT)) {
     size_t save = current;
     advance(); // consume KW_STRUCT
+    bool standaloneStruct = false;
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current = save; // revert
-      DeclarationPtr structDecl = parseStructDeclaration();
-      return std::make_shared<DeclarationStatement>(structDecl);
-    } else {
-      current = save; // revert pointer to handle in variable-decl logic below
+      size_t bracePos = current;
+      if (check(TokenType::IDENTIFIER))
+        bracePos++;
+      int depth = 0;
+      for (size_t i = bracePos; i < tokens.size(); ++i) {
+        if (tokens[i].type == TokenType::DELIM_LBRACE)
+          depth++;
+        else if (tokens[i].type == TokenType::DELIM_RBRACE) {
+          depth--;
+          if (depth == 0) {
+            if (i + 1 < tokens.size() &&
+                tokens[i + 1].type == TokenType::DELIM_SEMICOLON)
+              standaloneStruct = true;
+            break;
+          }
+        }
+      }
+      if (standaloneStruct) {
+        current = save; // revert
+        DeclarationPtr structDecl = parseStructDeclaration();
+        return std::make_shared<DeclarationStatement>(structDecl);
+      }
     }
+    current = save; // revert pointer to handle in variable-decl logic below
   }
   if (check(TokenType::KW_UNION)) {
     size_t save = current;
@@ -95,22 +116,27 @@ StatementPtr Parser::parseStatement() {
     if (check(TokenType::IDENTIFIER)) {
       std::string lex = peek().lexeme;
       if (lex == "const" || lex == "volatile" || lex == "static" ||
-          lex == "unsigned" || lex == "signed" || lex == "long" ||
-          lex == "short")
+          lex == "extern" || lex == "inline" || lex == "__builtin_va_list" ||
+          lex == "va_list" || lex == "unsigned" || lex == "signed" ||
+          lex == "long" || lex == "short" || lex == "alignas" ||
+          lex == "_Alignas" || lex == "_Atomic" || lex == "_Noreturn" ||
+          lex == "_Thread_local")
         return true;
       if (lex == "size_t" || lex == "uintptr_t" || lex == "intptr_t" ||
-          lex == "ptrdiff_t" || lex == "ssize_t" || lex == "uint8_t" ||
-          lex == "uint16_t" || lex == "uint32_t" || lex == "uint64_t" ||
-          lex == "int8_t" || lex == "int16_t" || lex == "int32_t" ||
-          lex == "int64_t")
+          lex == "ptrdiff_t" || lex == "ssize_t" || lex == "max_align_t" ||
+          lex == "uint8_t" || lex == "uint16_t" || lex == "uint32_t" ||
+          lex == "uint64_t" || lex == "int8_t" || lex == "int16_t" ||
+          lex == "int32_t" || lex == "int64_t" || lex == "__builtin_va_list" ||
+          lex == "va_list")
         return true;
     }
     std::string lx = peek().lexeme;
     if (lx == "size_t" || lx == "uintptr_t" || lx == "intptr_t" ||
-        lx == "ptrdiff_t" || lx == "ssize_t" || lx == "uint8_t" ||
-        lx == "uint16_t" || lx == "uint32_t" || lx == "uint64_t" ||
-        lx == "int8_t" || lx == "int16_t" || lx == "int32_t" ||
-        lx == "int64_t")
+        lx == "ptrdiff_t" || lx == "ssize_t" || lx == "max_align_t" ||
+        lx == "uint8_t" || lx == "uint16_t" || lx == "uint32_t" ||
+        lx == "uint64_t" || lx == "int8_t" || lx == "int16_t" ||
+        lx == "int32_t" || lx == "int64_t" || lx == "__builtin_va_list" ||
+        lx == "va_list")
       return true;
     return false;
   };
@@ -168,8 +194,18 @@ StatementPtr Parser::parseForStatement() {
     if (check(TokenType::IDENTIFIER)) {
       std::string lex = peek().lexeme;
       if (lex == "const" || lex == "volatile" || lex == "static" ||
-          lex == "unsigned" || lex == "signed" || lex == "long" ||
-          lex == "short")
+          lex == "extern" || lex == "inline" || lex == "__builtin_va_list" ||
+          lex == "va_list" || lex == "unsigned" || lex == "signed" ||
+          lex == "long" || lex == "short" || lex == "alignas" ||
+          lex == "_Alignas" || lex == "_Atomic" || lex == "_Noreturn" ||
+          lex == "_Thread_local")
+        return true;
+      if (lex == "size_t" || lex == "uintptr_t" || lex == "intptr_t" ||
+          lex == "ptrdiff_t" || lex == "ssize_t" || lex == "max_align_t" ||
+          lex == "uint8_t" || lex == "uint16_t" || lex == "uint32_t" ||
+          lex == "uint64_t" || lex == "int8_t" || lex == "int16_t" ||
+          lex == "int32_t" || lex == "int64_t" || lex == "__builtin_va_list" ||
+          lex == "va_list")
         return true;
     }
     return false;
@@ -213,14 +249,22 @@ StatementPtr Parser::parseSwitchStatement() {
         consume(TokenType::DELIM_COLON, "Expected ':' after case label");
         caseExprs.push_back(caseExpr);
       } while (check(TokenType::KW_CASE) && (advance(), true));
-      // Parse the statement that follows the case labels.
-      StatementPtr caseStmt = parseStatement();
-      for (auto &e : caseExprs) {
-        cases.push_back({e, caseStmt});
+      // Parse statements for this case block until the next label or end.
+      auto caseCompound = std::make_shared<CompoundStatement>();
+      while (!check(TokenType::KW_CASE) && !check(TokenType::KW_DEFAULT) &&
+             !check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+        caseCompound->addStatement(parseStatement());
       }
+      for (auto &e : caseExprs)
+        cases.push_back({e, caseCompound});
     } else if (match(TokenType::KW_DEFAULT)) {
       consume(TokenType::DELIM_COLON, "Expected ':' after 'default'");
-      defaultCase = parseStatement();
+      auto body = std::make_shared<CompoundStatement>();
+      while (!check(TokenType::KW_CASE) && !check(TokenType::KW_DEFAULT) &&
+             !check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
+        body->addStatement(parseStatement());
+      }
+      defaultCase = body;
     } else {
       error("Expected 'case' or 'default' in switch statement");
     }
@@ -230,11 +274,13 @@ StatementPtr Parser::parseSwitchStatement() {
 }
 
 StatementPtr Parser::parseReturnStatement() {
-  std::cerr << "[DEBUG] (parseReturnStatement) start token='" << peek().lexeme
-            << "'\n";
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parseReturnStatement) start token='" << peek().lexeme
+              << "'\n";
   ExpressionPtr expr = parseExpression();
-  std::cerr << "[DEBUG] (parseReturnStatement) after expr token='"
-            << peek().lexeme << "'\n";
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parseReturnStatement) after expr token='"
+              << peek().lexeme << "'\n";
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after return statement");
   return std::make_shared<ReturnStatement>(expr);
 }
@@ -250,15 +296,20 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
   bool hasConstQualifier = false;
   bool hasStaticQualifier = false;
   bool hasVolatileQualifier = false;
+  std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr;
+  std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr;
   string baseType = parseSimpleType(*this, hasConstQualifier,
-                                    hasStaticQualifier, hasVolatileQualifier);
+                                    hasStaticQualifier, hasVolatileQualifier,
+                                    &inlineStructDecl, &inlineUnionDecl);
 
   vector<std::shared_ptr<VariableDeclarationStatement>> decls;
+  std::optional<int> align = pendingAlignment;
   do {
     ParsedDeclarator declInfo = parseDeclarator(*this, baseType, true);
-    std::cerr << "[DEBUG] (parseVarDeclStmt) after declarator current="
-              << current << " token='" << peek().lexeme << "' type="
-              << static_cast<int>(peek().type) << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] (parseVarDeclStmt) after declarator current="
+                << current << " token='" << peek().lexeme
+                << "' type=" << static_cast<int>(peek().type) << std::endl;
 
     // Detect a function declaration/definition that appears inside a compound
     // statement. After parsing the declarator, a '(' means we're looking at a
@@ -280,30 +331,34 @@ StatementPtr Parser::parseVariableDeclarationStatement() {
 
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN)) {
-      std::cerr << "[DEBUG] (parseVarDeclStmt) parsing initializer at token '"
-                << peek().lexeme << "' type=" << static_cast<int>(peek().type)
-                << std::endl;
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] (parseVarDeclStmt) parsing initializer at token '"
+                  << peek().lexeme << "' type=" << static_cast<int>(peek().type)
+                  << std::endl;
       if (current < tokens.size()) {
-        std::cerr << "[DEBUG] (parseVarDeclStmt) raw token index " << current
-                  << " lexeme='" << tokens[current].lexeme
-                  << "' type=" << static_cast<int>(tokens[current].type)
-                  << " total=" << tokens.size() << std::endl;
+        if (educcDebugEnabled())
+          std::cerr << "[DEBUG] (parseVarDeclStmt) raw token index " << current
+                    << " lexeme='" << tokens[current].lexeme
+                    << "' type=" << static_cast<int>(tokens[current].type)
+                    << " total=" << tokens.size() << std::endl;
       }
       if (check(TokenType::DELIM_LBRACE)) {
         initializer = parseInitializerList();
       } else {
-        initializer = parseExpression();
+        initializer = parseAssignment();
       }
     }
 
     decls.push_back(std::make_shared<VariableDeclarationStatement>(
-        declInfo.type, declInfo.name, std::nullopt, initializer,
-        declInfo.dimensions));
+        declInfo.type, declInfo.name, std::nullopt, align, initializer,
+        declInfo.dimensions, declInfo.hasEmptyArrayDimension, inlineStructDecl,
+        inlineUnionDecl));
 
   } while (match(TokenType::DELIM_COMMA));
 
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");
+  pendingAlignment = std::nullopt;
 
   if (decls.size() == 1)
     return decls[0];

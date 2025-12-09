@@ -25,6 +25,7 @@ struct Symbol {
   std::string type;
   bool isFunction;
   std::vector<std::string> parameterTypes;
+  bool isVarArgs{false};
   bool isDefined; // <== NEW: only relevant if isFunction == true
 
   // Constructors
@@ -34,9 +35,10 @@ struct Symbol {
 
   // For a function:
   Symbol(const std::string &nm, const std::string &ty, bool func,
-         const std::vector<std::string> &params, bool defined)
+         const std::vector<std::string> &params, bool defined,
+         bool varArgs = false)
       : name(nm), type(ty), isFunction(func), parameterTypes(params),
-        isDefined(defined) {}
+        isVarArgs(varArgs), isDefined(defined) {}
 };
 
 // SymbolTable class that manages scopes and symbols

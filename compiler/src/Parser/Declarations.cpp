@@ -1,4 +1,5 @@
 #include "AST.hpp"
+#include "Debug.hpp"
 #include "Parser.hpp"
 #include "TypeRegistry.hpp"
 #include <iostream> // For debug printing if needed
@@ -12,6 +13,8 @@ using std::runtime_error;
 using std::string;
 using std::vector;
 
+static std::shared_ptr<StructDeclaration>
+parseStructDefinition(Parser &parser, std::optional<std::string> tag);
 static std::string consumePointerTokens(Parser &parser,
                                         const std::string &baseType);
 
@@ -28,11 +31,18 @@ bool isIntLiteral(const ExpressionPtr &expr, int &value) {
 std::string appendArrayToType(Parser &parser, const std::string &baseType,
                               const std::vector<ExpressionPtr> &dims) {
   std::string type = baseType;
+  auto dimToString = [](const ExpressionPtr &expr) -> std::string {
+    if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+      if (lit->type == Literal::LiteralType::Int)
+        return std::to_string(lit->intValue);
+    }
+    if (auto id = std::dynamic_pointer_cast<Identifier>(expr))
+      return id->name;
+    return "";
+  };
   for (const auto &dim : dims) {
-    int value = 0;
-    if (!isIntLiteral(dim, value))
-      parser.error("Array dimension must be an integer literal");
-    type += "[" + std::to_string(value) + "]";
+    std::string asStr = dimToString(dim);
+    type += "[" + asStr + "]";
   }
   return type;
 }
@@ -41,13 +51,56 @@ bool tokenIsTypedefName(const Token &tok) {
   return tok.type == TokenType::IDENTIFIER && isTypedefName(tok.lexeme);
 }
 
-std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
-                            bool &hasStaticQualifier,
-                            bool &hasVolatileQualifier) {
+std::string
+parseSimpleType(Parser &parser, bool &hasConstQualifier,
+                bool &hasStaticQualifier, bool &hasVolatileQualifier,
+                std::shared_ptr<StructDeclaration> *inlineStructDecl,
+                std::shared_ptr<UnionDeclaration> *inlineUnionDecl) {
   bool sawUnsigned = false;
   bool sawSigned = false;
+  bool sawAtomic = false;
   while (!parser.isAtEnd() && parser.check(TokenType::IDENTIFIER)) {
     std::string lex = parser.peek().lexeme;
+    if (lex == "_Atomic") {
+      parser.advance();
+      sawAtomic = true;
+      if (parser.match(TokenType::DELIM_LPAREN)) {
+        bool innerConst = false, innerStatic = false, innerVolatile = false;
+        std::string inner =
+            parseSimpleType(parser, innerConst, innerStatic, innerVolatile);
+        parser.consume(TokenType::DELIM_RPAREN,
+                       "Expected ')' after _Atomic type-specifier");
+        if (innerConst)
+          inner = "const " + inner;
+        if (innerVolatile)
+          inner = "volatile " + inner;
+        if (innerStatic)
+          inner = "static " + inner;
+        return "_Atomic " + inner;
+      }
+      continue;
+    }
+    if (lex == "alignas" || lex == "_Alignas") {
+      parser.advance();
+      parser.consume(TokenType::DELIM_LPAREN, "Expected '(' after alignas");
+      ExpressionPtr alignExpr = parser.parseExpression();
+      if (auto lit = std::dynamic_pointer_cast<Literal>(alignExpr)) {
+        if (lit->type == Literal::LiteralType::Int && lit->intValue > 0) {
+          parser.pendingAlignment = lit->intValue;
+        }
+      }
+      parser.consume(TokenType::DELIM_RPAREN, "Expected ')' after alignas");
+      continue;
+    }
+    if (lex == "_Noreturn") {
+      parser.advance();
+      continue;
+    }
+    if (lex == "_Thread_local") {
+      parser.advance();
+      hasStaticQualifier = true;
+      continue;
+    }
     if (lex == "const") {
       hasConstQualifier = true;
       parser.advance();
@@ -55,6 +108,14 @@ std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
     }
     if (lex == "static") {
       hasStaticQualifier = true;
+      parser.advance();
+      continue;
+    }
+    if (lex == "extern") {
+      parser.advance();
+      continue;
+    }
+    if (lex == "inline") {
       parser.advance();
       continue;
     }
@@ -90,8 +151,13 @@ std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
   else if (parser.match(TokenType::KW_VOID))
     baseType = "void";
   else if (parser.check(TokenType::IDENTIFIER) &&
-           (parser.peek().lexeme == "long" ||
-            parser.peek().lexeme == "short")) {
+           (parser.peek().lexeme == "double" ||
+            parser.peek().lexeme == "float" ||
+            parser.peek().lexeme == "void")) {
+    baseType = parser.advance().lexeme;
+  } else if (parser.check(TokenType::IDENTIFIER) &&
+             (parser.peek().lexeme == "long" ||
+              parser.peek().lexeme == "short")) {
     baseType = parser.advance().lexeme;
     if (baseType == "long" && parser.check(TokenType::IDENTIFIER) &&
         parser.peek().lexeme == "long") {
@@ -103,6 +169,7 @@ std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
              parser.peek().lexeme == "intptr_t" ||
              parser.peek().lexeme == "ptrdiff_t" ||
              parser.peek().lexeme == "ssize_t" ||
+             parser.peek().lexeme == "max_align_t" ||
              parser.peek().lexeme == "uint8_t" ||
              parser.peek().lexeme == "uint16_t" ||
              parser.peek().lexeme == "uint32_t" ||
@@ -110,16 +177,52 @@ std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
              parser.peek().lexeme == "int8_t" ||
              parser.peek().lexeme == "int16_t" ||
              parser.peek().lexeme == "int32_t" ||
-             parser.peek().lexeme == "int64_t") {
+             parser.peek().lexeme == "int64_t" ||
+             parser.peek().lexeme == "__builtin_va_list" ||
+             parser.peek().lexeme == "va_list") {
     baseType = parser.advance().lexeme;
   } else if (parser.check(TokenType::KW_STRUCT) ||
              (parser.check(TokenType::IDENTIFIER) &&
               parser.peek().lexeme == "struct")) {
     parser.advance(); // consume 'struct'
-    if (!parser.check(TokenType::IDENTIFIER))
-      parser.error("Expected struct tag after 'struct'");
-    string tag = parser.advance().lexeme;
-    baseType = "struct " + tag;
+    auto skipAttributes = [&parser]() {
+      while (parser.check(TokenType::IDENTIFIER) &&
+             parser.peek().lexeme == "__attribute__") {
+        parser.advance();
+        parser.consume(TokenType::DELIM_LPAREN,
+                       "Expected '(' after __attribute__");
+        int depth = 1;
+        while (depth > 0 && !parser.isAtEnd()) {
+          Token t = parser.advance();
+          if (t.lexeme == "packed")
+            parser.structPackedFlag = true;
+          if (t.type == TokenType::DELIM_LPAREN)
+            depth++;
+          else if (t.type == TokenType::DELIM_RPAREN)
+            depth--;
+        }
+      }
+    };
+    skipAttributes();
+    std::optional<string> tag = std::nullopt;
+    if (parser.check(TokenType::IDENTIFIER) &&
+        parser.current + 1 < parser.tokens.size() &&
+        parser.tokens[parser.current + 1].type == TokenType::DELIM_LBRACE) {
+      tag = parser.advance().lexeme;
+    }
+    if (parser.check(TokenType::DELIM_LBRACE)) {
+      auto structDecl = parseStructDefinition(parser, tag);
+      if (inlineStructDecl)
+        *inlineStructDecl = structDecl;
+      baseType = "struct " + structDecl->tag.value();
+    } else {
+      skipAttributes();
+      if (!parser.check(TokenType::IDENTIFIER))
+        parser.error("Expected struct tag after 'struct'");
+      string tagName = parser.advance().lexeme;
+      baseType = "struct " + tagName;
+    }
+    parser.structPackedFlag = false;
   } else if (parser.check(TokenType::KW_UNION) ||
              (parser.check(TokenType::IDENTIFIER) &&
               parser.peek().lexeme == "union")) {
@@ -147,6 +250,15 @@ std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
   } else {
     parser.error("Expected type specifier in declaration");
   }
+  if (!baseType.empty() &&
+      (baseType.find("float") != string::npos ||
+       baseType.find("double") != string::npos) &&
+      parser.check(TokenType::IDENTIFIER) &&
+      (parser.peek().lexeme == "complex" ||
+       parser.peek().lexeme == "_Complex")) {
+    parser.advance();
+    baseType += " complex";
+  }
 
   if (sawUnsigned)
     baseType = "unsigned " + baseType;
@@ -158,6 +270,8 @@ std::string parseSimpleType(Parser &parser, bool &hasConstQualifier,
     baseType = "volatile " + baseType;
   if (hasStaticQualifier)
     baseType = "static " + baseType;
+  if (sawAtomic)
+    baseType = "_Atomic " + baseType;
   return baseType;
 }
 
@@ -168,18 +282,38 @@ ParsedDeclarator parseDeclarator(Parser &parser, const std::string &baseType,
   ParsedDeclarator result;
   bool sawEmptyArrayDimension = false;
 
+  auto skipAttributes = [&parser]() {
+    while (parser.check(TokenType::IDENTIFIER) &&
+           parser.peek().lexeme == "__attribute__") {
+      parser.advance();
+      parser.consume(TokenType::DELIM_LPAREN,
+                     "Expected '(' after __attribute__");
+      int depth = 1;
+      while (depth > 0 && !parser.isAtEnd()) {
+        Token t = parser.advance();
+        if (t.type == TokenType::DELIM_LPAREN)
+          depth++;
+        else if (t.type == TokenType::DELIM_RPAREN)
+          depth--;
+      }
+    }
+  };
+
   size_t outerPointerCount = 0;
   while (parser.match(TokenType::OP_MULTIPLY)) {
     outerPointerCount++;
     while (!parser.isAtEnd() && parser.check(TokenType::IDENTIFIER)) {
       string lex = parser.peek().lexeme;
-      if (lex == "const" || lex == "volatile" || lex == "static") {
+      if (lex == "const" || lex == "volatile" || lex == "static" ||
+          lex == "restrict") {
         parser.advance();
         continue;
       }
       break;
     }
   }
+
+  skipAttributes();
 
   if (!parser.check(TokenType::IDENTIFIER) &&
       !parser.check(TokenType::DELIM_LPAREN)) {
@@ -197,13 +331,15 @@ ParsedDeclarator parseDeclarator(Parser &parser, const std::string &baseType,
       pointerCount++;
       while (!parser.isAtEnd() && parser.check(TokenType::IDENTIFIER)) {
         string lex = parser.peek().lexeme;
-        if (lex == "const" || lex == "volatile" || lex == "static") {
+        if (lex == "const" || lex == "volatile" || lex == "static" ||
+            lex == "restrict") {
           parser.advance();
           continue;
         }
         break;
       }
     }
+    skipAttributes();
     if (parser.check(TokenType::IDENTIFIER)) {
       result.name = parser.advance().lexeme;
     } else if (requireName) {
@@ -336,6 +472,7 @@ static std::shared_ptr<StructDeclaration>
 parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
   parser.consume(TokenType::DELIM_LBRACE,
                  "Expected '{' to begin struct declaration");
+  bool isPackedStruct = parser.structPackedFlag;
   vector<std::shared_ptr<VariableDeclaration>> members;
   vector<std::shared_ptr<UnionDeclaration>> nestedUnions;
   vector<std::shared_ptr<StructDeclaration>> nestedStructs;
@@ -359,6 +496,14 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
         parser.advance();
         continue;
       }
+      if (lex == "extern") {
+        parser.advance();
+        continue;
+      }
+      if (lex == "inline") {
+        parser.advance();
+        continue;
+      }
       if (lex == "volatile") {
         hasVolatile = true;
         parser.advance();
@@ -375,18 +520,14 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
         continue;
       }
       if (lex == "alignas" || lex == "_Alignas") {
-        parser.advance(); // consume alignas
-        if (parser.match(TokenType::DELIM_LPAREN)) {
-          int depth = 1;
-          while (!parser.isAtEnd() && depth > 0) {
-            if (parser.match(TokenType::DELIM_LPAREN))
-              depth++;
-            else if (parser.match(TokenType::DELIM_RPAREN))
-              depth--;
-            else
-              parser.advance();
-          }
+        parser.advance();
+        parser.consume(TokenType::DELIM_LPAREN, "Expected '(' after alignas");
+        ExpressionPtr alignExpr = parser.parseExpression();
+        if (auto lit = std::dynamic_pointer_cast<Literal>(alignExpr)) {
+          if (lit->type == Literal::LiteralType::Int && lit->intValue > 0)
+            parser.pendingAlignment = lit->intValue;
         }
+        parser.consume(TokenType::DELIM_RPAREN, "Expected ')' after alignas");
         continue;
       }
       break;
@@ -477,6 +618,9 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
         parser.advance();
         memberType = "long long";
       }
+    } else if (parser.peek().lexeme == "__builtin_va_list" ||
+               parser.peek().lexeme == "va_list") {
+      memberType = parser.advance().lexeme;
     } else if (isTypedefName(parser.peek().lexeme)) {
       TypedefInfo info = resolveTypedef(parser.advance().lexeme);
       memberType = info.underlyingType;
@@ -497,33 +641,12 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
 
     memberType = consumePointerTokens(parser, memberType);
 
-    string memberName;
-    if (parser.check(TokenType::IDENTIFIER)) {
-      memberName = parser.advance().lexeme;
-    } else if (isInlineUnion) {
-      isAnonymousUnionField = true;
-      memberName =
-          "__anon_union_member_" + std::to_string(anonymousUnionCounter++);
-    } else if (isInlineStruct) {
-      isAnonymousStructField = true;
-      memberName =
-          "__anon_struct_member_" + std::to_string(anonymousStructCounter++);
-    } else {
-      parser.error("Expected member name in struct declaration");
-    }
-    vector<ExpressionPtr> dimensions;
-    while (parser.match(TokenType::DELIM_LBRACKET)) {
-      if (parser.check(TokenType::DELIM_RBRACKET)) {
-        parser.advance();
-        dimensions.push_back(std::make_shared<Literal>(0));
-      } else {
-        ExpressionPtr dimExpr = parser.parseExpression();
-        parser.consume(TokenType::DELIM_RBRACKET,
-                       "Expected ']' after array dimension");
-        dimensions.push_back(dimExpr);
-      }
-    }
+    ParsedDeclarator memberDecl = parseDeclarator(parser, memberType, true);
+    std::string memberName = memberDecl.name;
+    std::vector<ExpressionPtr> dimensions = memberDecl.dimensions;
     dimensions.insert(dimensions.end(), typedefDims.begin(), typedefDims.end());
+    memberType = memberDecl.type;
+    bool hasEmptyArrayDimension = memberDecl.hasEmptyArrayDimension;
     std::optional<int> bitWidth = std::nullopt;
     if (parser.match(TokenType::DELIM_COLON)) {
       ExpressionPtr widthExpr = parser.parseExpression();
@@ -535,10 +658,12 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
     }
     parser.consume(TokenType::DELIM_SEMICOLON,
                    "Expected ';' after struct member declaration");
+    std::optional<int> align = parser.pendingAlignment;
+    parser.pendingAlignment = std::nullopt;
     members.push_back(std::make_shared<VariableDeclaration>(
-        memberType, memberName, bitWidth, std::nullopt, dimensions,
-        isAnonymousUnionField, isAnonymousStructField, inlineStructDecl,
-        inlineUnionDecl));
+        memberType, memberName, bitWidth, std::nullopt, dimensions, align,
+        hasEmptyArrayDimension, isAnonymousUnionField, isAnonymousStructField,
+        inlineStructDecl, inlineUnionDecl));
   }
   parser.consume(TokenType::DELIM_RBRACE,
                  "Expected '}' to close struct declaration");
@@ -546,8 +671,10 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
     tag = "__anon_struct_" + std::to_string(anonymousStructCounter++);
   }
   auto structDecl = std::make_shared<StructDeclaration>(
-      tag, members, nestedUnions, nestedStructs);
+      tag, members, nestedUnions, nestedStructs, isPackedStruct);
   structDecl->tag = tag;
+  structDecl->isPacked = isPackedStruct;
+  parser.structPackedFlag = false;
   return structDecl;
 }
 
@@ -570,8 +697,24 @@ static std::string parseTypeNameOnly(Parser &parser) {
   bool hasStatic = false;
   bool sawUnsigned = false;
   bool sawSigned = false;
+  bool sawAtomic = false;
   while (!parser.isAtEnd() && parser.check(TokenType::IDENTIFIER)) {
     std::string lex = parser.peek().lexeme;
+    if (lex == "_Atomic") {
+      parser.advance();
+      sawAtomic = true;
+      if (parser.match(TokenType::DELIM_LPAREN)) {
+        std::string inner = parseTypeNameOnly(parser);
+        parser.consume(TokenType::DELIM_RPAREN,
+                       "Expected ')' after _Atomic type name");
+        return "_Atomic " + inner;
+      }
+      continue;
+    }
+    if (lex == "_Noreturn") {
+      parser.advance();
+      continue;
+    }
     if (lex == "const") {
       hasConst = true;
       parser.advance();
@@ -579,6 +722,10 @@ static std::string parseTypeNameOnly(Parser &parser) {
     }
     if (lex == "static") {
       hasStatic = true;
+      parser.advance();
+      continue;
+    }
+    if (lex == "inline") {
       parser.advance();
       continue;
     }
@@ -608,6 +755,10 @@ static std::string parseTypeNameOnly(Parser &parser) {
     type = "bool";
   else if (parser.match(TokenType::KW_VOID))
     type = "void";
+  else if (parser.peek().lexeme == "max_align_t" ||
+           parser.peek().lexeme == "__builtin_va_list" ||
+           parser.peek().lexeme == "va_list")
+    type = parser.advance().lexeme;
   else if (parser.check(TokenType::KW_STRUCT) ||
            parser.peek().lexeme == "struct") {
     parser.advance();
@@ -637,6 +788,16 @@ static std::string parseTypeNameOnly(Parser &parser) {
     parser.error("Expected type");
   }
 
+  if (!type.empty() &&
+      (type.find("float") != string::npos ||
+       type.find("double") != string::npos) &&
+      parser.check(TokenType::IDENTIFIER) &&
+      (parser.peek().lexeme == "complex" ||
+       parser.peek().lexeme == "_Complex")) {
+    parser.advance();
+    type += " complex";
+  }
+
   if (sawUnsigned)
     type = "unsigned " + type;
   else if (sawSigned)
@@ -645,6 +806,8 @@ static std::string parseTypeNameOnly(Parser &parser) {
     type = "const " + type;
   if (hasStatic)
     type = "static " + type;
+  if (sawAtomic)
+    type = "_Atomic " + type;
 
   type = consumePointerTokens(parser, type);
   return type;
@@ -669,15 +832,19 @@ static std::vector<std::string> parseTypeList(Parser &parser) {
 //   parses a variable declaration given an already-determined type name (like
 //   "int" or "void*").
 DeclarationPtr Parser::parseVariableDeclarationWithType(
-    const string &givenType, const std::vector<ExpressionPtr> &typeDimensions) {
-  std::cerr << "[DEBUG] (parseVariableDeclarationWithType) current=" << current
-            << ", next tokens: ";
+    const string &givenType, const std::vector<ExpressionPtr> &typeDimensions,
+    std::shared_ptr<StructDeclaration> inlineStructDecl,
+    std::shared_ptr<UnionDeclaration> inlineUnionDecl) {
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parseVariableDeclarationWithType) current="
+              << current << ", next tokens: ";
   for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
     std::cerr << static_cast<int>(tokens[current + i].type) << "('"
               << tokens[current + i].lexeme << "') ";
   }
   std::cerr << std::endl;
   vector<std::shared_ptr<VariableDeclaration>> decls;
+  std::optional<int> align = pendingAlignment;
   do {
     ParsedDeclarator declInfo = parseDeclarator(*this, givenType, true);
     vector<ExpressionPtr> dimensions = declInfo.dimensions;
@@ -688,13 +855,16 @@ DeclarationPtr Parser::parseVariableDeclarationWithType(
       if (check(TokenType::DELIM_LBRACE))
         initializer = parseInitializerList();
       else
-        initializer = parseExpression();
+        initializer = parseAssignment();
     }
     decls.push_back(std::make_shared<VariableDeclaration>(
-        declInfo.type, declInfo.name, std::nullopt, initializer, dimensions));
+        declInfo.type, declInfo.name, std::nullopt, initializer, dimensions,
+        align, declInfo.hasEmptyArrayDimension, false, false, inlineStructDecl,
+        inlineUnionDecl));
   } while (match(TokenType::DELIM_COMMA));
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after variable declaration");
+  pendingAlignment = std::nullopt;
   if (decls.size() == 1)
     return decls[0];
   else
@@ -707,8 +877,9 @@ DeclarationPtr Parser::parseVariableDeclarationWithType(
 //   body or semicolon.
 DeclarationPtr
 Parser::parseFunctionDeclarationWithType(const string &givenType) {
-  std::cerr << "[DEBUG] (parseFunctionDeclarationWithType) current=" << current
-            << ", next tokens: ";
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parseFunctionDeclarationWithType) current="
+              << current << ", next tokens: ";
   for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
     std::cerr << static_cast<int>(tokens[current + i].type) << "('"
               << tokens[current + i].lexeme << "') ";
@@ -724,25 +895,44 @@ Parser::parseFunctionDeclarationWithType(const string &givenType) {
 
   // If next is a semicolon => forward-decl
   if (match(TokenType::DELIM_SEMICOLON)) {
-    return std::make_shared<FunctionDeclaration>(returnType, funcName,
-                                                 parameters, nullptr);
+    return std::make_shared<FunctionDeclaration>(
+        returnType, funcName, parameters, nullptr, varArgsPending);
   }
 
   // Otherwise parse the function body
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin function body");
+  std::string prevFunc = currentFunctionName;
+  currentFunctionName = funcName;
   StatementPtr body = parseCompoundStatement();
+  currentFunctionName = prevFunc;
   return std::make_shared<FunctionDeclaration>(returnType, funcName, parameters,
-                                               body);
+                                               body, varArgsPending);
 }
 
 DeclarationPtr Parser::parseDeclaration() {
-  std::cerr << "[DEBUG] (parseDeclaration) current=" << current
-            << ", next tokens: ";
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] (parseDeclaration) current=" << current
+              << ", next tokens: ";
   for (int i = 0; i < 3 && current + i < tokens.size(); ++i) {
     std::cerr << static_cast<int>(tokens[current + i].type) << "('"
               << tokens[current + i].lexeme << "') ";
   }
   std::cerr << std::endl;
+  if (peek().lexeme == "_Static_assert") {
+    advance();
+    consume(TokenType::DELIM_LPAREN, "Expected '(' after _Static_assert");
+    ExpressionPtr cond = parseExpression();
+    std::string msg;
+    if (match(TokenType::DELIM_COMMA) && check(TokenType::LITERAL_STRING)) {
+      msg = advance().lexeme;
+      if (msg.size() >= 2 && msg.front() == '"' && msg.back() == '"')
+        msg = msg.substr(1, msg.size() - 2);
+    }
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after _Static_assert");
+    consume(TokenType::DELIM_SEMICOLON,
+            "Expected ';' after _Static_assert declaration");
+    return std::make_shared<StaticAssertDeclaration>(cond, msg);
+  }
   if (peek().lexeme == "typedef") {
     advance();
     return parseTypedefDeclaration();
@@ -751,14 +941,52 @@ DeclarationPtr Parser::parseDeclaration() {
     return parseTypedefDeclaration();
   }
 
+  auto skipAttributesLookahead = [this](size_t idx) {
+    while (idx < tokens.size() && tokens[idx].lexeme == "__attribute__") {
+      idx++; // consume __attribute__
+      if (idx < tokens.size() && tokens[idx].type == TokenType::DELIM_LPAREN) {
+        int depth = 1;
+        idx++;
+        while (idx < tokens.size() && depth > 0) {
+          if (tokens[idx].type == TokenType::DELIM_LPAREN)
+            depth++;
+          else if (tokens[idx].type == TokenType::DELIM_RPAREN)
+            depth--;
+          idx++;
+        }
+      }
+    }
+    return idx;
+  };
+
   if (peek().type == TokenType::KW_STRUCT || peek().lexeme == "struct") {
     size_t save = current;
     advance();
-    if (check(TokenType::DELIM_LBRACE) ||
-        (check(TokenType::IDENTIFIER) && current + 1 < tokens.size() &&
-         tokens[current + 1].type == TokenType::DELIM_LBRACE)) {
-      current = save;
-      return parseStructDeclaration();
+    bool looksLikeStandaloneStruct = false;
+    size_t idx = skipAttributesLookahead(current);
+    if (idx < tokens.size() && tokens[idx].type == TokenType::IDENTIFIER) {
+      idx++;
+      idx = skipAttributesLookahead(idx);
+    }
+    if (idx < tokens.size() && tokens[idx].type == TokenType::DELIM_LBRACE) {
+      int depth = 0;
+      for (size_t i = idx; i < tokens.size(); ++i) {
+        if (tokens[i].type == TokenType::DELIM_LBRACE)
+          depth++;
+        else if (tokens[i].type == TokenType::DELIM_RBRACE) {
+          depth--;
+          if (depth == 0) {
+            if (i + 1 < tokens.size() &&
+                tokens[i + 1].type == TokenType::DELIM_SEMICOLON)
+              looksLikeStandaloneStruct = true;
+            break;
+          }
+        }
+      }
+      if (looksLikeStandaloneStruct) {
+        current = save;
+        return parseStructDeclaration();
+      }
     }
     current = save;
   }
@@ -788,8 +1016,43 @@ DeclarationPtr Parser::parseDeclaration() {
   bool hasConstQualifier = false;
   bool hasStaticQualifier = false;
   bool hasVolatileQualifier = false;
+  std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr;
+  std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr;
   string baseType = parseSimpleType(*this, hasConstQualifier,
-                                    hasStaticQualifier, hasVolatileQualifier);
+                                    hasStaticQualifier, hasVolatileQualifier,
+                                    &inlineStructDecl, &inlineUnionDecl);
+
+  // Handle functions returning function pointers, e.g.
+  // int (*fn(char c))(int, int)
+  {
+    size_t save = current;
+    if (match(TokenType::DELIM_LPAREN) && match(TokenType::OP_MULTIPLY)) {
+      if (check(TokenType::IDENTIFIER)) {
+        string funcName = advance().lexeme;
+        consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
+        auto parameters = parseParameters();
+        consume(TokenType::DELIM_RPAREN, "Expected ')' after parameter list");
+        consume(TokenType::DELIM_RPAREN,
+                "Expected ')' to close function pointer declarator");
+        if (match(TokenType::DELIM_LPAREN)) {
+          auto retParamTypes = parseParameterTypeList(*this);
+          consume(TokenType::DELIM_RPAREN,
+                  "Expected ')' after return function parameters");
+          string returnType = makeFunctionPointerType(baseType, retParamTypes);
+          if (match(TokenType::DELIM_SEMICOLON)) {
+            return std::make_shared<FunctionDeclaration>(returnType, funcName,
+                                                         parameters, nullptr);
+          }
+          consume(TokenType::DELIM_LBRACE,
+                  "Expected '{' to begin function body");
+          StatementPtr body = parseCompoundStatement();
+          return std::make_shared<FunctionDeclaration>(returnType, funcName,
+                                                       parameters, body);
+        }
+      }
+    }
+    current = save;
+  }
 
   size_t tmp = current;
   size_t pointerBeforeFunc = 0;
@@ -798,11 +1061,13 @@ DeclarationPtr Parser::parseDeclaration() {
     tmp++;
   }
   if (tmp + 1 < tokens.size()) {
-    std::cerr << "[DEBUG] (parseDeclaration) lookahead token=" << tokens[tmp].lexeme
-              << " (" << static_cast<int>(tokens[tmp].type)
-              << ") next=" << tokens[tmp + 1].lexeme << " ("
-              << static_cast<int>(tokens[tmp + 1].type)
-              << ") pointerBeforeFunc=" << pointerBeforeFunc << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] (parseDeclaration) lookahead token="
+                << tokens[tmp].lexeme << " ("
+                << static_cast<int>(tokens[tmp].type)
+                << ") next=" << tokens[tmp + 1].lexeme << " ("
+                << static_cast<int>(tokens[tmp + 1].type)
+                << ") pointerBeforeFunc=" << pointerBeforeFunc << std::endl;
   }
   if (tmp < tokens.size() && tokens[tmp].type == TokenType::IDENTIFIER &&
       tmp + 1 < tokens.size() &&
@@ -813,7 +1078,8 @@ DeclarationPtr Parser::parseDeclaration() {
     return parseFunctionDeclarationWithType(returnType);
   }
 
-  return parseVariableDeclarationWithType(baseType);
+  return parseVariableDeclarationWithType(baseType, {}, inlineStructDecl,
+                                          inlineUnionDecl);
 }
 
 DeclarationPtr Parser::parseTypedefDeclaration() {
@@ -822,13 +1088,33 @@ DeclarationPtr Parser::parseTypedefDeclaration() {
         tokens[current + 1].type == TokenType::DELIM_LBRACE) ||
        (current + 2 < tokens.size() &&
         tokens[current + 1].type == TokenType::IDENTIFIER &&
-        tokens[current + 2].type == TokenType::DELIM_LBRACE))) {
+        tokens[current + 2].type == TokenType::DELIM_LBRACE) ||
+       (current + 1 < tokens.size() &&
+        tokens[current + 1].lexeme == "__attribute__"))) {
     advance(); // consume 'struct'
+    auto consumeStructAttributes = [this]() {
+      while (check(TokenType::IDENTIFIER) && peek().lexeme == "__attribute__") {
+        advance();
+        consume(TokenType::DELIM_LPAREN, "Expected '(' after __attribute__");
+        int depth = 1;
+        while (depth > 0 && !isAtEnd()) {
+          Token t = advance();
+          if (t.lexeme == "packed")
+            structPackedFlag = true;
+          if (t.type == TokenType::DELIM_LPAREN)
+            depth++;
+          else if (t.type == TokenType::DELIM_RPAREN)
+            depth--;
+        }
+      }
+    };
+    consumeStructAttributes();
     optional<string> tag = std::nullopt;
     if (check(TokenType::IDENTIFIER) && current + 1 < tokens.size() &&
         tokens[current + 1].type == TokenType::DELIM_LBRACE) {
       tag = advance().lexeme;
     }
+    consumeStructAttributes();
     auto structDecl = parseStructDefinition(*this, tag);
     if (!structDecl->tag.has_value()) {
       structDecl->tag =
@@ -871,6 +1157,7 @@ DeclarationPtr Parser::parseTypedefDeclaration() {
 
 vector<std::pair<string, string>> Parser::parseParameters() {
   vector<std::pair<string, string>> params;
+  varArgsPending = false;
   if (check(TokenType::DELIM_RPAREN))
     return params;
 
@@ -882,6 +1169,13 @@ vector<std::pair<string, string>> Parser::parseParameters() {
   }
 
   do {
+    if (check(TokenType::DOT) && current + 2 < tokens.size() &&
+        tokens[current + 1].type == TokenType::DOT &&
+        tokens[current + 2].type == TokenType::DOT) {
+      current += 3;
+      varArgsPending = true;
+      break;
+    }
     bool hasConst = false;
     bool hasStatic = false;
     bool hasVolatile = false;
@@ -894,9 +1188,9 @@ vector<std::pair<string, string>> Parser::parseParameters() {
       size_t firstBracket = paramType.find('[');
       if (firstBracket != string::npos) {
         size_t endBracket = paramType.find(']', firstBracket);
-        string tail =
-            (endBracket != string::npos) ? paramType.substr(endBracket + 1)
-                                         : "";
+        string tail = (endBracket != string::npos)
+                          ? paramType.substr(endBracket + 1)
+                          : "";
         string elementType = paramType.substr(0, firstBracket) + tail;
         paramType = elementType + "*";
       } else {
@@ -912,35 +1206,89 @@ vector<std::pair<string, string>> Parser::parseParameters() {
 ExpressionPtr Parser::parseInitializerList() {
   consume(TokenType::DELIM_LBRACE, "Expected '{' to start initializer list");
   vector<ExpressionPtr> elems;
+  std::vector<std::optional<std::string>> designators;
+  std::optional<int> designatedIndex;
+  std::optional<std::string> designatedField;
 
-  auto parseOne = [this]() -> ExpressionPtr {
-    // Handle designated initializers by consuming the designator tokens but
-    // otherwise treating the initializer like a normal element. Designators
-    // are ignored for now which still preserves the value order for the
-    // struct-centric tests.
-    if (match(TokenType::DOT)) {
-      consume(TokenType::IDENTIFIER,
-              "Expected identifier after '.' in designated initializer");
-      consume(TokenType::OP_ASSIGN, "Expected '=' after designator");
+  auto parseOne = [this, &designatedIndex,
+                   &designatedField]() -> ExpressionPtr {
+    designatedField.reset();
+    // Handle designated initializers; designators are consumed and ignored for
+    // ordering purposes.
+    while (true) {
+      if (match(TokenType::DOT)) {
+        if (!check(TokenType::IDENTIFIER))
+          error("Expected identifier after '.' in designated initializer");
+        designatedField = peek().lexeme;
+        advance();
+        consume(TokenType::OP_ASSIGN, "Expected '=' after designator");
+        continue;
+      }
+      if (match(TokenType::DELIM_LBRACKET)) {
+        int idx = 0;
+        if (!check(TokenType::DELIM_RBRACKET)) {
+          ExpressionPtr idxExpr = parseExpression();
+          if (auto lit = std::dynamic_pointer_cast<Literal>(idxExpr))
+            idx = lit->intValue;
+        }
+        consume(TokenType::DELIM_RBRACKET,
+                "Expected ']' after array designator");
+        consume(TokenType::OP_ASSIGN, "Expected '=' after designator");
+        designatedIndex = idx;
+        continue;
+      }
+      break;
     }
 
     if (check(TokenType::DELIM_LBRACE)) {
       return parseInitializerList();
     }
-    return parseExpression();
+    return parseAssignment();
   };
 
   if (!check(TokenType::DELIM_RBRACE)) {
-    elems.push_back(parseOne());
+    auto elem = parseOne();
+    if (designatedIndex.has_value()) {
+      if (elems.size() <= static_cast<size_t>(designatedIndex.value())) {
+        elems.resize(designatedIndex.value() + 1, std::make_shared<Literal>(0));
+        designators.resize(designatedIndex.value() + 1);
+      }
+      elems[designatedIndex.value()] = elem;
+      if (designatedField.has_value()) {
+        designators[designatedIndex.value()] = designatedField;
+      }
+      designatedIndex.reset();
+      designatedField.reset();
+    } else {
+      elems.push_back(elem);
+      designators.push_back(designatedField);
+      designatedField.reset();
+    }
     while (match(TokenType::DELIM_COMMA)) {
       if (check(TokenType::DELIM_RBRACE))
         break;
-      elems.push_back(parseOne());
+      auto nextElem = parseOne();
+      if (designatedIndex.has_value()) {
+        if (elems.size() <= static_cast<size_t>(designatedIndex.value())) {
+          elems.resize(designatedIndex.value() + 1,
+                       std::make_shared<Literal>(0));
+          designators.resize(designatedIndex.value() + 1);
+        }
+        elems[designatedIndex.value()] = nextElem;
+        if (designatedField.has_value())
+          designators[designatedIndex.value()] = designatedField;
+        designatedIndex.reset();
+        designatedField.reset();
+      } else {
+        elems.push_back(nextElem);
+        designators.push_back(designatedField);
+        designatedField.reset();
+      }
     }
   }
 
   consume(TokenType::DELIM_RBRACE, "Expected '}' to end initializer list");
-  return std::make_shared<InitializerList>(elems);
+  return std::make_shared<InitializerList>(elems, designators);
 }
 
 DeclarationPtr Parser::parseStructDeclaration() {
@@ -949,30 +1297,53 @@ DeclarationPtr Parser::parseStructDeclaration() {
   else
     error("Expected 'struct' keyword");
 
+  auto skipAttributes = [this]() {
+    while (check(TokenType::IDENTIFIER) && peek().lexeme == "__attribute__") {
+      advance(); // consume __attribute__
+      consume(TokenType::DELIM_LPAREN, "Expected '(' after __attribute__");
+      int depth = 1;
+      while (depth > 0 && !isAtEnd()) {
+        Token t = advance();
+        if (t.lexeme == "packed")
+          structPackedFlag = true;
+        if (t.type == TokenType::DELIM_LPAREN)
+          depth++;
+        else if (t.type == TokenType::DELIM_RPAREN)
+          depth--;
+      }
+    }
+  };
+
+  skipAttributes();
+
   optional<string> tag = std::nullopt;
   if (check(TokenType::IDENTIFIER))
     tag = advance().lexeme;
+  skipAttributes();
   if (check(TokenType::DELIM_LBRACE)) {
     auto structDecl = parseStructDefinition(*this, tag);
     consume(TokenType::DELIM_SEMICOLON,
             "Expected ';' after struct declaration");
     return structDecl;
   } else {
+    structPackedFlag = false;
     return nullptr;
   }
 }
 
 DeclarationPtr Parser::parseUnionDeclaration() {
-  std::cerr
-      << "[DEBUG] parseUnionDeclaration: Starting union declaration parsing"
-      << std::endl;
+  if (educcDebugEnabled())
+    std::cerr
+        << "[DEBUG] parseUnionDeclaration: Starting union declaration parsing"
+        << std::endl;
   consume(TokenType::KW_UNION, "Expected 'union' keyword");
   optional<string> tag = std::nullopt;
   if (check(TokenType::IDENTIFIER))
     tag = advance().lexeme;
-  std::cerr << "[DEBUG] parseUnionDeclaration: Tag is "
-            << (tag.has_value() ? "'" + tag.value() + "'" : "nullopt")
-            << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] parseUnionDeclaration: Tag is "
+              << (tag.has_value() ? "'" + tag.value() + "'" : "nullopt")
+              << std::endl;
   consume(TokenType::DELIM_LBRACE, "Expected '{' to begin union declaration");
   vector<std::shared_ptr<VariableDeclaration>> members;
   while (!check(TokenType::DELIM_RBRACE) && !isAtEnd()) {
@@ -981,8 +1352,10 @@ DeclarationPtr Parser::parseUnionDeclaration() {
   }
   consume(TokenType::DELIM_RBRACE, "Expected '}' to close union declaration");
   consume(TokenType::DELIM_SEMICOLON, "Expected ';' after union declaration");
-  std::cerr << "[DEBUG] parseUnionDeclaration: Creating UnionDeclaration with "
-            << members.size() << " members" << std::endl;
+  if (educcDebugEnabled())
+    std::cerr
+        << "[DEBUG] parseUnionDeclaration: Creating UnionDeclaration with "
+        << members.size() << " members" << std::endl;
   return std::make_shared<UnionDeclaration>(tag, members);
 }
 
@@ -1005,7 +1378,7 @@ DeclarationPtr Parser::parseEnumDeclaration() {
     string enumeratorName = advance().lexeme;
     optional<ExpressionPtr> initializer = std::nullopt;
     if (match(TokenType::OP_ASSIGN))
-      initializer = parseExpression();
+      initializer = parseAssignment();
     enumerators.push_back({enumeratorName, initializer});
   }
   consume(TokenType::DELIM_RBRACE, "Expected '}' to close enum declaration");
@@ -1121,6 +1494,8 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
 
   consume(TokenType::DELIM_SEMICOLON,
           "Expected ';' after union member declaration");
+  std::optional<int> align = pendingAlignment;
+  pendingAlignment = std::nullopt;
   return std::make_shared<VariableDeclaration>(type, name, std::nullopt,
-                                               std::nullopt, dimensions);
+                                               std::nullopt, dimensions, align);
 }

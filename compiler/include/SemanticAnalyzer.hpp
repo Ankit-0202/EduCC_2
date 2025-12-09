@@ -32,9 +32,10 @@ private:
   SymbolTable symbolTable;
   std::vector<std::string> getParameterTypes(
       const std::vector<std::pair<std::string, std::string>> &parameters);
-  bool isFunctionSignatureCompatible(
-      const Symbol &existing, const std::string &returnType,
-      const std::vector<std::string> &paramTypes) const;
+  bool isFunctionSignatureCompatible(const Symbol &existing,
+                                     const std::string &returnType,
+                                     const std::vector<std::string> &paramTypes,
+                                     bool isVarArgs) const;
 };
 
 #endif // SEMANTIC_ANALYZER_HPP

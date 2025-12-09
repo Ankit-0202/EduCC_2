@@ -1,6 +1,7 @@
 #include "CodeGenerator/Helpers.hpp"
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
+#include "Debug.hpp"
 #include "TypeRegistry.hpp"
 #include <iostream>
 #include <memory>
@@ -13,26 +14,33 @@ using std::string;
 // normalizeTag is now defined in TypeRegistry.cpp
 
 std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
-  std::cerr << "[DEBUG] getEffectiveType: Starting" << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] getEffectiveType: Starting" << std::endl;
   // Case 1: Identifier
   if (auto id = std::dynamic_pointer_cast<Identifier>(expr)) {
-    std::cerr << "[DEBUG] getEffectiveType: Processing identifier: " << id->name
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] getEffectiveType: Processing identifier: "
+                << id->name << std::endl;
+    if (id->name == "I")
+      return "double complex";
     auto it = CG.declaredTypeStrings.find(id->name);
     if (it == CG.declaredTypeStrings.end())
       throw runtime_error("CodeGenerator Error: Declared type for variable '" +
                           id->name + "' not found.");
-    std::cerr << "[DEBUG] getEffectiveType: Found type: " << it->second
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] getEffectiveType: Found type: " << it->second
+                << std::endl;
     return it->second;
   }
 
   // Case 2: Member Access: base.member
   if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    std::cerr << "[DEBUG] Processing member access: " << mem->member
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] Processing member access: " << mem->member
+                << std::endl;
     string baseType = getEffectiveType(CG, mem->base);
-    std::cerr << "[DEBUG] Base type: " << baseType << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] Base type: " << baseType << std::endl;
 
     // If the base is a union.
     if (baseType.rfind("union ", 0) == 0) {
@@ -80,6 +88,8 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
   if (auto un = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
     string operandType = getEffectiveType(CG, un->operand);
     if (un->op == "*") {
+      if (operandType.rfind("fnptr:", 0) == 0)
+        return operandType;
       if (operandType.empty() || operandType.back() != '*')
         throw runtime_error(
             "CodeGenerator Error: Attempt to deref non-pointer type '" +
@@ -87,6 +97,8 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
       operandType.pop_back(); // Remove one '*'
       return operandType;
     } else if (un->op == "&") {
+      if (operandType.rfind("fnptr:", 0) == 0)
+        return operandType + "*";
       operandType += "*";
       return operandType;
     } else {
@@ -98,10 +110,13 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
   // Case 4: Array Access (handle array indexing)
   if (auto arr = std::dynamic_pointer_cast<ArrayAccess>(expr)) {
     string baseType = getEffectiveType(CG, arr->base);
-    // Remove one level of array dimension
-    size_t pos = baseType.find('[');
-    if (pos != string::npos) {
-      return baseType.substr(0, pos);
+    // Remove one level of array dimension while preserving remaining suffix.
+    size_t lb = baseType.find('[');
+    if (lb != string::npos) {
+      size_t rb = baseType.find(']', lb);
+      string prefix = baseType.substr(0, lb);
+      string suffix = (rb != string::npos) ? baseType.substr(rb + 1) : "";
+      return prefix + suffix;
     }
     if (!baseType.empty() && baseType.back() == '*') {
       baseType.pop_back();
@@ -111,6 +126,23 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
       }
       return baseType;
     }
+    // Support the commutative form i[arr] by checking the index operand.
+    string idxType = getEffectiveType(CG, arr->index);
+    lb = idxType.find('[');
+    if (lb != string::npos) {
+      size_t rb = idxType.find(']', lb);
+      string prefix = idxType.substr(0, lb);
+      string suffix = (rb != string::npos) ? idxType.substr(rb + 1) : "";
+      return prefix + suffix;
+    }
+    if (!idxType.empty() && idxType.back() == '*') {
+      idxType.pop_back();
+      while (!idxType.empty() &&
+             isspace(static_cast<unsigned char>(idxType.back()))) {
+        idxType.pop_back();
+      }
+      return idxType;
+    }
     throw runtime_error("CodeGenerator Error: Cannot index non-array type '" +
                         baseType + "'.");
   }
@@ -118,7 +150,7 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
   if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
     switch (lit->type) {
     case Literal::LiteralType::Int:
-      return "int";
+      return !lit->literalType.empty() ? lit->literalType : "int";
     case Literal::LiteralType::Float:
       return "float";
     case Literal::LiteralType::Double:
@@ -134,19 +166,29 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
 
   // Case 5: Binary Expression (handle pointer arithmetic)
   if (auto bin = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
+    auto decayArrayToPointer = [](std::string t) {
+      size_t lb = t.find('[');
+      if (lb != string::npos) {
+        t = t.substr(0, lb);
+        t += "*";
+      }
+      return t;
+    };
     if (bin->op == "+" || bin->op == "-") {
       string leftType = getEffectiveType(CG, bin->left);
       string rightType = getEffectiveType(CG, bin->right);
+      string leftDecay = decayArrayToPointer(leftType);
+      string rightDecay = decayArrayToPointer(rightType);
       // If one operand is a pointer and the other is int, the result is the
       // pointer type.
-      if (!leftType.empty() && leftType.back() == '*' && rightType == "int")
-        return leftType;
-      if (bin->op == "+" && !rightType.empty() && rightType.back() == '*' &&
+      if (!leftDecay.empty() && leftDecay.back() == '*' && rightType == "int")
+        return leftDecay;
+      if (bin->op == "+" && !rightDecay.empty() && rightDecay.back() == '*' &&
           leftType == "int")
-        return rightType;
+        return rightDecay;
       // For subtraction between two pointers, result is an int.
-      if (bin->op == "-" && !leftType.empty() && leftType.back() == '*' &&
-          !rightType.empty() && rightType.back() == '*')
+      if (bin->op == "-" && !leftDecay.empty() && leftDecay.back() == '*' &&
+          !rightDecay.empty() && rightDecay.back() == '*')
         return "int";
     }
     // Fallback: return the effective type of the left operand.
@@ -155,6 +197,47 @@ std::string getEffectiveType(CodeGenerator &CG, const ExpressionPtr &expr) {
 
   if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
     return castExpr->castType;
+  }
+
+  if (std::dynamic_pointer_cast<SizeOfExpression>(expr)) {
+    return "size_t";
+  }
+
+  if (std::dynamic_pointer_cast<AlignOfExpression>(expr)) {
+    return "size_t";
+  }
+
+  if (auto gen = std::dynamic_pointer_cast<GenericSelection>(expr)) {
+    if (!gen->associations.empty())
+      return getEffectiveType(CG, gen->associations.front().second);
+    if (gen->defaultExpr)
+      return getEffectiveType(CG, gen->defaultExpr.value());
+    return "int";
+  }
+
+  if (auto call = std::dynamic_pointer_cast<FunctionCall>(expr)) {
+    if (!call->functionName.empty()) {
+      auto it = CG.declaredTypeStrings.find(call->functionName);
+      if (it != CG.declaredTypeStrings.end())
+        return it->second;
+    }
+    return "int";
+  }
+
+  if (auto compLit = std::dynamic_pointer_cast<CompoundLiteral>(expr)) {
+    return compLit->type;
+  }
+
+  if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
+    return getEffectiveType(CG, assign->lhs);
+  }
+
+  if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
+    return getEffectiveType(CG, post->operand);
+  }
+
+  if (auto tern = std::dynamic_pointer_cast<TernaryExpression>(expr)) {
+    return getEffectiveType(CG, tern->trueExpr);
   }
 
   // (No branch is provided for function calls, since they are not used in

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL_GCC="/opt/homebrew/bin/gcc-15"
+
+if [[ "${1:-}" == "--version" || "${1:-}" == "-dumpversion" || "${1:-}" == "-dumpmachine" ]]; then
+  exec "$REAL_GCC" "$@"
+fi
+
+EXTRA_FLAGS=(-fgnu89-inline -Wno-implicit-function-declaration)
+exec "$REAL_GCC" "${EXTRA_FLAGS[@]}" "$@"

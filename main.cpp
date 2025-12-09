@@ -1,5 +1,6 @@
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
+#include "Debug.hpp"
 #include "Lexer.hpp"
 #include "Linker.hpp"
 #include "Parser.hpp"
@@ -271,11 +272,13 @@ int main(int argc, char *argv[]) {
               << "'.\n";
     return 1;
   }
-  std::cerr << "[DEBUG] main: Source file opened successfully" << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] main: Source file opened successfully" << std::endl;
   std::stringstream srcBuffer;
   srcBuffer << srcFile.rdbuf();
   std::string originalSource = srcBuffer.str();
-  std::cerr << "[DEBUG] main: Source file read successfully" << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] main: Source file read successfully" << std::endl;
   std::cout << "===== Original Source =====\n";
   std::cout << originalSource << "\n";
   std::cout << "===========================\n\n";
@@ -289,11 +292,14 @@ int main(int argc, char *argv[]) {
   Preprocessor preprocessor(systemPaths, userPaths);
   std::string preprocessedSource;
   try {
-    std::cerr << "[DEBUG] main: About to call preprocessor.preprocess"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: About to call preprocessor.preprocess"
+                << std::endl;
     preprocessedSource = preprocessor.preprocess(config.sourcePath);
-    std::cerr << "[DEBUG] main: preprocessor.preprocess completed successfully"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr
+          << "[DEBUG] main: preprocessor.preprocess completed successfully"
+          << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Preprocessing Error: " << e.what() << "\n";
     return 1;
@@ -309,10 +315,12 @@ int main(int argc, char *argv[]) {
   Lexer lexer(preprocessedSource);
   std::vector<Token> tokens;
   try {
-    std::cerr << "[DEBUG] main: About to call lexer.tokenize" << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: About to call lexer.tokenize" << std::endl;
     tokens = lexer.tokenize();
-    std::cerr << "[DEBUG] main: lexer.tokenize completed successfully"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: lexer.tokenize completed successfully"
+                << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Lexer Error: " << e.what() << "\n";
     return 1;
@@ -324,10 +332,12 @@ int main(int argc, char *argv[]) {
   Parser parser(tokens);
   std::shared_ptr<Program> ast;
   try {
-    std::cerr << "[DEBUG] main: About to call parser.parse" << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: About to call parser.parse" << std::endl;
     ast = parser.parse();
-    std::cerr << "[DEBUG] main: parser.parse completed successfully"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: parser.parse completed successfully"
+                << std::endl;
   } catch (const std::exception &e) {
     std::cerr << "Parser Error: " << e.what() << "\n";
     return 1;
@@ -338,11 +348,14 @@ int main(int argc, char *argv[]) {
    */
   SemanticAnalyzer semanticAnalyzer;
   try {
-    std::cerr << "[DEBUG] main: About to call semanticAnalyzer.analyze"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: About to call semanticAnalyzer.analyze"
+                << std::endl;
     semanticAnalyzer.analyze(ast);
-    std::cerr << "[DEBUG] main: semanticAnalyzer.analyze completed successfully"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr
+          << "[DEBUG] main: semanticAnalyzer.analyze completed successfully"
+          << std::endl;
     std::cout << "Semantic analysis completed successfully.\n";
   } catch (const std::exception &e) {
     std::cerr << "Semantic Analysis Error: " << e.what() << "\n";
@@ -354,10 +367,12 @@ int main(int argc, char *argv[]) {
    */
   CodeGenerator codeGen;
   try {
-    std::cerr << "[DEBUG] main: About to call generateCode" << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: About to call generateCode" << std::endl;
     std::unique_ptr<llvm::Module> module = codeGen.generateCode(ast);
-    std::cerr << "[DEBUG] main: generateCode completed successfully"
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] main: generateCode completed successfully"
+                << std::endl;
     std::error_code EC;
     llvm::raw_fd_ostream dest(config.irOutputPath, EC,
                               static_cast<llvm::sys::fs::OpenFlags>(0));

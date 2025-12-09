@@ -38,6 +38,8 @@ public:
       const std::shared_ptr<VariableDeclaration> &varDecl);
   void storeInitializerValue(const ExpressionPtr &init, llvm::Type *type,
                              llvm::Value *ptr);
+  void registerStructType(const std::shared_ptr<StructDeclaration> &structDecl);
+  void registerUnionType(const std::shared_ptr<UnionDeclaration> &unionDecl);
 
   // Get the LLVM type corresponding to a C type string.
   llvm::Type *getLLVMType(const std::string &type);
@@ -67,6 +69,13 @@ public:
   std::vector<std::unordered_set<std::string>> declaredVarStack;
   std::unordered_map<std::string, llvm::Type *> declaredTypes;
   std::unordered_map<std::string, std::string> declaredTypeStrings;
+  std::unordered_map<std::string, std::vector<llvm::Type *>> typeShadowStack;
+  std::unordered_map<std::string, std::vector<std::string>>
+      typeStringShadowStack;
+  std::unordered_map<std::string, unsigned> declaredAlignments;
+  std::unordered_set<std::string> dynamicArrayVars;
+  std::unordered_map<std::string, std::vector<llvm::Value *>>
+      dynamicArrayDimensions;
 
   // For function parameters allocation.
   std::unordered_map<std::string, llvm::Value *> localVariables;

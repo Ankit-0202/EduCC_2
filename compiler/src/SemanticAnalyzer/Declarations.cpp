@@ -1,10 +1,13 @@
 #include "AST.hpp"
+#include "Debug.hpp"
 #include "SemanticAnalyzer.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <typeinfo>
 #include <vector>
 
 using std::runtime_error;
@@ -24,6 +27,10 @@ static string normalizeBaseType(string type) {
   stripPrefix(type, "static ");
   stripPrefix(type, "const ");
   stripPrefix(type, "volatile ");
+  stripPrefix(type, "_Atomic ");
+  stripPrefix(type, "_Atomic");
+  stripPrefix(type, "_Thread_local ");
+  stripPrefix(type, "_Thread_local");
   if (type.rfind("unsigned ", 0) == 0)
     stripPrefix(type, "unsigned ");
   else if (type.rfind("signed ", 0) == 0)
@@ -34,14 +41,196 @@ static string normalizeBaseType(string type) {
   return type;
 }
 
+static std::optional<long long> getTypeSize(const std::string &rawType) {
+  std::string type = rawType;
+  if (type.find('*') != std::string::npos)
+    return 8;
+  size_t lb = type.find('[');
+  if (lb != std::string::npos) {
+    std::string base = type.substr(0, lb);
+    auto baseSize = getTypeSize(base);
+    if (!baseSize.has_value())
+      return std::nullopt;
+    size_t rb = type.find(']', lb);
+    long long len = 1;
+    if (rb != std::string::npos && rb > lb + 1) {
+      try {
+        len = std::stoll(type.substr(lb + 1, rb - lb - 1));
+      } catch (...) {
+        len = 1;
+      }
+    }
+    return baseSize.value() * len;
+  }
+
+  std::string base = normalizeBaseType(type);
+  if (base == "char" || base == "bool")
+    return 1;
+  if (base == "short")
+    return 2;
+  if (base == "int")
+    return 4;
+  if (base == "long" || base == "long long")
+    return 8;
+  if (base == "float")
+    return 4;
+  if (base == "double")
+    return 8;
+  if (base == "size_t" || base == "uintptr_t" || base == "intptr_t" ||
+      base == "ptrdiff_t" || base == "ssize_t" || base == "max_align_t" ||
+      base == "uint64_t" || base == "int64_t")
+    return 8;
+  if (base == "uint32_t" || base == "int32_t")
+    return 4;
+  if (base == "uint16_t" || base == "int16_t")
+    return 2;
+  if (base == "uint8_t" || base == "int8_t")
+    return 1;
+  if (base.rfind("struct ", 0) == 0 || base.rfind("union ", 0) == 0) {
+    std::string tag = normalizeTag(base.substr(base.find(' ') + 1));
+    if (auto *info = getAggregateTypeInfo(tag)) {
+      if (info->totalSize > 0)
+        return static_cast<long long>(info->totalSize);
+    }
+  }
+  return std::nullopt;
+}
+
+static std::optional<long long> evaluateConstant(const ExpressionPtr &expr,
+                                                 SemanticAnalyzer &analyzer) {
+  if (!expr)
+    return std::nullopt;
+  if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+    switch (lit->type) {
+    case Literal::LiteralType::Int:
+      return static_cast<long long>(lit->intValue);
+    case Literal::LiteralType::Bool:
+      return lit->boolValue ? 1 : 0;
+    case Literal::LiteralType::Char:
+      return static_cast<unsigned char>(lit->charValue);
+    case Literal::LiteralType::Float:
+    case Literal::LiteralType::Double:
+      return static_cast<long long>(lit->doubleValue);
+    case Literal::LiteralType::String:
+      return std::nullopt;
+    }
+  }
+  if (auto sizeofExpr = std::dynamic_pointer_cast<SizeOfExpression>(expr)) {
+    std::string typeName;
+    if (sizeofExpr->isType) {
+      typeName = sizeofExpr->typeName;
+    } else if (auto id =
+                   std::dynamic_pointer_cast<Identifier>(sizeofExpr->operand)) {
+      auto sym = analyzer.getSymbolTable().lookup(id->name);
+      if (sym.has_value())
+        typeName = sym->type;
+    }
+    auto size = getTypeSize(typeName);
+    if (size.has_value())
+      return size;
+  }
+  if (auto alignExpr = std::dynamic_pointer_cast<AlignOfExpression>(expr)) {
+    if (alignExpr->isType) {
+      auto alignSize = getTypeSize(alignExpr->typeName);
+      if (alignSize.has_value())
+        return alignSize;
+    }
+  }
+  if (auto un = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
+    auto val = evaluateConstant(un->operand, analyzer);
+    if (!val.has_value())
+      return std::nullopt;
+    if (un->op == "+")
+      return val;
+    if (un->op == "-")
+      return -val.value();
+    if (un->op == "!")
+      return val.value() == 0 ? 1 : 0;
+    if (un->op == "~")
+      return ~val.value();
+    return std::nullopt;
+  }
+  if (auto bin = std::dynamic_pointer_cast<BinaryExpression>(expr)) {
+    auto lhs = evaluateConstant(bin->left, analyzer);
+    auto rhs = evaluateConstant(bin->right, analyzer);
+    if (!lhs.has_value() || !rhs.has_value())
+      return std::nullopt;
+    long long l = lhs.value();
+    long long r = rhs.value();
+    if (bin->op == "+")
+      return l + r;
+    if (bin->op == "-")
+      return l - r;
+    if (bin->op == "*")
+      return l * r;
+    if (bin->op == "/")
+      return r != 0 ? std::optional<long long>(l / r) : std::nullopt;
+    if (bin->op == "%")
+      return r != 0 ? std::optional<long long>(l % r) : std::nullopt;
+    if (bin->op == "<<")
+      return l << r;
+    if (bin->op == ">>")
+      return l >> r;
+    if (bin->op == "&")
+      return l & r;
+    if (bin->op == "|")
+      return l | r;
+    if (bin->op == "^")
+      return l ^ r;
+    if (bin->op == "==")
+      return l == r;
+    if (bin->op == "!=")
+      return l != r;
+    if (bin->op == "<")
+      return l < r;
+    if (bin->op == "<=")
+      return l <= r;
+    if (bin->op == ">")
+      return l > r;
+    if (bin->op == ">=")
+      return l >= r;
+    if (bin->op == "&&")
+      return (l != 0 && r != 0) ? 1 : 0;
+    if (bin->op == "||")
+      return (l != 0 || r != 0) ? 1 : 0;
+    return std::nullopt;
+  }
+  if (auto ternary = std::dynamic_pointer_cast<TernaryExpression>(expr)) {
+    auto condVal = evaluateConstant(ternary->condition, analyzer);
+    if (!condVal.has_value())
+      return std::nullopt;
+    if (condVal.value() != 0)
+      return evaluateConstant(ternary->trueExpr, analyzer);
+    return evaluateConstant(ternary->falseExpr, analyzer);
+  }
+  if (auto castExpr = std::dynamic_pointer_cast<CastExpression>(expr)) {
+    return evaluateConstant(castExpr->operand, analyzer);
+  }
+  return std::nullopt;
+}
+
 SemanticAnalyzer::SemanticAnalyzer() {
   // Create the global scope.
   symbolTable.enterScope();
+  auto addBuiltinFunc = [this](const std::string &name, const std::string &ret,
+                               const std::vector<std::string> &params) {
+    Symbol sym(name, ret, true, params, false);
+    symbolTable.declare(sym);
+  };
+  addBuiltinFunc("isinf", "int", {"double"});
+  addBuiltinFunc("signbit", "int", {"double"});
+  addBuiltinFunc("atomic_compare_exchange_strong", "int",
+                 {"int*", "int*", "int"});
+  addBuiltinFunc("atomic_compare_exchange_weak", "int",
+                 {"int*", "int*", "int"});
+  addBuiltinFunc("atomic_fetch_add", "int", {"int*", "int"});
+  addBuiltinFunc("atomic_load", "int", {"int*"});
 }
 
 void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
-  std::cerr << "[DEBUG] semantic: analyze start, decl count="
-            << program->declarations.size() << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] semantic: analyze start, decl count="
+              << program->declarations.size() << std::endl;
   // Pre-declare all function prototypes in the global scope.
   for (const auto &decl : program->declarations) {
     if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(decl)) {
@@ -51,7 +240,8 @@ void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
       vector<string> paramTypes = getParameterTypes(funcDecl->parameters);
       auto existingOpt = symbolTable.lookup(fnName);
       if (!existingOpt.has_value()) {
-        Symbol newFunc(fnName, retType, true, paramTypes, predeclDefined);
+        Symbol newFunc(fnName, retType, true, paramTypes, predeclDefined,
+                       funcDecl->isVarArgs);
         if (!symbolTable.declare(newFunc)) {
           throw runtime_error(
               "Semantic Analysis Error: Could not declare function '" + fnName +
@@ -63,10 +253,12 @@ void SemanticAnalyzer::analyze(const std::shared_ptr<Program> &program) {
 
   // Now analyze each declaration.
   for (const auto &decl : program->declarations) {
-    std::cerr << "[DEBUG] semantic: analyzing declaration" << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] semantic: analyzing declaration" << std::endl;
     analyzeDeclaration(decl);
   }
-  std::cerr << "[DEBUG] semantic: analyze done" << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] semantic: analyze done" << std::endl;
 }
 
 void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
@@ -91,6 +283,12 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
   } else if (auto typedefDecl =
                  std::dynamic_pointer_cast<TypedefDeclaration>(decl)) {
     analyzeTypedefDeclaration(typedefDecl);
+  } else if (auto staticAssert =
+                 std::dynamic_pointer_cast<StaticAssertDeclaration>(decl)) {
+    auto val = evaluateConstant(staticAssert->condition, *this);
+    if (val.has_value() && val.value() == 0)
+      throw runtime_error("Semantic Analysis Error: _Static_assert failed: " +
+                          staticAssert->message);
   } else {
     throw runtime_error(
         "Semantic Analysis Error: Unknown declaration type encountered.");
@@ -99,23 +297,51 @@ void SemanticAnalyzer::analyzeDeclaration(const DeclarationPtr &decl) {
 
 void SemanticAnalyzer::analyzeVariableDeclaration(
     const std::shared_ptr<VariableDeclaration> &varDecl) {
+  if (varDecl->inlineStructDecl) {
+    analyzeStructDeclaration(varDecl->inlineStructDecl);
+  }
+  if (varDecl->inlineUnionDecl) {
+    analyzeUnionDeclaration(varDecl->inlineUnionDecl);
+  }
+
   // Build the type string including array dimensions
   string typeWithDimensions = varDecl->type;
   for (auto &dimExpr : varDecl->dimensions) {
     analyzeExpression(dimExpr);
-    if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
-      if (lit->type != Literal::LiteralType::Int) {
-        throw runtime_error("Semantic Analysis Error: Array dimension for '" +
-                            varDecl->name + "' must be an integer literal.");
+    auto constDim = evaluateConstant(dimExpr, *this);
+    if (constDim.has_value())
+      typeWithDimensions += "[" + std::to_string(constDim.value()) + "]";
+    else
+      typeWithDimensions += "[]";
+  }
+  if (varDecl->hasEmptyArrayDimension) {
+    size_t inferredSize = 0;
+    if (varDecl->initializer) {
+      if (auto initList = std::dynamic_pointer_cast<InitializerList>(
+              varDecl->initializer.value())) {
+        inferredSize = initList->elements.empty()
+                           ? static_cast<size_t>(1)
+                           : initList->elements.size();
+      } else if (auto lit = std::dynamic_pointer_cast<Literal>(
+                     varDecl->initializer.value())) {
+        if (lit->type == Literal::LiteralType::String)
+          inferredSize = lit->stringValue.size() + 1;
       }
-      typeWithDimensions += "[" + std::to_string(lit->intValue) + "]";
-    } else {
-      throw runtime_error("Semantic Analysis Error: Array dimension for '" +
-                          varDecl->name +
-                          "' must be a constant integer literal.");
     }
+    if (inferredSize > 0)
+      typeWithDimensions += "[" + std::to_string(inferredSize) + "]";
+    else
+      typeWithDimensions += "[]";
   }
 
+  if (educcDebugEnabled()) {
+    std::cerr << "[DEBUG] semantic: declaring variable '" << varDecl->name
+              << "' type '" << typeWithDimensions << "' dims="
+              << varDecl->dimensions.size()
+              << " emptyDim=" << (varDecl->hasEmptyArrayDimension ? "true"
+                                                                  : "false")
+              << std::endl;
+  }
   Symbol symbol(varDecl->name, typeWithDimensions);
   if (!symbolTable.declare(symbol)) {
     throw runtime_error("Semantic Analysis Error: Variable '" + varDecl->name +
@@ -131,12 +357,17 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(
     const std::shared_ptr<FunctionDeclaration> &funcDecl) {
   const string &fnName = funcDecl->name;
   const string &retType = funcDecl->returnType;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] semantic: function '" << fnName
+              << "' varargs=" << (funcDecl->isVarArgs ? "true" : "false")
+              << std::endl;
   bool hasBody = (funcDecl->body != nullptr);
   vector<string> paramTypes = getParameterTypes(funcDecl->parameters);
 
   auto existingOpt = symbolTable.lookup(fnName);
   if (!existingOpt.has_value()) {
-    Symbol newFunc(fnName, retType, true, paramTypes, hasBody);
+    Symbol newFunc(fnName, retType, true, paramTypes, hasBody,
+                   funcDecl->isVarArgs);
     if (!symbolTable.declare(newFunc)) {
       throw runtime_error(
           "Semantic Analysis Error: Could not declare function '" + fnName +
@@ -148,20 +379,21 @@ void SemanticAnalyzer::analyzeFunctionDeclaration(
       throw runtime_error("Semantic Analysis Error: '" + fnName +
                           "' is already declared as a variable.");
     }
-    if (!isFunctionSignatureCompatible(existingSym, retType, paramTypes)) {
-      throw runtime_error(
-          "Semantic Analysis Error: Conflicting declaration for function '" +
-          fnName +
-          "'. The parameter list or return type does not match the previous "
-          "declaration.");
-    }
-    if (existingSym.isDefined && hasBody) {
+    if (!isFunctionSignatureCompatible(existingSym, retType, paramTypes,
+                                       funcDecl->isVarArgs)) {
+      symbolTable.remove(fnName);
+      Symbol newSym(fnName, retType, true, paramTypes, hasBody,
+                    funcDecl->isVarArgs);
+      symbolTable.declare(newSym);
+      existingSym = newSym;
+    } else if (existingSym.isDefined && hasBody) {
       throw runtime_error("Semantic Analysis Error: Function '" + fnName +
                           "' is already defined.");
     } else if (!existingSym.isDefined && hasBody) {
       // Update the function definition.
       symbolTable.remove(fnName);
-      Symbol newSym(fnName, retType, true, paramTypes, true);
+      Symbol newSym(fnName, retType, true, paramTypes, true,
+                    funcDecl->isVarArgs);
       if (!symbolTable.declare(newSym)) {
         throw runtime_error("Semantic Analysis Error: Could not update the "
                             "definition of function '" +
@@ -196,16 +428,17 @@ void SemanticAnalyzer::analyzeEnumDeclaration(
   for (const auto &enumerator : enumDecl->enumerators) {
     int value = 0;
     if (enumerator.second.has_value()) {
-      auto lit = std::dynamic_pointer_cast<Literal>(enumerator.second.value());
-      if (!lit) {
+      auto constVal = evaluateConstant(enumerator.second.value(), *this);
+      if (!constVal.has_value()) {
+        if (educcDebugEnabled()) {
+          std::cerr << "[DEBUG] Enum initializer for '" << enumerator.first
+                    << "' expr type="
+                    << typeid(*(enumerator.second.value())).name() << std::endl;
+        }
         throw runtime_error("Semantic Analysis Error: Enum initializer for '" +
                             enumerator.first + "' is not a literal.");
       }
-      if (lit->type != Literal::LiteralType::Int) {
-        throw runtime_error("Semantic Analysis Error: Enum initializer for '" +
-                            enumerator.first + "' must be an integer literal.");
-      }
-      value = lit->intValue;
+      value = static_cast<int>(constVal.value());
       currentValue = value + 1;
     } else {
       value = currentValue;
@@ -225,8 +458,9 @@ void SemanticAnalyzer::analyzeEnumDeclaration(
 
 void SemanticAnalyzer::analyzeUnionDeclaration(
     const std::shared_ptr<UnionDeclaration> &unionDecl) {
-  std::cerr << "[DEBUG] analyzeUnionDeclaration: Processing union declaration"
-            << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] analyzeUnionDeclaration: Processing union declaration"
+              << std::endl;
 
   // Create aggregate type info for the union
   AggregateTypeInfo unionInfo;
@@ -236,6 +470,9 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
 
   auto computeMemberSize =
       [&](const std::shared_ptr<VariableDeclaration> &member) -> size_t {
+    // Flexible array members do not contribute to the containing struct size.
+    if (member->hasEmptyArrayDimension)
+      return 0;
     string baseType = normalizeBaseType(member->type);
     size_t baseSize = 0;
     if (baseType == "int" || baseType == "float")
@@ -303,8 +540,9 @@ void SemanticAnalyzer::analyzeUnionDeclaration(
   symbolTable.exitScope();
 
   if (unionDecl->tag.has_value()) {
-    std::cerr << "[DEBUG] analyzeUnionDeclaration: Registering union '"
-              << unionDecl->tag.value() << "'" << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] analyzeUnionDeclaration: Registering union '"
+                << unionDecl->tag.value() << "'" << std::endl;
     unionRegistry[unionDecl->tag.value()] = unionDecl;
     aggregateTypeRegistry[unionDecl->tag.value()] = unionInfo;
   }
@@ -369,8 +607,9 @@ void SemanticAnalyzer::analyzeStructDeclaration(
 
   symbolTable.enterScope();
   for (auto &member : structDecl->members) {
-    std::cerr << "[DEBUG] semantic: struct member '" << member->name << "'"
-              << (member->bitWidth ? " (bitfield)" : "") << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] semantic: struct member '" << member->name << "'"
+                << (member->bitWidth ? " (bitfield)" : "") << std::endl;
 
     string baseType = normalizeBaseType(member->type);
     size_t memberSize = computeMemberSize(member);
@@ -384,6 +623,9 @@ void SemanticAnalyzer::analyzeStructDeclaration(
       } else {
         memberInfo.type += "[]";
       }
+    }
+    if (member->hasEmptyArrayDimension) {
+      memberInfo.type += "[]";
     }
     memberInfo.bitWidth = member->bitWidth.has_value()
                               ? static_cast<size_t>(member->bitWidth.value())
@@ -464,14 +706,21 @@ vector<string> SemanticAnalyzer::getParameterTypes(
 
 bool SemanticAnalyzer::isFunctionSignatureCompatible(
     const Symbol &existing, const string &returnType,
-    const vector<string> &paramTypes) const {
+    const vector<string> &paramTypes, bool isVarArgs) const {
   if (existing.type != returnType) {
     return false;
   }
-  if (existing.parameterTypes.size() != paramTypes.size()) {
+  if (!existing.isVarArgs && !isVarArgs &&
+      existing.parameterTypes.size() != paramTypes.size()) {
     return false;
   }
-  for (size_t i = 0; i < paramTypes.size(); ++i) {
+  if (existing.isVarArgs != isVarArgs) {
+    return false;
+  }
+  if (existing.parameterTypes.empty())
+    return true;
+  size_t limit = std::min(existing.parameterTypes.size(), paramTypes.size());
+  for (size_t i = 0; i < limit; ++i) {
     if (existing.parameterTypes[i] != paramTypes[i]) {
       return false;
     }

@@ -1,8 +1,10 @@
 #include "Preprocessor.hpp"
 #include "ConditionalProcessor.hpp"
+#include "Debug.hpp"
 #include "IncludeProcessor.hpp"
 #include "MacroExpander.hpp"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -120,6 +122,16 @@ std::string Preprocessor::processMacros(const std::string &source) {
   std::istringstream iss(source);
   std::ostringstream withoutDirectives;
   std::string line;
+  int outLineCount = 0;
+  int lineDelta = 0;
+  auto replaceLineMacro = [](std::string &text, int logicalLine) {
+    const std::string needle = "__LINE__";
+    size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+      text.replace(pos, needle.size(), std::to_string(logicalLine));
+      pos += 1;
+    }
+  };
   while (std::getline(iss, line)) {
     std::string trimmed = line;
     trimmed.erase(0, trimmed.find_first_not_of(" \t"));
@@ -128,10 +140,113 @@ std::string Preprocessor::processMacros(const std::string &source) {
       expander.processDirective(line);
       continue; // Skip directive lines.
     }
+    if (trimmed.compare(0, 5, "#line") == 0) {
+      std::istringstream ls(trimmed.substr(5));
+      int target = 0;
+      ls >> target;
+      if (target < 1)
+        target = outLineCount + 1;
+      int physicalNext = outLineCount + 1;
+      lineDelta = target - physicalNext;
+      expander.setLineDelta(lineDelta);
+      continue;
+    }
+    int logicalLine = outLineCount + 1 + lineDelta;
+    replaceLineMacro(line, logicalLine);
     withoutDirectives << line << "\n";
+    ++outLineCount;
   }
   // Now expand macros in the rest of the source.
-  return expander.expand(withoutDirectives.str());
+  std::string expanded = expander.expand(withoutDirectives.str());
+  auto applyPackPragma = [](std::string &s) {
+    auto isIdentChar = [](char c) {
+      return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+    };
+    std::string result;
+    bool packActive = false;
+    size_t i = 0;
+    while (i < s.size()) {
+      if (s.compare(i, 7, "_Pragma") == 0) {
+        size_t paren = s.find('(', i + 7);
+        if (paren == std::string::npos) {
+          i += 7;
+          continue;
+        }
+        size_t depth = 0;
+        size_t j = paren;
+        for (; j < s.size(); ++j) {
+          if (s[j] == '(')
+            depth++;
+          else if (s[j] == ')') {
+            depth--;
+            if (depth == 0) {
+              ++j;
+              break;
+            }
+          }
+        }
+        size_t quoteStart = s.find('"', paren);
+        size_t quoteEnd = std::string::npos;
+        if (quoteStart != std::string::npos)
+          quoteEnd = s.find('"', quoteStart + 1);
+        if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+          std::string content =
+              s.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+          if (content.find("pack(push") != std::string::npos)
+            packActive = true;
+          else if (content.find("pack(pop") != std::string::npos)
+            packActive = false;
+        }
+        i = j;
+        continue;
+      }
+      if (packActive && s.compare(i, 6, "struct") == 0 &&
+          (i == 0 || !isIdentChar(s[i - 1])) &&
+          (i + 6 >= s.size() || !isIdentChar(s[i + 6]))) {
+        result += "struct __attribute__((packed))";
+        i += 6;
+        continue;
+      }
+      if (packActive && s.compare(i, 5, "union") == 0 &&
+          (i == 0 || !isIdentChar(s[i - 1])) &&
+          (i + 5 >= s.size() || !isIdentChar(s[i + 5]))) {
+        result += "union __attribute__((packed))";
+        i += 5;
+        continue;
+      }
+      result.push_back(s[i]);
+      ++i;
+    }
+    s.swap(result);
+  };
+  auto stripPragma = [](std::string &s) {
+    size_t pos = 0;
+    while ((pos = s.find("_Pragma", pos)) != std::string::npos) {
+      size_t start = pos;
+      size_t paren = s.find('(', pos);
+      if (paren == std::string::npos) {
+        s.erase(start, 7);
+        continue;
+      }
+      size_t depth = 0;
+      size_t i = paren;
+      for (; i < s.size(); ++i) {
+        if (s[i] == '(')
+          depth++;
+        else if (s[i] == ')') {
+          depth--;
+          if (depth == 0) {
+            ++i;
+            break;
+          }
+        }
+      }
+      s.erase(start, i - start);
+    }
+  };
+  applyPackPragma(expanded);
+  stripPragma(expanded);
+  return expanded;
 }
 
 std::string Preprocessor::processFile(const std::string &path) {
@@ -139,15 +254,19 @@ std::string Preprocessor::processFile(const std::string &path) {
   if (fileCache.find(path) != fileCache.end())
     return fileCache[path];
 
-  std::cerr << "[DEBUG] preprocess: processing file " << path << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] preprocess: processing file " << path << std::endl;
   std::string source = readFile(path);
-  std::cerr << "[DEBUG] preprocess: includes for " << path << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] preprocess: includes for " << path << std::endl;
   // First, process includes.
   std::string included = processIncludes(source, path);
-  std::cerr << "[DEBUG] preprocess: conditionals for " << path << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] preprocess: conditionals for " << path << std::endl;
   // Then process conditionals.
   std::string conditioned = processConditionals(included);
-  std::cerr << "[DEBUG] preprocess: macros for " << path << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] preprocess: macros for " << path << std::endl;
   // Finally, process macros.
   std::string expanded = processMacros(conditioned);
 
@@ -157,8 +276,9 @@ std::string Preprocessor::processFile(const std::string &path) {
 
 std::string Preprocessor::preprocess(const std::string &topLevelPath) {
   try {
-    std::cerr << "[DEBUG] preprocess: starting with top-level " << topLevelPath
-              << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] preprocess: starting with top-level "
+                << topLevelPath << std::endl;
     expander = MacroExpander();
     fileCache.clear();
     return processFile(topLevelPath);

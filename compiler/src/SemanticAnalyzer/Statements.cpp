@@ -55,7 +55,9 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
     // VariableDeclaration node.
     auto varDecl = std::make_shared<VariableDeclaration>(
         varDeclStmt->type, varDeclStmt->name, varDeclStmt->bitWidth,
-        varDeclStmt->initializer, varDeclStmt->dimensions);
+        varDeclStmt->initializer, varDeclStmt->dimensions,
+        varDeclStmt->alignment, varDeclStmt->hasEmptyArrayDimension, false,
+        false, varDeclStmt->inlineStructDecl, varDeclStmt->inlineUnionDecl);
     analyzeVariableDeclaration(varDecl);
   } else if (auto multiVarDeclStmt =
                  std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
@@ -63,7 +65,9 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
     for (const auto &singleDecl : multiVarDeclStmt->declarations) {
       auto varDecl = std::make_shared<VariableDeclaration>(
           singleDecl->type, singleDecl->name, singleDecl->bitWidth,
-          singleDecl->initializer, singleDecl->dimensions);
+          singleDecl->initializer, singleDecl->dimensions,
+          singleDecl->alignment, singleDecl->hasEmptyArrayDimension, false,
+          false, singleDecl->inlineStructDecl, singleDecl->inlineUnionDecl);
       analyzeVariableDeclaration(varDecl);
     }
   } else if (auto declStmt =
