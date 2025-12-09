@@ -12,9 +12,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -386,9 +388,13 @@ int main(int argc, char *argv[]) {
               << "'.\n";
 
     if (config.link) {
-      const std::string moduleTriple = module->getTargetTriple().str();
-      if (!moduleTriple.empty()) {
-        config.linkerOptions.targetTriple = moduleTriple;
+#if LLVM_VERSION_MAJOR >= 20
+      const std::string moduleTripleStr = module->getTargetTriple().str();
+#else
+      const std::string moduleTripleStr = module->getTargetTriple();
+#endif
+      if (!moduleTripleStr.empty()) {
+        config.linkerOptions.targetTriple = moduleTripleStr;
       }
       Linker linker(config.linkerOptions);
       try {
