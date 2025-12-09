@@ -168,9 +168,10 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
     baseType = "void";
   else if (parser.check(TokenType::IDENTIFIER) &&
            (parser.peek().lexeme == "double" ||
-            parser.peek().lexeme == "float" ||
-            parser.peek().lexeme == "void")) {
-    baseType = parser.advance().lexeme;
+            parser.peek().lexeme == "float" || parser.peek().lexeme == "void" ||
+            parser.peek().lexeme == "_Float16")) {
+    std::string lex = parser.advance().lexeme;
+    baseType = (lex == "_Float16") ? "float" : lex;
   } else if (parser.check(TokenType::IDENTIFIER) &&
              (parser.peek().lexeme == "long" ||
               parser.peek().lexeme == "short")) {
@@ -180,10 +181,9 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
       parser.advance();
       baseType = "long long";
     }
-    if (baseType == "long" &&
-        ((parser.check(TokenType::IDENTIFIER) &&
-          parser.peek().lexeme == "double") ||
-         parser.check(TokenType::KW_DOUBLE))) {
+    if (baseType == "long" && ((parser.check(TokenType::IDENTIFIER) &&
+                                parser.peek().lexeme == "double") ||
+                               parser.check(TokenType::KW_DOUBLE))) {
       parser.advance();
       baseType = "long double";
     }
@@ -266,9 +266,9 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
       parser.consume(TokenType::DELIM_RBRACE,
                      "Expected '}' to close union declaration");
       string generatedTag =
-          tag.has_value() ? tag.value()
-                          : ("__anon_union_" +
-                             std::to_string(anonymousUnionCounter++));
+          tag.has_value()
+              ? tag.value()
+              : ("__anon_union_" + std::to_string(anonymousUnionCounter++));
       auto unionDecl =
           std::make_shared<UnionDeclaration>(generatedTag, unionMembers);
       if (inlineUnionDecl)
@@ -296,9 +296,33 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
       baseType = appendArrayToType(parser, baseType, info.dimensions);
     if (info.isFunctionPointer && baseType.rfind("fnptr:", 0) != 0)
       baseType = makeFunctionPointerType(baseType, info.functionParamTypes);
+  } else if (sawUnsigned || sawSigned) {
+    baseType = "int";
   } else {
     parser.error("Expected type specifier in declaration");
   }
+
+  // Handle specifier orderings like "long unsigned".
+  if (!sawUnsigned && !sawSigned && parser.check(TokenType::IDENTIFIER)) {
+    if (parser.peek().lexeme == "unsigned") {
+      sawUnsigned = true;
+      parser.advance();
+    } else if (parser.peek().lexeme == "signed") {
+      sawSigned = true;
+      parser.advance();
+    }
+  }
+
+  // Consume an optional trailing 'int' in constructs like 'long int'/'short
+  // int'.
+  if ((baseType.find("long") != string::npos ||
+       baseType.find("short") != string::npos) &&
+      (parser.check(TokenType::KW_INT) ||
+       (parser.check(TokenType::IDENTIFIER) &&
+        parser.peek().lexeme == "int"))) {
+    parser.advance();
+  }
+
   if (!baseType.empty() &&
       (baseType.find("float") != string::npos ||
        baseType.find("double") != string::npos) &&
@@ -309,6 +333,10 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
     baseType += " complex";
   }
 
+  // Default "unsigned"/"signed" with no explicit base to "int".
+  if (baseType.empty() && (sawUnsigned || sawSigned))
+    baseType = "int";
+
   if (sawUnsigned)
     baseType = "unsigned " + baseType;
   else if (sawSigned)
@@ -317,8 +345,6 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
     baseType = "const " + baseType;
   if (hasVolatileQualifier)
     baseType = "volatile " + baseType;
-  if (hasStaticQualifier)
-    baseType = "static " + baseType;
   if (sawAtomic)
     baseType = "_Atomic " + baseType;
   return baseType;
@@ -526,7 +552,6 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
   while (!parser.check(TokenType::DELIM_RBRACE) && !parser.isAtEnd()) {
     string memberType;
     bool hasConst = false;
-    bool hasStatic = false;
     bool hasVolatile = false;
     bool sawUnsigned = false;
     bool sawSigned = false;
@@ -539,7 +564,6 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
         continue;
       }
       if (lex == "static") {
-        hasStatic = true;
         parser.advance();
         continue;
       }
@@ -656,14 +680,23 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
       memberType = "double";
     else if (parser.match(TokenType::KW_BOOL))
       memberType = "bool";
-    else if (parser.check(TokenType::IDENTIFIER) &&
-             (parser.peek().lexeme == "long" ||
-              parser.peek().lexeme == "short")) {
+    else if (parser.match(TokenType::KW_VOID))
+      memberType = "void";
+    else if (!parser.isAtEnd() && parser.peek().lexeme == "_Float16") {
+      parser.advance();
+      memberType = "float";
+    } else if (!parser.isAtEnd() && (parser.peek().lexeme == "long" ||
+                                     parser.peek().lexeme == "short")) {
       memberType = parser.advance().lexeme;
-      if (memberType == "long" && parser.check(TokenType::IDENTIFIER) &&
-          parser.peek().lexeme == "long") {
-        parser.advance();
-        memberType = "long long";
+      if (memberType == "long") {
+        // Prefer "long double" before considering "long long".
+        if (!parser.isAtEnd() && parser.peek().lexeme == "double") {
+          parser.advance();
+          memberType = "long double";
+        } else if (!parser.isAtEnd() && parser.peek().lexeme == "long") {
+          parser.advance();
+          memberType = "long long";
+        }
       }
     } else if (parser.peek().lexeme == "__builtin_va_list" ||
                parser.peek().lexeme == "va_list") {
@@ -672,8 +705,31 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
       TypedefInfo info = resolveTypedef(parser.advance().lexeme);
       memberType = info.underlyingType;
       typedefDims = info.dimensions;
+    } else if (sawUnsigned || sawSigned) {
+      memberType = "int";
     } else
       parser.error("Expected type specifier in struct member declaration");
+
+    if (!sawUnsigned && !sawSigned && parser.check(TokenType::IDENTIFIER)) {
+      if (parser.peek().lexeme == "unsigned") {
+        sawUnsigned = true;
+        parser.advance();
+      } else if (parser.peek().lexeme == "signed") {
+        sawSigned = true;
+        parser.advance();
+      }
+    }
+
+    if ((memberType.find("long") != string::npos ||
+         memberType.find("short") != string::npos) &&
+        (parser.check(TokenType::KW_INT) ||
+         (parser.check(TokenType::IDENTIFIER) &&
+          parser.peek().lexeme == "int"))) {
+      parser.advance();
+    }
+
+    if (memberType.empty() && (sawUnsigned || sawSigned))
+      memberType = "int";
 
     if (sawUnsigned)
       memberType = "unsigned " + memberType;
@@ -683,9 +739,6 @@ parseStructDefinition(Parser &parser, std::optional<std::string> tag) {
       memberType = "const " + memberType;
     if (hasVolatile)
       memberType = "volatile " + memberType;
-    if (hasStatic)
-      memberType = "static " + memberType;
-
     memberType = consumePointerTokens(parser, memberType);
 
     ParsedDeclarator memberDecl = parseDeclarator(parser, memberType, true);
@@ -741,7 +794,6 @@ appendDimensionsToTypeString(const std::string &base,
 
 static std::string parseTypeNameOnly(Parser &parser) {
   bool hasConst = false;
-  bool hasStatic = false;
   bool sawUnsigned = false;
   bool sawSigned = false;
   bool sawAtomic = false;
@@ -768,7 +820,6 @@ static std::string parseTypeNameOnly(Parser &parser) {
       continue;
     }
     if (lex == "static") {
-      hasStatic = true;
       parser.advance();
       continue;
     }
@@ -802,9 +853,24 @@ static std::string parseTypeNameOnly(Parser &parser) {
     type = "bool";
   else if (parser.match(TokenType::KW_VOID))
     type = "void";
-  else if (parser.peek().lexeme == "max_align_t" ||
-           parser.peek().lexeme == "__builtin_va_list" ||
-           parser.peek().lexeme == "va_list")
+  else if (!parser.isAtEnd() && parser.peek().lexeme == "_Float16") {
+    parser.advance();
+    type = "float";
+  } else if (!parser.isAtEnd() && (parser.peek().lexeme == "long" ||
+                                   parser.peek().lexeme == "short")) {
+    type = parser.advance().lexeme;
+    if (type == "long") {
+      if (!parser.isAtEnd() && parser.peek().lexeme == "double") {
+        parser.advance();
+        type = "long double";
+      } else if (!parser.isAtEnd() && parser.peek().lexeme == "long") {
+        parser.advance();
+        type = "long long";
+      }
+    }
+  } else if (parser.peek().lexeme == "max_align_t" ||
+             parser.peek().lexeme == "__builtin_va_list" ||
+             parser.peek().lexeme == "va_list")
     type = parser.advance().lexeme;
   else if (parser.check(TokenType::KW_STRUCT) ||
            parser.peek().lexeme == "struct") {
@@ -831,8 +897,28 @@ static std::string parseTypeNameOnly(Parser &parser) {
              isTypedefName(parser.peek().lexeme)) {
     TypedefInfo info = resolveTypedef(parser.advance().lexeme);
     type = appendDimensionsToTypeString(info.underlyingType, info.dimensions);
+  } else if (sawUnsigned || sawSigned) {
+    type = "int";
   } else {
     parser.error("Expected type");
+  }
+
+  if (!sawUnsigned && !sawSigned && parser.check(TokenType::IDENTIFIER)) {
+    if (parser.peek().lexeme == "unsigned") {
+      sawUnsigned = true;
+      parser.advance();
+    } else if (parser.peek().lexeme == "signed") {
+      sawSigned = true;
+      parser.advance();
+    }
+  }
+
+  if ((type.find("long") != string::npos ||
+       type.find("short") != string::npos) &&
+      (parser.check(TokenType::KW_INT) ||
+       (parser.check(TokenType::IDENTIFIER) &&
+        parser.peek().lexeme == "int"))) {
+    parser.advance();
   }
 
   if (!type.empty() &&
@@ -845,14 +931,15 @@ static std::string parseTypeNameOnly(Parser &parser) {
     type += " complex";
   }
 
+  if (type.empty() && (sawUnsigned || sawSigned))
+    type = "int";
+
   if (sawUnsigned)
     type = "unsigned " + type;
   else if (sawSigned)
     type = "signed " + type;
   if (hasConst)
     type = "const " + type;
-  if (hasStatic)
-    type = "static " + type;
   if (sawAtomic)
     type = "_Atomic " + type;
 
@@ -933,12 +1020,55 @@ Parser::parseFunctionDeclarationWithType(const string &givenType) {
   }
   std::cerr << std::endl;
   string returnType = givenType;
-  if (!check(TokenType::IDENTIFIER))
+  string funcName;
+  if (check(TokenType::IDENTIFIER)) {
+    funcName = advance().lexeme;
+  } else if (match(TokenType::DELIM_LPAREN)) {
+    if (!check(TokenType::IDENTIFIER))
+      error("Expected function name after '('");
+    funcName = advance().lexeme;
+    consume(TokenType::DELIM_RPAREN, "Expected ')' after function name");
+  } else {
     error("Expected function name after return type");
-  string funcName = advance().lexeme; // function name
+  }
   consume(TokenType::DELIM_LPAREN, "Expected '(' after function name");
   vector<std::pair<string, string>> parameters = parseParameters();
   consume(TokenType::DELIM_RPAREN, "Expected ')' after parameter list");
+
+  auto skipTrailingAttributes = [this]() {
+    while (check(TokenType::IDENTIFIER) && peek().lexeme == "__attribute__") {
+      advance(); // consume __attribute__
+      if (match(TokenType::DELIM_LPAREN)) {
+        int depth = 1;
+        while (depth > 0 && !isAtEnd()) {
+          Token t = advance();
+          if (t.type == TokenType::DELIM_LPAREN)
+            depth++;
+          else if (t.type == TokenType::DELIM_RPAREN)
+            depth--;
+        }
+      }
+    }
+  };
+  skipTrailingAttributes();
+
+  auto skipAsmName = [this]() {
+    while (check(TokenType::IDENTIFIER) &&
+           (peek().lexeme == "__asm" || peek().lexeme == "__asm__")) {
+      advance(); // consume __asm
+      if (match(TokenType::DELIM_LPAREN)) {
+        int depth = 1;
+        while (depth > 0 && !isAtEnd()) {
+          Token t = advance();
+          if (t.type == TokenType::DELIM_LPAREN)
+            depth++;
+          else if (t.type == TokenType::DELIM_RPAREN)
+            depth--;
+        }
+      }
+    }
+  };
+  skipAsmName();
 
   // If next is a semicolon => forward-decl
   if (match(TokenType::DELIM_SEMICOLON)) {
@@ -986,6 +1116,33 @@ DeclarationPtr Parser::parseDeclaration() {
   }
   if (match(TokenType::KW_TYPEDEF)) {
     return parseTypedefDeclaration();
+  }
+
+  // Handle forward declarations like 'struct Foo;' or 'union Bar;'
+  if ((check(TokenType::KW_STRUCT) || peek().lexeme == "struct") &&
+      current + 2 < tokens.size() &&
+      tokens[current + 1].type == TokenType::IDENTIFIER &&
+      tokens[current + 2].type == TokenType::DELIM_SEMICOLON) {
+    advance(); // consume struct
+    std::string tag = advance().lexeme;
+    consume(TokenType::DELIM_SEMICOLON,
+            "Expected ';' after struct forward declaration");
+    return std::make_shared<StructDeclaration>(
+        tag, std::vector<std::shared_ptr<VariableDeclaration>>{},
+        std::vector<std::shared_ptr<UnionDeclaration>>{},
+        std::vector<std::shared_ptr<StructDeclaration>>{}, false);
+  }
+
+  if ((check(TokenType::KW_UNION) || peek().lexeme == "union") &&
+      current + 2 < tokens.size() &&
+      tokens[current + 1].type == TokenType::IDENTIFIER &&
+      tokens[current + 2].type == TokenType::DELIM_SEMICOLON) {
+    advance(); // consume union
+    std::string tag = advance().lexeme;
+    consume(TokenType::DELIM_SEMICOLON,
+            "Expected ';' after union forward declaration");
+    return std::make_shared<UnionDeclaration>(
+        tag, std::vector<std::shared_ptr<VariableDeclaration>>{});
   }
 
   auto skipAttributesLookahead = [this](size_t idx) {
@@ -1116,9 +1273,19 @@ DeclarationPtr Parser::parseDeclaration() {
                 << static_cast<int>(tokens[tmp + 1].type)
                 << ") pointerBeforeFunc=" << pointerBeforeFunc << std::endl;
   }
+  bool looksLikeFunction = false;
   if (tmp < tokens.size() && tokens[tmp].type == TokenType::IDENTIFIER &&
       tmp + 1 < tokens.size() &&
       tokens[tmp + 1].type == TokenType::DELIM_LPAREN) {
+    looksLikeFunction = true;
+  } else if (tmp + 3 < tokens.size() &&
+             tokens[tmp].type == TokenType::DELIM_LPAREN &&
+             tokens[tmp + 1].type == TokenType::IDENTIFIER &&
+             tokens[tmp + 2].type == TokenType::DELIM_RPAREN &&
+             tokens[tmp + 3].type == TokenType::DELIM_LPAREN) {
+    looksLikeFunction = true;
+  }
+  if (looksLikeFunction) {
     string returnType = baseType + string(pointerBeforeFunc, '*');
     for (size_t i = 0; i < pointerBeforeFunc; ++i)
       advance();
@@ -1491,24 +1658,51 @@ std::shared_ptr<VariableDeclaration> Parser::parseUnionMemberDeclaration() {
     type = "double";
   else if (match(TokenType::KW_BOOL))
     type = "bool";
-  else if (match(TokenType::KW_ENUM)) {
+  else if (match(TokenType::KW_VOID))
+    type = "void";
+  else if (!isAtEnd() && peek().lexeme == "_Float16") {
+    advance();
+    type = "float";
+  } else if (match(TokenType::KW_ENUM)) {
     if (!check(TokenType::IDENTIFIER))
       error("Expected enum tag after 'enum' in union member declaration");
     string etag = advance().lexeme;
     type = "enum " + etag;
-  } else if (check(TokenType::IDENTIFIER) &&
+  } else if (!isAtEnd() &&
              (peek().lexeme == "long" || peek().lexeme == "short")) {
     type = advance().lexeme;
-    if (type == "long" && check(TokenType::IDENTIFIER) &&
-        peek().lexeme == "long") {
-      advance();
-      type = "long long";
+    if (type == "long") {
+      // Handle "long double" before "long long"
+      if (!isAtEnd() && peek().lexeme == "double") {
+        advance();
+        type = "long double";
+      } else if (!isAtEnd() && peek().lexeme == "long") {
+        advance();
+        type = "long long";
+      }
     }
   } else if (check(TokenType::IDENTIFIER) && isTypedefName(peek().lexeme)) {
     TypedefInfo info = resolveTypedef(advance().lexeme);
     type = info.underlyingType;
   } else {
     error("Expected type specifier in union member declaration");
+  }
+
+  if (!sawUnsigned && !sawSigned && check(TokenType::IDENTIFIER)) {
+    if (peek().lexeme == "unsigned") {
+      sawUnsigned = true;
+      advance();
+    } else if (peek().lexeme == "signed") {
+      sawSigned = true;
+      advance();
+    }
+  }
+
+  if ((type.find("long") != string::npos ||
+       type.find("short") != string::npos) &&
+      (check(TokenType::KW_INT) ||
+       (check(TokenType::IDENTIFIER) && peek().lexeme == "int"))) {
+    advance();
   }
 
   if (sawUnsigned)

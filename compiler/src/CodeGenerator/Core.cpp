@@ -23,10 +23,10 @@
 #error "Neither llvm/Support/Host.h nor llvm/TargetParser/Host.h is available."
 #endif
 #include <algorithm>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
-#include <llvm/Config/llvm-config.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -173,6 +173,79 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
 
   std::function<Constant *(const ExpressionPtr &, llvm::Type *)>
       buildConstantFromExpr;
+
+  struct ConstAddress {
+    Constant *ptr;
+    llvm::Type *pointee;
+  };
+  std::function<std::optional<ConstAddress>(const ExpressionPtr &)>
+      buildConstantAddress;
+
+  buildConstantAddress =
+      [&](const ExpressionPtr &addrExpr) -> std::optional<ConstAddress> {
+    if (auto ident = std::dynamic_pointer_cast<Identifier>(addrExpr)) {
+      if (auto *gv = module->getNamedGlobal(ident->name))
+        return ConstAddress{gv, gv->getValueType()};
+      if (auto *fn = module->getFunction(ident->name))
+        return ConstAddress{fn, fn->getFunctionType()};
+      return std::nullopt;
+    }
+    if (auto arrayAcc = std::dynamic_pointer_cast<ArrayAccess>(addrExpr)) {
+      auto baseAddr = buildConstantAddress(arrayAcc->base);
+      if (!baseAddr.has_value())
+        return std::nullopt;
+      auto idxLit = std::dynamic_pointer_cast<Literal>(arrayAcc->index);
+      if (!idxLit)
+        return std::nullopt;
+      llvm::Type *pointeeTy = baseAddr->pointee;
+      if (!pointeeTy)
+        return std::nullopt;
+      Constant *zero = ConstantInt::get(Type::getInt32Ty(context), 0);
+      Constant *idxConst =
+          ConstantInt::get(Type::getInt32Ty(context), idxLit->intValue);
+      if (pointeeTy->isArrayTy()) {
+        std::vector<Constant *> indices = {zero, idxConst};
+        auto *arrTy = cast<ArrayType>(pointeeTy);
+        Constant *gep = ConstantExpr::getInBoundsGetElementPtr(
+            pointeeTy, baseAddr->ptr, indices);
+        return ConstAddress{gep, arrTy->getElementType()};
+      }
+      std::vector<Constant *> indices = {idxConst};
+      Constant *gep = ConstantExpr::getInBoundsGetElementPtr(
+          pointeeTy, baseAddr->ptr, indices);
+      return ConstAddress{gep, pointeeTy};
+    }
+    if (auto memberAcc = std::dynamic_pointer_cast<MemberAccess>(addrExpr)) {
+      auto baseAddr = buildConstantAddress(memberAcc->base);
+      if (!baseAddr.has_value())
+        return std::nullopt;
+      llvm::Type *pointeeTy = baseAddr->pointee;
+      auto *structTy = llvm::dyn_cast_or_null<StructType>(pointeeTy);
+      if (!structTy)
+        return std::nullopt;
+      std::string baseTypeName = "";
+      for (auto &entry : declaredTypes) {
+        if (entry.second == structTy) {
+          baseTypeName = normalizeTag(entry.first);
+          break;
+        }
+      }
+      if (baseTypeName.empty())
+        return std::nullopt;
+      MemberInfo *info = getMemberInfo(baseTypeName, memberAcc->member);
+      if (!info)
+        return std::nullopt;
+      Constant *zero = ConstantInt::get(Type::getInt32Ty(context), 0);
+      Constant *fieldIdx =
+          ConstantInt::get(Type::getInt32Ty(context), info->index);
+      std::vector<Constant *> indices = {zero, fieldIdx};
+      Constant *gep = ConstantExpr::getInBoundsGetElementPtr(
+          pointeeTy, baseAddr->ptr, indices);
+      return ConstAddress{gep, structTy->getElementType(info->index)};
+    }
+    return std::nullopt;
+  };
+
   buildConstantFromExpr = [&](const ExpressionPtr &expr,
                               llvm::Type *expected) -> Constant * {
     static int strLiteralCounter = 0;
@@ -218,6 +291,26 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           return ConstantFP::get(expected, lit->floatValue);
         if (lit->type == Literal::LiteralType::Double)
           return ConstantFP::get(expected, lit->doubleValue);
+      }
+    }
+    if (expected->isPointerTy()) {
+      if (auto unary = std::dynamic_pointer_cast<UnaryExpression>(expr)) {
+        if (unary->op == "&") {
+          if (auto addr = buildConstantAddress(unary->operand)) {
+            Constant *ptr = addr->ptr;
+            if (ptr->getType() != expected)
+              ptr = ConstantExpr::getBitCast(ptr, expected);
+            return ptr;
+          }
+        }
+      }
+      if (auto ident = std::dynamic_pointer_cast<Identifier>(expr)) {
+        if (auto addr = buildConstantAddress(ident)) {
+          Constant *ptr = addr->ptr;
+          if (ptr->getType() != expected)
+            ptr = ConstantExpr::getBitCast(ptr, expected);
+          return ptr;
+        }
       }
     }
     if (auto list = std::dynamic_pointer_cast<InitializerList>(expr)) {
@@ -301,6 +394,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
       if (varDecl->inlineUnionDecl)
         registerUnionType(varDecl->inlineUnionDecl);
       // e.g. int x;   or   int array[10];
+      std::string typeWithDimensions = varDecl->type;
       llvm::Type *varType = getLLVMType(varDecl->type);
       // If there are array dimensions, wrap them in an ArrayType
       if (!varDecl->dimensions.empty()) {
@@ -313,6 +407,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                                 "a constant integer.");
           uint64_t arraySize = constDim->getZExtValue();
           varType = ArrayType::get(varType, arraySize);
+          typeWithDimensions += "[" + std::to_string(arraySize) + "]";
         }
       }
       // Create the global
@@ -320,7 +415,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           *module, varType, /*isConstant=*/false, GlobalValue::ExternalLinkage,
           nullptr, varDecl->name);
       declaredTypes[varDecl->name] = varType;
-      declaredTypeStrings[varDecl->name] = varDecl->type;
+      declaredTypeStrings[varDecl->name] = typeWithDimensions;
       auto normalizeAlignVal = [](unsigned v) {
         const unsigned MAX_ALIGN = 1u << 20;
         if (v == 0 || v > MAX_ALIGN)
@@ -367,6 +462,7 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
           registerStructType(singleDecl->inlineStructDecl);
         if (singleDecl->inlineUnionDecl)
           registerUnionType(singleDecl->inlineUnionDecl);
+        std::string typeWithDimensions = singleDecl->type;
         llvm::Type *varType = getLLVMType(singleDecl->type);
         if (!singleDecl->dimensions.empty()) {
           for (auto it = singleDecl->dimensions.rbegin();
@@ -378,13 +474,14 @@ CodeGenerator::generateCode(const shared_ptr<Program> &program) {
                                   "be a constant integer.");
             uint64_t arraySize = constDim->getZExtValue();
             varType = ArrayType::get(varType, arraySize);
+            typeWithDimensions += "[" + std::to_string(arraySize) + "]";
           }
         }
         GlobalVariable *gVar = new GlobalVariable(*module, varType, false,
                                                   GlobalValue::ExternalLinkage,
                                                   nullptr, singleDecl->name);
         declaredTypes[singleDecl->name] = varType;
-        declaredTypeStrings[singleDecl->name] = singleDecl->type;
+        declaredTypeStrings[singleDecl->name] = typeWithDimensions;
 
         if (singleDecl->initializer) {
           Constant *initVal =

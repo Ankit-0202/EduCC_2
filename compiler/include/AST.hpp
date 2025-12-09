@@ -309,6 +309,14 @@ public:
   GotoStatement(const std::string &label) : label(label) {}
 };
 
+class LabeledStatement : public Statement {
+public:
+  std::string label;
+  StatementPtr statement;
+  LabeledStatement(const std::string &label, StatementPtr stmt)
+      : label(label), statement(stmt) {}
+};
+
 class DoWhileStatement : public Statement {
 public:
   StatementPtr body;

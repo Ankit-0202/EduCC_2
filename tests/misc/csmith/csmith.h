@@ -31,6 +31,10 @@
 #ifndef RANDOM_RUNTIME_H
 #define RANDOM_RUNTIME_H
 
+#ifndef CSMITH_MINIMAL
+#define CSMITH_MINIMAL 1
+#endif
+
 #ifdef CSMITH_MINIMAL
 #include "csmith_minimal.h"
 #else

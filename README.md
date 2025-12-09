@@ -1,9 +1,7 @@
 # EduCC Compiler Overview
 
 EduCC is a teaching-oriented C compiler that emits LLVM IR and relies on the
-host toolchain to produce native executables.  Recent improvements focus on
-behaving like other hobby compilers that reuse system components instead of
-rolling bespoke linkers or C runtimes.
+host toolchain to produce native executables.
 
 ## Prerequisites
 
@@ -30,7 +28,7 @@ Clean artefacts with `make clean`.
 
 ## Usage
 
-```
+```sh
 build/educc <source.c> [output.ll] [options]
 ```
 
@@ -72,7 +70,7 @@ Integration tests live under `tests/` with a dedicated linker suite in
 compares the exit code **and** the standard output of each test program as
 produced by EduCC versus the system toolchain (`gcc` by default).
 
-```
+```sh
 pip install pytest             # once
 make test                      # run the full suite
 make test-linker               # only the linker integration tests
@@ -92,5 +90,3 @@ per-test behaviour in the future.
   `--no-default-libs`.
 - Verbose mode shows the exact command EduCC executes, making it easier to
   iterate on linker arguments.
-
-

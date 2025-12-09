@@ -739,6 +739,29 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       generateVariableDeclaration(varDecl);
     }
     return false;
+  } else if (auto labeledStmt =
+                 std::dynamic_pointer_cast<LabeledStatement>(stmt)) {
+    BasicBlock *currentBB = builder.GetInsertBlock();
+    if (!currentBB)
+      throw runtime_error(
+          "CodeGenerator Error: No active block when handling label.");
+    Function *fn = currentBB->getParent();
+    if (!fn)
+      throw runtime_error("CodeGenerator Error: Label outside of a function.");
+    BasicBlock *labelBB = nullptr;
+    auto it = labelBlocks.find(labeledStmt->label);
+    if (it != labelBlocks.end()) {
+      labelBB = it->second;
+      if (!labelBB->getParent())
+        labelBB->insertInto(fn);
+    } else {
+      labelBB = BasicBlock::Create(context, labeledStmt->label, fn);
+      labelBlocks[labeledStmt->label] = labelBB;
+    }
+    if (!currentBB->getTerminator())
+      builder.CreateBr(labelBB);
+    builder.SetInsertPoint(labelBB);
+    return generateStatement(labeledStmt->statement);
   } else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
     llvm::Value *retVal = generateExpression(retStmt->expression);
     Function *currentFunction = builder.GetInsertBlock()->getParent();
@@ -779,9 +802,24 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     }
     return true;
   } else if (auto gotoStmt = std::dynamic_pointer_cast<GotoStatement>(stmt)) {
-    // For now, we'll just skip goto statements
-    // TODO: Implement proper goto label handling
-    return false;
+    BasicBlock *currentBB = builder.GetInsertBlock();
+    if (!currentBB)
+      throw runtime_error(
+          "CodeGenerator Error: 'goto' used outside of a basic block.");
+    Function *fn = currentBB->getParent();
+    if (!fn)
+      throw runtime_error(
+          "CodeGenerator Error: 'goto' used outside of a function.");
+    BasicBlock *target = nullptr;
+    auto it = labelBlocks.find(gotoStmt->label);
+    if (it != labelBlocks.end()) {
+      target = it->second;
+    } else {
+      target = BasicBlock::Create(context, gotoStmt->label, fn);
+      labelBlocks[gotoStmt->label] = target;
+    }
+    builder.CreateBr(target);
+    return true;
   } else if (auto doWhileStmt =
                  std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
     llvm::BasicBlock *currentBB = builder.GetInsertBlock();
@@ -1164,21 +1202,27 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   }
 
   auto stripPrefix = [](string &s, const string &prefix) {
+    bool stripped = false;
     while (s.rfind(prefix, 0) == 0) {
       s = s.substr(prefix.size());
       while (!s.empty() && isspace(s.front()))
         s.erase(s.begin());
+      stripped = true;
+    }
+    return stripped;
+  };
+
+  auto stripQualifiers = [&](string &s) {
+    bool changed = true;
+    while (changed) {
+      changed = stripPrefix(s, "const ") || stripPrefix(s, "volatile ") ||
+                stripPrefix(s, "static ") || stripPrefix(s, "_Atomic ");
     }
   };
 
   bool isUnsigned = false;
   bool isSigned = false;
-  stripPrefix(baseType, "const ");
-  stripPrefix(baseType, "volatile ");
-  stripPrefix(baseType, "static ");
-  stripPrefix(baseType, "const ");
-  stripPrefix(baseType, "volatile ");
-  stripPrefix(baseType, "_Atomic ");
+  stripQualifiers(baseType);
   if (baseType.rfind("unsigned ", 0) == 0) {
     isUnsigned = true;
     stripPrefix(baseType, "unsigned ");
@@ -1270,9 +1314,7 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     if (bracketPos != string::npos) {
       string elementType = baseType.substr(0, bracketPos);
       string rest = baseType.substr(bracketPos);
-      stripPrefix(elementType, "const ");
-      stripPrefix(elementType, "volatile ");
-      stripPrefix(elementType, "static ");
+      stripQualifiers(elementType);
       if (elementType.rfind("unsigned ", 0) == 0) {
         stripPrefix(elementType, "unsigned ");
       } else if (elementType.rfind("signed ", 0) == 0) {

@@ -65,6 +65,7 @@ Function *CodeGenerator::generateFunction(
 
   // If the function has a body, generate it
   if (funcDecl->body) {
+    labelBlocks.clear();
     // Create the entry block
     BasicBlock *entryBlock = BasicBlock::Create(context, "entry", function);
     builder.SetInsertPoint(entryBlock);
@@ -186,6 +187,7 @@ Function *CodeGenerator::generateFunction(
 
     // Pop local scope
     popLocalScope();
+    labelBlocks.clear();
   }
 
   return function;

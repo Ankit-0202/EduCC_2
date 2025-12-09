@@ -83,6 +83,9 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
   } else if (auto gotoStmt = std::dynamic_pointer_cast<GotoStatement>(stmt)) {
     // Goto statements are valid
     // For now, we'll just accept them
+  } else if (auto labeledStmt =
+                 std::dynamic_pointer_cast<LabeledStatement>(stmt)) {
+    analyzeStatement(labeledStmt->statement);
   } else if (auto doWhileStmt =
                  std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
     analyzeStatement(doWhileStmt->body);

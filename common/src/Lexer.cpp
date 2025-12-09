@@ -150,15 +150,53 @@ Token Lexer::number() {
     while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(peek())))) {
       lexeme.push_back(get());
     }
+
+    bool sawHexDot = false;
+    if (!isAtEnd() && peek() == '.') {
+      sawHexDot = true;
+      lexeme.push_back(get());
+      while (!isAtEnd() &&
+             (std::isxdigit(static_cast<unsigned char>(peek())))) {
+        lexeme.push_back(get());
+      }
+    }
+
+    bool sawHexExponent = false;
+    if (!isAtEnd() && (peek() == 'p' || peek() == 'P')) {
+      sawHexExponent = true;
+      lexeme.push_back(get());
+      if (!isAtEnd() && (peek() == '+' || peek() == '-'))
+        lexeme.push_back(get());
+      while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
+        lexeme.push_back(get());
+      }
+    }
+
+    bool isFloatSuffix = false;
+    if (!isAtEnd() && (peek() == 'f' || peek() == 'F')) {
+      isFloatSuffix = true;
+      lexeme.push_back(get());
+    } else if (!isAtEnd() && (peek() == 'l' || peek() == 'L')) {
+      // Treat long double the same as double for now.
+      lexeme.push_back(get());
+    }
+
+    Token token;
+    token.lexeme = lexeme;
+    token.line = startLine;
+    token.column = startColumn;
+    if (sawHexDot || sawHexExponent) {
+      token.type =
+          isFloatSuffix ? TokenType::LITERAL_FLOAT : TokenType::LITERAL_DOUBLE;
+      return token;
+    }
+
     while (!isAtEnd() &&
            (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
       lexeme.push_back(get());
     }
-    Token token;
-    token.type = TokenType::LITERAL_INT;
     token.lexeme = lexeme;
-    token.line = startLine;
-    token.column = startColumn;
+    token.type = TokenType::LITERAL_INT;
     return token;
   }
 

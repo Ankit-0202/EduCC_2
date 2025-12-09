@@ -89,6 +89,9 @@ public:
     bool isForLoop; // To distinguish between while and for loops
   };
   std::vector<LoopContext> loopStack;
+
+  // Label management for goto support.
+  std::unordered_map<std::string, llvm::BasicBlock *> labelBlocks;
 };
 
 #endif // CODEGENERATOR_HPP

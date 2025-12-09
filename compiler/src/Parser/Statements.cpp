@@ -17,6 +17,14 @@ StatementPtr Parser::parseStatement() {
   if (educcDebugEnabled())
     std::cerr << "[DEBUG] (parseStatement) current=" << current << " token='"
               << peek().lexeme << "'\n";
+  // Handle labeled statements: identifier ':' statement
+  if (check(TokenType::IDENTIFIER) && current + 1 < tokens.size() &&
+      tokens[current + 1].type == TokenType::DELIM_COLON) {
+    std::string label = advance().lexeme;
+    consume(TokenType::DELIM_COLON, "Expected ':' after label");
+    StatementPtr labeledStmt = parseStatement();
+    return std::make_shared<LabeledStatement>(label, labeledStmt);
+  }
   // First check for control-flow keywords.
   if (match(TokenType::KW_IF)) {
     return parseIfStatement();

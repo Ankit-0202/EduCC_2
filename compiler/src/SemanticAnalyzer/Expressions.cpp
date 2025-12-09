@@ -107,9 +107,27 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
   // For a member access, first infer the type of the base.
   if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
     string baseType = inferExpressionType(mem->base, analyzer);
+    auto normalizeAggregate = [](std::string t) {
+      auto strip = [](std::string &s, const std::string &p) {
+        if (s.rfind(p, 0) == 0) {
+          s = s.substr(p.size());
+          while (!s.empty() && s.front() == ' ')
+            s.erase(s.begin());
+          return true;
+        }
+        return false;
+      };
+      bool changed = true;
+      while (changed) {
+        changed = strip(t, "const ") || strip(t, "volatile ") ||
+                  strip(t, "static ") || strip(t, "_Atomic ");
+      }
+      return t;
+    };
+    std::string normalized = normalizeAggregate(baseType);
     // If the base is a union.
-    if (baseType.rfind("union ", 0) == 0) {
-      string tag = baseType.substr(6);
+    if (normalized.rfind("union ", 0) == 0) {
+      string tag = normalized.substr(6);
       auto unionIt = unionRegistry.find(tag);
       if (unionIt == unionRegistry.end())
         throw runtime_error("Semantic Analysis Error: Unknown union type '" +
@@ -123,8 +141,8 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
                           "'.");
     }
     // If the base is a struct.
-    else if (baseType.rfind("struct ", 0) == 0) {
-      string tag = baseType.substr(7);
+    else if (normalized.rfind("struct ", 0) == 0) {
+      string tag = normalized.substr(7);
       if (auto *memberInfo = getMemberInfo(tag, mem->member))
         return memberInfo->type;
       throw runtime_error("Semantic Analysis Error: Struct type '" + baseType +
@@ -209,7 +227,11 @@ string inferExpressionType(const std::shared_ptr<Expression> &expr,
     // Remove '[N]' for array types (if present)
     size_t pos = baseType.find('[');
     if (pos != string::npos) {
-      return baseType.substr(0, pos);
+      size_t close = baseType.find(']', pos);
+      string remaining = (close != string::npos && close + 1 < baseType.size())
+                             ? baseType.substr(close + 1)
+                             : "";
+      return baseType.substr(0, pos) + remaining;
     }
     throw runtime_error("Cannot index non-array/non-pointer type: " + baseType);
   }
@@ -245,8 +267,26 @@ void SemanticAnalyzer::analyzeExpression(
   } else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
     analyzeExpression(mem->base);
     string baseType = inferExpressionType(mem->base, *this);
-    if (baseType.rfind("union ", 0) == 0) {
-      string tag = baseType.substr(6);
+    auto normalizeAggregate = [](std::string t) {
+      auto strip = [](std::string &s, const std::string &p) {
+        if (s.rfind(p, 0) == 0) {
+          s = s.substr(p.size());
+          while (!s.empty() && s.front() == ' ')
+            s.erase(s.begin());
+          return true;
+        }
+        return false;
+      };
+      bool changed = true;
+      while (changed) {
+        changed = strip(t, "const ") || strip(t, "volatile ") ||
+                  strip(t, "static ") || strip(t, "_Atomic ");
+      }
+      return t;
+    };
+    std::string normalized = normalizeAggregate(baseType);
+    if (normalized.rfind("union ", 0) == 0) {
+      string tag = normalized.substr(6);
       auto unionIt = unionRegistry.find(tag);
       if (unionIt == unionRegistry.end())
         throw runtime_error("Semantic Analysis Error: Unknown union type '" +
@@ -262,8 +302,8 @@ void SemanticAnalyzer::analyzeExpression(
         throw runtime_error("Semantic Analysis Error: Union type '" + baseType +
                             "' does not contain a member named '" +
                             mem->member + "'.");
-    } else if (baseType.rfind("struct ", 0) == 0) {
-      string tag = baseType.substr(7);
+    } else if (normalized.rfind("struct ", 0) == 0) {
+      string tag = normalized.substr(7);
       if (!getAggregateTypeInfo(tag))
         throw runtime_error("Semantic Analysis Error: Unknown struct type '" +
                             baseType + "'.");
