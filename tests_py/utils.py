@@ -100,7 +100,7 @@ def _execute_frontend_case(
     our_exe = workdir / "educc.out"
     gcc_exe = workdir / "gcc.out"
 
-    compiler_cmd = [str(compiler_binary), str(case.path), str(ll_file)]
+    compiler_cmd = [str(compiler_binary), str(case.path), str(ll_file), "--no-link"]
     compiler_cmd.extend(case.compiler_args)
     _run_command(compiler_cmd, cwd=workdir, env=env)
 

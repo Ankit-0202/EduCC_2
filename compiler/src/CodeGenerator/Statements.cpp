@@ -1254,6 +1254,8 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
         StructType::get(Type::getDoubleTy(context), Type::getDoubleTy(context));
   else if (baseType == "double")
     ty = Type::getDoubleTy(context);
+  else if (baseType == "long double")
+    ty = Type::getDoubleTy(context);
   else if (baseType == "long long")
     ty = Type::getInt64Ty(context);
   else if (baseType == "long")
