@@ -17,6 +17,8 @@ static std::shared_ptr<StructDeclaration>
 parseStructDefinition(Parser &parser, std::optional<std::string> tag);
 static std::string consumePointerTokens(Parser &parser,
                                         const std::string &baseType);
+static int anonymousStructCounter = 0;
+static int anonymousUnionCounter = 0;
 
 bool isIntLiteral(const ExpressionPtr &expr, int &value) {
   if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
@@ -61,6 +63,20 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
   bool sawAtomic = false;
   while (!parser.isAtEnd() && parser.check(TokenType::IDENTIFIER)) {
     std::string lex = parser.peek().lexeme;
+    if (lex == "__attribute__") {
+      parser.advance();
+      if (parser.match(TokenType::DELIM_LPAREN)) {
+        int depth = 1;
+        while (depth > 0 && !parser.isAtEnd()) {
+          Token t = parser.advance();
+          if (t.type == TokenType::DELIM_LPAREN)
+            depth++;
+          else if (t.type == TokenType::DELIM_RPAREN)
+            depth--;
+        }
+      }
+      continue;
+    }
     if (lex == "_Atomic") {
       parser.advance();
       sawAtomic = true;
@@ -164,6 +180,13 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
       parser.advance();
       baseType = "long long";
     }
+    if (baseType == "long" &&
+        ((parser.check(TokenType::IDENTIFIER) &&
+          parser.peek().lexeme == "double") ||
+         parser.check(TokenType::KW_DOUBLE))) {
+      parser.advance();
+      baseType = "long double";
+    }
   } else if (parser.peek().lexeme == "size_t" ||
              parser.peek().lexeme == "uintptr_t" ||
              parser.peek().lexeme == "intptr_t" ||
@@ -227,10 +250,36 @@ parseSimpleType(Parser &parser, bool &hasConstQualifier,
              (parser.check(TokenType::IDENTIFIER) &&
               parser.peek().lexeme == "union")) {
     parser.advance(); // consume 'union'
-    if (!parser.check(TokenType::IDENTIFIER))
-      parser.error("Expected union tag after 'union'");
-    string tag = parser.advance().lexeme;
-    baseType = "union " + tag;
+    std::optional<string> tag = std::nullopt;
+    if (parser.check(TokenType::IDENTIFIER) &&
+        parser.current + 1 < parser.tokens.size() &&
+        parser.tokens[parser.current + 1].type == TokenType::DELIM_LBRACE) {
+      tag = parser.advance().lexeme;
+    }
+    if (parser.check(TokenType::DELIM_LBRACE)) {
+      parser.consume(TokenType::DELIM_LBRACE,
+                     "Expected '{' to begin union declaration");
+      vector<std::shared_ptr<VariableDeclaration>> unionMembers;
+      while (!parser.check(TokenType::DELIM_RBRACE) && !parser.isAtEnd()) {
+        unionMembers.push_back(parser.parseUnionMemberDeclaration());
+      }
+      parser.consume(TokenType::DELIM_RBRACE,
+                     "Expected '}' to close union declaration");
+      string generatedTag =
+          tag.has_value() ? tag.value()
+                          : ("__anon_union_" +
+                             std::to_string(anonymousUnionCounter++));
+      auto unionDecl =
+          std::make_shared<UnionDeclaration>(generatedTag, unionMembers);
+      if (inlineUnionDecl)
+        *inlineUnionDecl = unionDecl;
+      baseType = "union " + generatedTag;
+    } else {
+      if (!parser.check(TokenType::IDENTIFIER))
+        parser.error("Expected union tag after 'union'");
+      string tagName = parser.advance().lexeme;
+      baseType = "union " + tagName;
+    }
   } else if (parser.check(TokenType::KW_ENUM) ||
              (parser.check(TokenType::IDENTIFIER) &&
               parser.peek().lexeme == "enum")) {

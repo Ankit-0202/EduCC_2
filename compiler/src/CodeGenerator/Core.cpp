@@ -26,6 +26,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
+#include <llvm/Config/llvm-config.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -41,7 +42,11 @@ CodeGenerator::CodeGenerator()
       module(std::make_unique<Module>("main_module", context)) {
   std::string targetTriple = llvm::sys::getDefaultTargetTriple();
   llvm::Triple triple(targetTriple);
+#if LLVM_VERSION_MAJOR >= 20
   module->setTargetTriple(triple);
+#else
+  module->setTargetTriple(triple.getTriple());
+#endif
 
   std::string error;
   const llvm::Target *target =
@@ -57,8 +62,14 @@ CodeGenerator::CodeGenerator()
   llvm::TargetOptions opt;
   std::optional<llvm::Reloc::Model> relocModel;
 
+#if LLVM_VERSION_MAJOR >= 20
   std::unique_ptr<llvm::TargetMachine> targetMachine(
       target->createTargetMachine(triple, cpu, features, opt, relocModel));
+#else
+  std::unique_ptr<llvm::TargetMachine> targetMachine(
+      target->createTargetMachine(triple.getTriple(), cpu, features, opt,
+                                  relocModel));
+#endif
   if (!targetMachine) {
     throw runtime_error("CodeGenerator Error: Failed to create target machine "
                         "for triple '" +
