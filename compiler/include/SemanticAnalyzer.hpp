@@ -21,6 +21,8 @@ public:
   // NEW: Declaration for struct declarations
   void analyzeStructDeclaration(
       const std::shared_ptr<StructDeclaration> &structDecl);
+  void analyzeTypedefDeclaration(
+      const std::shared_ptr<TypedefDeclaration> &typedefDecl);
   void analyzeStatement(const StatementPtr &stmt);
   void analyzeExpression(const ExpressionPtr &expr);
 
@@ -30,9 +32,10 @@ private:
   SymbolTable symbolTable;
   std::vector<std::string> getParameterTypes(
       const std::vector<std::pair<std::string, std::string>> &parameters);
-  bool isFunctionSignatureCompatible(
-      const Symbol &existing, const std::string &returnType,
-      const std::vector<std::string> &paramTypes) const;
+  bool isFunctionSignatureCompatible(const Symbol &existing,
+                                     const std::string &returnType,
+                                     const std::vector<std::string> &paramTypes,
+                                     bool isVarArgs) const;
 };
 
 #endif // SEMANTIC_ANALYZER_HPP

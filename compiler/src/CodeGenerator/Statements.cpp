@@ -1,12 +1,17 @@
 #include "AST.hpp"
 #include "CodeGenerator.hpp"
 #include "CodeGenerator/Helpers.hpp"
+#include "Debug.hpp"
 #include "SymbolTable.hpp"
 #include "TypeRegistry.hpp"
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/raw_ostream.h>
 #include <stdexcept>
 #include <unordered_map>
@@ -21,6 +26,24 @@ using std::unordered_map;
 using std::unordered_set;
 using std::vector;
 
+namespace {
+llvm::Value *getUnionMemberPointer(CodeGenerator &CG, llvm::StructType *unionTy,
+                                   llvm::Value *unionPtr,
+                                   const std::string &unionTag,
+                                   const std::string &memberName) {
+  MemberInfo *memberInfo = getMemberInfo(unionTag, memberName);
+  if (!memberInfo) {
+    throw runtime_error("Union type '" + unionTag +
+                        "' does not contain member '" + memberName + "'.");
+  }
+  llvm::Type *memberType = CG.getLLVMType(memberInfo->type);
+  llvm::Value *storagePtr =
+      CG.builder.CreateStructGEP(unionTy, unionPtr, 0, memberName + ".storage");
+  return CG.builder.CreateBitCast(
+      storagePtr, llvm::PointerType::get(memberType, 0), memberName + ".ptr");
+}
+} // namespace
+
 //
 // Local Scope Management
 //
@@ -33,8 +56,26 @@ void CodeGenerator::popLocalScope() {
   if (localVarStack.empty() || declaredVarStack.empty())
     throw runtime_error("CodeGenerator Error: No local scope to pop.");
   for (const auto &name : declaredVarStack.back()) {
-    declaredTypes.erase(name);
-    declaredTypeStrings.erase(name);
+    auto typeIt = typeShadowStack.find(name);
+    if (typeIt != typeShadowStack.end() && !typeIt->second.empty()) {
+      declaredTypes[name] = typeIt->second.back();
+      typeIt->second.pop_back();
+      if (typeIt->second.empty())
+        typeShadowStack.erase(typeIt);
+    } else {
+      declaredTypes.erase(name);
+    }
+    auto strIt = typeStringShadowStack.find(name);
+    if (strIt != typeStringShadowStack.end() && !strIt->second.empty()) {
+      declaredTypeStrings[name] = strIt->second.back();
+      strIt->second.pop_back();
+      if (strIt->second.empty())
+        typeStringShadowStack.erase(strIt);
+    } else {
+      declaredTypeStrings.erase(name);
+    }
+    dynamicArrayDimensions.erase(name);
+    dynamicArrayVars.erase(name);
   }
   declaredVarStack.pop_back();
   localVarStack.pop_back();
@@ -49,6 +90,90 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
   return nullptr;
 }
 
+void CodeGenerator::storeInitializerValue(const ExpressionPtr &init,
+                                          llvm::Type *type, llvm::Value *ptr) {
+  if (auto initList = std::dynamic_pointer_cast<InitializerList>(init)) {
+    if (auto *arrTy = llvm::dyn_cast<llvm::ArrayType>(type)) {
+      llvm::Type *elemTy = arrTy->getElementType();
+      uint64_t count = arrTy->getNumElements();
+      for (uint64_t i = 0; i < count; ++i) {
+        ExpressionPtr elemInit =
+            (i < initList->elements.size()) ? initList->elements[i] : nullptr;
+        llvm::Value *elemPtr =
+            builder.CreateGEP(type, ptr,
+                              {ConstantInt::get(Type::getInt32Ty(context), 0),
+                               ConstantInt::get(Type::getInt32Ty(context), i)},
+                              "init.gep");
+        if (elemInit) {
+          storeInitializerValue(elemInit, elemTy, elemPtr);
+        } else {
+          builder.CreateStore(Constant::getNullValue(elemTy), elemPtr);
+        }
+      }
+      return;
+    }
+    if (auto *structTy = llvm::dyn_cast<llvm::StructType>(type)) {
+      for (size_t i = 0; i < structTy->getNumElements(); ++i) {
+        ExpressionPtr fieldInit =
+            (i < initList->elements.size()) ? initList->elements[i] : nullptr;
+        llvm::Value *fieldPtr =
+            builder.CreateStructGEP(structTy, ptr, i, "field.gep");
+        llvm::Type *fieldTy = structTy->getElementType(i);
+        if (fieldInit) {
+          storeInitializerValue(fieldInit, fieldTy, fieldPtr);
+        } else {
+          builder.CreateStore(Constant::getNullValue(fieldTy), fieldPtr);
+        }
+      }
+      return;
+    }
+  }
+
+  if (auto lit = std::dynamic_pointer_cast<Literal>(init)) {
+    if (lit->type == Literal::LiteralType::String) {
+      if (auto *arrTy = llvm::dyn_cast<llvm::ArrayType>(type)) {
+        if (arrTy->getElementType()->isIntegerTy(8)) {
+          std::string str = lit->stringValue;
+          uint64_t arraySize = arrTy->getNumElements();
+          for (uint64_t i = 0; i < arraySize; ++i) {
+            char c = (i < str.size()) ? str[i] : '\0';
+            if (i + 1 == arraySize)
+              c = '\0';
+            llvm::Value *elemVal =
+                llvm::ConstantInt::get(Type::getInt8Ty(context), c);
+            std::vector<llvm::Value *> indices = {
+                llvm::ConstantInt::get(Type::getInt32Ty(context), 0),
+                llvm::ConstantInt::get(Type::getInt32Ty(context), i)};
+            llvm::Value *elemPtr =
+                builder.CreateGEP(type, ptr, indices, "str.init");
+            builder.CreateStore(elemVal, elemPtr);
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  llvm::Value *val = generateExpression(init);
+  if (val->getType() != type) {
+    if (val->getType()->isFloatingPointTy() && type->isFloatingPointTy()) {
+      if (val->getType()->getFPMantissaWidth() > type->getFPMantissaWidth())
+        val = builder.CreateFPTrunc(val, type, "fptrunc");
+      else
+        val = builder.CreateFPExt(val, type, "fpext");
+    } else if (val->getType()->isFloatingPointTy() && type->isIntegerTy()) {
+      val = builder.CreateFPToSI(val, type, "fptosi");
+    } else if (val->getType()->isIntegerTy() && type->isFloatingPointTy()) {
+      val = builder.CreateSIToFP(val, type, "sitofp");
+    } else if (val->getType()->isIntegerTy() && type->isIntegerTy()) {
+      val = builder.CreateIntCast(val, type, false, "intcast");
+    } else if (val->getType()->isPointerTy() && type->isPointerTy()) {
+      val = builder.CreateBitCast(val, type, "ptrcast");
+    }
+  }
+  builder.CreateStore(val, ptr);
+}
+
 //
 // generateVariableDeclaration
 //
@@ -57,29 +182,142 @@ llvm::Value *CodeGenerator::lookupLocalVar(const string &name) {
 // };"), we infer the array size from the initializer list.
 void CodeGenerator::generateVariableDeclaration(
     const shared_ptr<VariableDeclaration> &varDecl) {
-  std::cerr << "[DEBUG] generateVariableDeclaration: Processing variable '"
-            << varDecl->name << "' of type '" << varDecl->type << "'"
-            << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] generateVariableDeclaration: Processing variable '"
+              << varDecl->name << "' of type '" << varDecl->type << "'"
+              << std::endl;
+  if (varDecl->inlineStructDecl) {
+    registerStructType(varDecl->inlineStructDecl);
+  }
+  if (varDecl->inlineUnionDecl) {
+    registerUnionType(varDecl->inlineUnionDecl);
+  }
+  auto itExistingType = declaredTypes.find(varDecl->name);
+  if (itExistingType != declaredTypes.end())
+    typeShadowStack[varDecl->name].push_back(itExistingType->second);
+  auto itExistingStr = declaredTypeStrings.find(varDecl->name);
+  if (itExistingStr != declaredTypeStrings.end())
+    typeStringShadowStack[varDecl->name].push_back(itExistingStr->second);
   llvm::Type *baseType = getLLVMType(varDecl->type);
   llvm::Type *varType = baseType;
+  auto normalizeAlignVal = [](unsigned v) {
+    const unsigned MAX_ALIGN = 1u << 20; // keep alignments reasonable
+    if (v == 0 || v > MAX_ALIGN)
+      return 0u;
+    if ((v & (v - 1)) == 0)
+      return v;
+    unsigned a = 1;
+    while (a < v && a < MAX_ALIGN)
+      a <<= 1;
+    if (a > MAX_ALIGN)
+      return 0u;
+    return a;
+  };
+  unsigned desiredAlign = 0;
+  if (varDecl->alignment.has_value())
+    desiredAlign = varDecl->alignment.value();
+  auto itAlign = declaredAlignments.find(varDecl->type);
+  if (itAlign != declaredAlignments.end())
+    desiredAlign = std::max<unsigned>(desiredAlign, itAlign->second);
+  desiredAlign = normalizeAlignVal(desiredAlign);
+
+  bool hasDynamicDim = false;
+  std::vector<llvm::Value *> dimensionValues;
+  if (!varDecl->dimensions.empty()) {
+    dimensionValues.reserve(varDecl->dimensions.size());
+    for (const auto &dimExpr : varDecl->dimensions) {
+      llvm::Value *dimVal = generateExpression(dimExpr);
+      dimensionValues.push_back(dimVal);
+      if (!llvm::isa<ConstantInt>(dimVal))
+        hasDynamicDim = true;
+    }
+  }
 
   // If dimensions were provided, treat as an array variable.
   if (!varDecl->dimensions.empty()) {
-    for (auto it = varDecl->dimensions.rbegin();
-         it != varDecl->dimensions.rend(); ++it) {
-      llvm::Value *dimVal = generateExpression(*it);
-      ConstantInt *constDim = dyn_cast<ConstantInt>(dimVal);
-      if (!constDim)
-        throw runtime_error(
-            "CodeGenerator Error: Array dimension must be a constant integer.");
+    if (hasDynamicDim) {
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] VLA declare '" << varDecl->name
+                  << "' dims=" << dimensionValues.size() << std::endl;
+      llvm::Value *elementCount =
+          ConstantInt::get(Type::getInt64Ty(context), 1);
+      std::vector<llvm::Value *> dim64Values;
+      for (auto *dimVal : dimensionValues) {
+        llvm::Value *as64 = dimVal;
+        if (!as64->getType()->isIntegerTy(64))
+          as64 = builder.CreateIntCast(dimVal, Type::getInt64Ty(context), true,
+                                       "vla.cast");
+        dim64Values.push_back(as64);
+        elementCount = builder.CreateMul(elementCount, as64, "vla.mul");
+      }
+      AllocaInst *alloc =
+          builder.CreateAlloca(baseType, elementCount, varDecl->name.c_str());
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] VLA alloca done for '" << varDecl->name << "'"
+                  << std::endl;
+      const DataLayout &DL = module->getDataLayout();
+      llvm::Align align = desiredAlign > 0 ? llvm::Align(desiredAlign)
+                                           : DL.getABITypeAlign(baseType);
+      alloc->setAlignment(align);
+      localVarStack.back()[varDecl->name] = alloc;
+      declaredVarStack.back().insert(varDecl->name);
+      declaredTypes[varDecl->name] = baseType->getPointerTo();
+      // Preserve array shape information for type queries.
+      auto dimToString = [](const ExpressionPtr &expr) -> std::string {
+        if (auto lit = std::dynamic_pointer_cast<Literal>(expr)) {
+          if (lit->type == Literal::LiteralType::Int)
+            return std::to_string(lit->intValue);
+        }
+        if (auto id = std::dynamic_pointer_cast<Identifier>(expr))
+          return id->name;
+        return "";
+      };
+      std::string typeWithDimensions = varDecl->type;
+      for (const auto &dimExpr : varDecl->dimensions) {
+        typeWithDimensions += "[" + dimToString(dimExpr) + "]";
+      }
+      // Local VLAs decay to a pointer value in expressions.
+      declaredTypeStrings[varDecl->name] = typeWithDimensions + "*";
+      dynamicArrayVars.insert(varDecl->name);
+      if (!dim64Values.empty())
+        dynamicArrayDimensions[varDecl->name] = dim64Values;
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] generateVariableDeclaration: dynamic array '"
+                  << varDecl->name << "' element type '" << varDecl->type << "'"
+                  << std::endl;
+      return;
+    }
+    for (auto it = dimensionValues.rbegin(); it != dimensionValues.rend();
+         ++it) {
+      auto *constDim = cast<ConstantInt>(*it);
       uint64_t arraySize = constDim->getZExtValue();
       varType = ArrayType::get(varType, arraySize);
     }
   }
   // Otherwise, if there is an initializer list, infer the array size from it.
-  else if (varDecl->initializer.has_value()) {
-    if (auto lit =
-            std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
+  else if (varDecl->initializer.has_value() &&
+           varDecl->hasEmptyArrayDimension) {
+    if (auto initList = std::dynamic_pointer_cast<InitializerList>(
+            varDecl->initializer.value())) {
+      uint64_t arraySize = initList->elements.size();
+      if (arraySize == 0)
+        arraySize = 1;
+      varType = ArrayType::get(baseType, arraySize);
+      AllocaInst *alloc =
+          builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+      const DataLayout &DL = module->getDataLayout();
+      llvm::Align align = desiredAlign > 0 ? llvm::Align(desiredAlign)
+                                           : DL.getABITypeAlign(varType);
+      alloc->setAlignment(align);
+      localVarStack.back()[varDecl->name] = alloc;
+      declaredVarStack.back().insert(varDecl->name);
+      declaredTypes[varDecl->name] = varType;
+      declaredTypeStrings[varDecl->name] =
+          varDecl->type + "[" + std::to_string(arraySize) + "]";
+      storeInitializerValue(varDecl->initializer.value(), varType, alloc);
+      return;
+    } else if (auto lit = std::dynamic_pointer_cast<Literal>(
+                   varDecl->initializer.value())) {
       if (lit->type == Literal::LiteralType::String) {
         // Infer array size from string length + 1 (for null terminator)
         uint64_t arraySize = lit->stringValue.size() + 1;
@@ -87,23 +325,36 @@ void CodeGenerator::generateVariableDeclaration(
         // Re-create the alloca with the correct type
         AllocaInst *alloc =
             builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+        const DataLayout &DL = module->getDataLayout();
+        llvm::Align align = desiredAlign > 0 ? llvm::Align(desiredAlign)
+                                             : DL.getABITypeAlign(varType);
+        alloc->setAlignment(align);
         localVarStack.back()[varDecl->name] = alloc;
         declaredVarStack.back().insert(varDecl->name);
         declaredTypes[varDecl->name] = varType;
         // Build the type string including array dimensions
-        string typeWithDimensions = varDecl->type;
+        // For declarations with an empty dimension (e.g., char s[] = "hi"),
+        // record the inferred size so later type queries see an array type.
+        string typeWithDimensions =
+            varDecl->type + "[" + std::to_string(arraySize) + "]";
         for (auto &dimExpr : varDecl->dimensions) {
           if (auto lit = std::dynamic_pointer_cast<Literal>(dimExpr)) {
             typeWithDimensions += "[" + std::to_string(lit->intValue) + "]";
           }
         }
         declaredTypeStrings[varDecl->name] = typeWithDimensions;
+        storeInitializerValue(varDecl->initializer.value(), varType, alloc);
+        return;
       }
     }
   }
 
   AllocaInst *alloc =
       builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+  const DataLayout &DL = module->getDataLayout();
+  llvm::Align align = desiredAlign > 0 ? llvm::Align(desiredAlign)
+                                       : DL.getABITypeAlign(varType);
+  alloc->setAlignment(align);
   localVarStack.back()[varDecl->name] = alloc;
   declaredVarStack.back().insert(varDecl->name);
   declaredTypes[varDecl->name] = varType;
@@ -117,15 +368,135 @@ void CodeGenerator::generateVariableDeclaration(
   }
   declaredTypeStrings[varDecl->name] = typeWithDimensions;
 
-  std::cerr << "[DEBUG] generateVariableDeclaration: Variable '"
-            << varDecl->name << "' registered with type '"
-            << declaredTypeStrings[varDecl->name] << "'" << std::endl;
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] generateVariableDeclaration: Variable '"
+              << varDecl->name << "' registered with type '"
+              << declaredTypeStrings[varDecl->name] << "'" << std::endl;
 
-  // Handle string literal initializer for char arrays
+  bool isUnionValue = varDecl->type.rfind("union ", 0) == 0;
+  if (varDecl->initializer.has_value() && isUnionValue &&
+      varType->isStructTy()) {
+    string unionTag = normalizeTag(varDecl->type.substr(6));
+    auto unionTy = dyn_cast<StructType>(varType);
+    if (!unionTy)
+      throw runtime_error("CodeGenerator Error: Union type '" + unionTag +
+                          "' is not a struct representation.");
+    AggregateTypeInfo *unionInfo = getAggregateTypeInfo(unionTag);
+    string targetMemberName;
+    string targetMemberType;
+    if (unionInfo && !unionInfo->members.empty()) {
+      targetMemberName = unionInfo->members.front().name;
+      targetMemberType = unionInfo->members.front().type;
+    } else {
+      targetMemberName = "anon_member_0";
+      targetMemberType = "int";
+    }
+
+    auto pickMemberForLiteral = [&](const Literal &lit) -> void {
+      if (!unionInfo)
+        return;
+      for (const auto &memberInfo : unionInfo->members) {
+        string base = memberInfo.type;
+        if (base.rfind("const ", 0) == 0)
+          base = base.substr(6);
+        if (base.rfind("unsigned ", 0) == 0)
+          base = base.substr(9);
+        if (base.rfind("signed ", 0) == 0)
+          base = base.substr(7);
+        if (lit.type == Literal::LiteralType::Float &&
+            base.rfind("float", 0) == 0) {
+          targetMemberName = memberInfo.name;
+          targetMemberType = memberInfo.type;
+          return;
+        }
+        if (lit.type == Literal::LiteralType::Double &&
+            base.rfind("double", 0) == 0) {
+          targetMemberName = memberInfo.name;
+          targetMemberType = memberInfo.type;
+          return;
+        }
+        if (lit.type == Literal::LiteralType::Int &&
+            (base.rfind("int", 0) == 0 || base.rfind("long", 0) == 0 ||
+             base.rfind("short", 0) == 0 || base.rfind("char", 0) == 0 ||
+             base.rfind("bool", 0) == 0)) {
+          targetMemberName = memberInfo.name;
+          targetMemberType = memberInfo.type;
+          return;
+        }
+      }
+    };
+
+    auto castToMemberType = [&](llvm::Value *value,
+                                llvm::Type *memberTy) -> llvm::Value * {
+      if (value->getType() == memberTy)
+        return value;
+      if (value->getType()->isFloatingPointTy() &&
+          memberTy->isFloatingPointTy()) {
+        if (value->getType()->getFPMantissaWidth() >
+            memberTy->getFPMantissaWidth())
+          return builder.CreateFPTrunc(value, memberTy, "fptrunc");
+        return builder.CreateFPExt(value, memberTy, "fpext");
+      }
+      if (value->getType()->isFloatingPointTy() && memberTy->isIntegerTy()) {
+        return builder.CreateFPToSI(value, memberTy, "fptosi");
+      }
+      if (value->getType()->isIntegerTy() && memberTy->isFloatingPointTy()) {
+        return builder.CreateSIToFP(value, memberTy, "sitofp");
+      }
+      if (value->getType()->isIntegerTy() && memberTy->isIntegerTy()) {
+        return builder.CreateIntCast(value, memberTy, true, "intcast");
+      }
+      return builder.CreateBitCast(value, memberTy, "unionbitcast");
+    };
+
+    auto getUnionMemberPtr = [&](llvm::Type *memberTy) -> llvm::Value * {
+      if (unionInfo) {
+        return getUnionMemberPointer(*this, unionTy, alloc, unionTag,
+                                     targetMemberName);
+      }
+      llvm::Value *storagePtr = builder.CreateStructGEP(
+          unionTy, alloc, 0, varDecl->name + ".storage");
+      return builder.CreateBitCast(storagePtr,
+                                   llvm::PointerType::get(memberTy, 0),
+                                   varDecl->name + ".union");
+    };
+
+    if (auto initList = std::dynamic_pointer_cast<InitializerList>(
+            varDecl->initializer.value())) {
+      if (!initList->elements.empty()) {
+        if (auto lit = std::dynamic_pointer_cast<Literal>(
+                initList->elements.front())) {
+          pickMemberForLiteral(*lit);
+        }
+        llvm::Type *memberTy = getLLVMType(targetMemberType);
+        llvm::Value *memberPtr = getUnionMemberPtr(memberTy);
+        llvm::Value *initVal = generateExpression(initList->elements.front());
+        initVal = castToMemberType(initVal, memberTy);
+        builder.CreateStore(initVal, memberPtr);
+      }
+      return;
+    }
+
+    llvm::Value *rhs = generateExpression(varDecl->initializer.value());
+    if (rhs->getType() == unionTy) {
+      builder.CreateStore(rhs, alloc);
+      return;
+    }
+    llvm::Type *memberTy = getLLVMType(targetMemberType);
+    llvm::Value *memberPtr = getUnionMemberPtr(memberTy);
+    rhs = castToMemberType(rhs, memberTy);
+    builder.CreateStore(rhs, memberPtr);
+    return;
+  }
+
+  // Handle string literal initializer for char arrays. If the declared type is
+  // a pointer (e.g., char*), fall back to the generic initializer so the
+  // pointer simply receives the string literal address.
   if (varDecl->initializer.has_value()) {
     if (auto lit =
             std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
-      if (lit->type == Literal::LiteralType::String) {
+      if (lit->type == Literal::LiteralType::String &&
+          !varType->isPointerTy()) {
         auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
         std::string str = lit->stringValue;
         uint64_t arraySize =
@@ -133,6 +504,7 @@ void CodeGenerator::generateVariableDeclaration(
         if (!arrayTy) {
           varType = ArrayType::get(baseType, arraySize);
           alloc = builder.CreateAlloca(varType, nullptr, varDecl->name.c_str());
+          alloc->setAlignment(DL.getABITypeAlign(varType));
           localVarStack.back()[varDecl->name] = alloc;
           declaredVarStack.back().insert(varDecl->name);
           declaredTypes[varDecl->name] = varType;
@@ -149,8 +521,11 @@ void CodeGenerator::generateVariableDeclaration(
         if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
           throw std::runtime_error("CodeGenerator Error: String literal "
                                    "initializer for non-char array.");
-        for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+        uint64_t numElems = arrayTy->getNumElements();
+        for (uint64_t i = 0; i < numElems; ++i) {
           char c = (i < str.size()) ? str[i] : '\0';
+          if (i + 1 == numElems)
+            c = '\0';
           llvm::Value *elemVal =
               llvm::ConstantInt::get(Type::getInt8Ty(context), c);
           std::vector<llvm::Value *> indices = {
@@ -176,41 +551,43 @@ void CodeGenerator::generateVariableDeclaration(
               varDecl->initializer.value())) {
         auto arrayTy = dyn_cast<ArrayType>(varType);
         auto structTy = dyn_cast<StructType>(varType);
-        
+
         if (arrayTy) {
           // Handle array initializer
           uint64_t arraySize = arrayTy->getNumElements();
           for (uint64_t i = 0; i < arraySize; i++) {
-            llvm::Value *elemVal = nullptr;
-            if (i < initList->elements.size()) {
-              elemVal = generateExpression(initList->elements[i]);
-            } else {
-              elemVal = Constant::getNullValue(arrayTy->getElementType());
-            }
             vector<llvm::Value *> indices;
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
             llvm::Value *elemPtr =
                 builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
                                   varDecl->name + "_idx");
-            builder.CreateStore(elemVal, elemPtr);
+            if (i < initList->elements.size()) {
+              storeInitializerValue(initList->elements[i],
+                                    arrayTy->getElementType(), elemPtr);
+            } else {
+              builder.CreateStore(
+                  Constant::getNullValue(arrayTy->getElementType()), elemPtr);
+            }
           }
         } else if (structTy) {
           // Handle struct initializer
-          for (size_t i = 0; i < initList->elements.size() && i < structTy->getNumElements(); i++) {
-            llvm::Value *elemVal = generateExpression(initList->elements[i]);
+          for (size_t i = 0;
+               i < initList->elements.size() && i < structTy->getNumElements();
+               i++) {
             vector<llvm::Value *> indices;
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), 0));
             indices.push_back(ConstantInt::get(Type::getInt32Ty(context), i));
             llvm::Value *elemPtr =
                 builder.CreateGEP(alloc->getAllocatedType(), alloc, indices,
                                   varDecl->name + "_member");
-            builder.CreateStore(elemVal, elemPtr);
+            storeInitializerValue(initList->elements[i],
+                                  structTy->getElementType(i), elemPtr);
           }
         } else {
-          throw runtime_error(
-              "CodeGenerator Error: Initializer list used for non-array/non-struct "
-              "variable in local variable declaration.");
+          throw runtime_error("CodeGenerator Error: Initializer list used for "
+                              "non-array/non-struct "
+                              "variable in local variable declaration.");
         }
       } else {
         throw runtime_error("CodeGenerator Error: Array initializer must be an "
@@ -235,6 +612,21 @@ void CodeGenerator::generateVariableDeclaration(
                    varType->isFloatingPointTy()) {
           // Handle int-to-float conversion
           initVal = builder.CreateSIToFP(initVal, varType, "sitofp");
+        } else if (initVal->getType()->isIntegerTy() &&
+                   varType->isIntegerTy()) {
+          // Cast between integer widths (extend or truncate).
+          bool sourceIsSigned = !initVal->getType()->isIntegerTy(1);
+          initVal = builder.CreateIntCast(initVal, varType, sourceIsSigned,
+                                          "intcast");
+        } else if (varType->isPointerTy()) {
+          if (initVal->getType()->isPointerTy()) {
+            initVal = builder.CreateBitCast(initVal, varType, "ptrcast");
+          } else if (initVal->getType()->isIntegerTy()) {
+            initVal = builder.CreateIntToPtr(initVal, varType, "inttoptr");
+          } else {
+            throw runtime_error("CodeGenerator Error: Incompatible initializer "
+                                "type in local variable declaration.");
+          }
         } else {
           throw runtime_error("CodeGenerator Error: Incompatible initializer "
                               "type in local variable declaration.");
@@ -245,17 +637,21 @@ void CodeGenerator::generateVariableDeclaration(
   } else if (varDecl->initializer.has_value()) {
     if (auto lit =
             std::dynamic_pointer_cast<Literal>(varDecl->initializer.value())) {
-      std::cerr << "[DEBUG] (generateVariableDeclaration) found Literal "
-                   "initializer, type="
-                << (int)lit->type << std::endl;
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] (generateVariableDeclaration) found Literal "
+                     "initializer, type="
+                  << (int)lit->type << std::endl;
       if (lit->type == Literal::LiteralType::String) {
         auto arrayTy = llvm::dyn_cast<llvm::ArrayType>(varType);
         if (!arrayTy || !arrayTy->getElementType()->isIntegerTy(8))
           throw std::runtime_error("CodeGenerator Error: String literal "
                                    "initializer for non-char array.");
         std::string str = lit->stringValue;
-        for (uint64_t i = 0; i < arrayTy->getNumElements(); ++i) {
+        uint64_t numElems = arrayTy->getNumElements();
+        for (uint64_t i = 0; i < numElems; ++i) {
           char c = (i < str.size()) ? str[i] : '\0';
+          if (i + 1 == numElems)
+            c = '\0';
           llvm::Value *elemVal =
               llvm::ConstantInt::get(Type::getInt8Ty(context), c);
           std::vector<llvm::Value *> indices = {
@@ -276,6 +672,29 @@ void CodeGenerator::generateVariableDeclaration(
 // generateStatement
 //
 bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
+  if (educcDebugEnabled())
+    std::cerr << "[DEBUG] generateStatement: handling "
+              << (stmt ? typeid(*stmt).name() : "null") << std::endl;
+  auto toBool = [&](llvm::Value *val, const std::string &tag) -> llvm::Value * {
+    if (val->getType()->isIntegerTy(1))
+      return val;
+    if (val->getType()->isPointerTy()) {
+      return builder.CreateICmpNE(
+          val,
+          ConstantPointerNull::get(
+              llvm::cast<llvm::PointerType>(val->getType())),
+          tag);
+    }
+    if (val->getType()->isIntegerTy()) {
+      return builder.CreateICmpNE(val, ConstantInt::get(val->getType(), 0),
+                                  tag);
+    }
+    if (val->getType()->isFloatingPointTy()) {
+      return builder.CreateFCmpONE(val, ConstantFP::get(val->getType(), 0.0),
+                                   tag);
+    }
+    return val;
+  };
   if (auto compound = std::dynamic_pointer_cast<CompoundStatement>(stmt)) {
     pushLocalScope();
     bool terminated = false;
@@ -289,6 +708,11 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     return terminated;
   } else if (auto exprStmt =
                  std::dynamic_pointer_cast<ExpressionStatement>(stmt)) {
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] ExpressionStatement expr type: "
+                << (exprStmt->expression ? typeid(*exprStmt->expression).name()
+                                         : "null")
+                << std::endl;
     generateExpression(exprStmt->expression);
     return false;
   } else if (auto varDeclStmt =
@@ -297,8 +721,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     // For local variable declarations, wrap the declaration in a
     // VariableDeclaration node.
     auto varDecl = std::make_shared<VariableDeclaration>(
-        varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer,
-        varDeclStmt->dimensions);
+        varDeclStmt->type, varDeclStmt->name, varDeclStmt->bitWidth,
+        varDeclStmt->initializer, varDeclStmt->dimensions,
+        varDeclStmt->alignment, varDeclStmt->hasEmptyArrayDimension, false,
+        false, varDeclStmt->inlineStructDecl, varDeclStmt->inlineUnionDecl);
     generateVariableDeclaration(varDecl);
     return false;
   } else if (auto multiVarDeclStmt =
@@ -306,11 +732,36 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
                      stmt)) {
     for (auto &singleDecl : multiVarDeclStmt->declarations) {
       auto varDecl = std::make_shared<VariableDeclaration>(
-          singleDecl->type, singleDecl->name, singleDecl->initializer,
-          singleDecl->dimensions);
+          singleDecl->type, singleDecl->name, singleDecl->bitWidth,
+          singleDecl->initializer, singleDecl->dimensions,
+          singleDecl->alignment, singleDecl->hasEmptyArrayDimension, false,
+          false, singleDecl->inlineStructDecl, singleDecl->inlineUnionDecl);
       generateVariableDeclaration(varDecl);
     }
     return false;
+  } else if (auto labeledStmt =
+                 std::dynamic_pointer_cast<LabeledStatement>(stmt)) {
+    BasicBlock *currentBB = builder.GetInsertBlock();
+    if (!currentBB)
+      throw runtime_error(
+          "CodeGenerator Error: No active block when handling label.");
+    Function *fn = currentBB->getParent();
+    if (!fn)
+      throw runtime_error("CodeGenerator Error: Label outside of a function.");
+    BasicBlock *labelBB = nullptr;
+    auto it = labelBlocks.find(labeledStmt->label);
+    if (it != labelBlocks.end()) {
+      labelBB = it->second;
+      if (!labelBB->getParent())
+        labelBB->insertInto(fn);
+    } else {
+      labelBB = BasicBlock::Create(context, labeledStmt->label, fn);
+      labelBlocks[labeledStmt->label] = labelBB;
+    }
+    if (!currentBB->getTerminator())
+      builder.CreateBr(labelBB);
+    builder.SetInsertPoint(labelBB);
+    return generateStatement(labeledStmt->statement);
   } else if (auto retStmt = std::dynamic_pointer_cast<ReturnStatement>(stmt)) {
     llvm::Value *retVal = generateExpression(retStmt->expression);
     Function *currentFunction = builder.GetInsertBlock()->getParent();
@@ -332,7 +783,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       throw runtime_error(
           "CodeGenerator Error: 'break' statement not in a loop or switch");
     }
-    // Branch to the loop exit block
+    // Branch to the innermost loop/switch exit block
     builder.CreateBr(loopStack.back().afterBlock);
     return true;
   } else if (auto continueStmt =
@@ -351,39 +802,60 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     }
     return true;
   } else if (auto gotoStmt = std::dynamic_pointer_cast<GotoStatement>(stmt)) {
-    // For now, we'll just skip goto statements
-    // TODO: Implement proper goto label handling
-    return false;
-  } else if (auto doWhileStmt = std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
-    Function *theFunction = builder.GetInsertBlock()->getParent();
-    BasicBlock *bodyBB = BasicBlock::Create(context, "dowhile_body", theFunction);
-    BasicBlock *condBB = BasicBlock::Create(context, "dowhile_cond", theFunction);
-    BasicBlock *afterBB = BasicBlock::Create(context, "dowhile_after", theFunction);
-    
+    BasicBlock *currentBB = builder.GetInsertBlock();
+    if (!currentBB)
+      throw runtime_error(
+          "CodeGenerator Error: 'goto' used outside of a basic block.");
+    Function *fn = currentBB->getParent();
+    if (!fn)
+      throw runtime_error(
+          "CodeGenerator Error: 'goto' used outside of a function.");
+    BasicBlock *target = nullptr;
+    auto it = labelBlocks.find(gotoStmt->label);
+    if (it != labelBlocks.end()) {
+      target = it->second;
+    } else {
+      target = BasicBlock::Create(context, gotoStmt->label, fn);
+      labelBlocks[gotoStmt->label] = target;
+    }
+    builder.CreateBr(target);
+    return true;
+  } else if (auto doWhileStmt =
+                 std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
+    llvm::BasicBlock *currentBB = builder.GetInsertBlock();
+    if (!currentBB)
+      throw runtime_error("CodeGenerator Error: No active block for for-loop.");
+    Function *theFunction = currentBB->getParent();
+    if (!theFunction)
+      throw runtime_error(
+          "CodeGenerator Error: No function parent for for-loop.");
+    BasicBlock *bodyBB =
+        BasicBlock::Create(context, "dowhile_body", theFunction);
+    BasicBlock *condBB =
+        BasicBlock::Create(context, "dowhile_cond", theFunction);
+    BasicBlock *afterBB =
+        BasicBlock::Create(context, "dowhile_after", theFunction);
+
     // Branch to the body
     builder.CreateBr(bodyBB);
     builder.SetInsertPoint(bodyBB);
-    
+
     // Generate the body
     bool bodyTerminated = generateStatement(doWhileStmt->body);
     if (!bodyTerminated) {
       builder.CreateBr(condBB);
     }
-    
+
     builder.SetInsertPoint(condBB);
-    llvm::Value *condVal = generateExpression(doWhileStmt->condition);
-    if (condVal->getType() != Type::getInt1Ty(context))
-      condVal = builder.CreateICmpNE(
-          condVal, ConstantInt::get(condVal->getType(), 0), "dowhilecond");
-    
+    llvm::Value *condVal =
+        toBool(generateExpression(doWhileStmt->condition), "dowhilecond");
+
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(afterBB);
     return false;
   } else if (auto ifStmt = std::dynamic_pointer_cast<IfStatement>(stmt)) {
-    llvm::Value *condVal = generateExpression(ifStmt->condition);
-    if (condVal->getType() != Type::getInt1Ty(context))
-      condVal = builder.CreateICmpNE(
-          condVal, ConstantInt::get(condVal->getType(), 0), "ifcond");
+    llvm::Value *condVal =
+        toBool(generateExpression(ifStmt->condition), "ifcond");
     Function *theFunction = builder.GetInsertBlock()->getParent();
     BasicBlock *thenBB = BasicBlock::Create(context, "then", theFunction);
     BasicBlock *elseBB = BasicBlock::Create(context, "else", theFunction);
@@ -413,10 +885,8 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
 
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
-    llvm::Value *condVal = generateExpression(whileStmt->condition);
-    if (condVal->getType() != Type::getInt1Ty(context))
-      condVal = builder.CreateICmpNE(
-          condVal, ConstantInt::get(condVal->getType(), 0), "whilecond");
+    llvm::Value *condVal =
+        toBool(generateExpression(whileStmt->condition), "whilecond");
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(bodyBB);
     bool bodyTerminated = generateStatement(whileStmt->body);
@@ -428,6 +898,8 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     loopStack.pop_back();
     return false;
   } else if (auto forStmt = std::dynamic_pointer_cast<ForStatement>(stmt)) {
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateStatement: For init\n";
     if (forStmt->initializer)
       generateStatement(forStmt->initializer);
     Function *theFunction = builder.GetInsertBlock()->getParent();
@@ -435,27 +907,46 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
     BasicBlock *bodyBB = BasicBlock::Create(context, "for.body", theFunction);
     BasicBlock *incrBB = BasicBlock::Create(context, "for.incr", theFunction);
     BasicBlock *afterBB = BasicBlock::Create(context, "for.after", theFunction);
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateStatement: For blocks created\n";
 
     // Push loop context for break/continue
     loopStack.push_back({condBB, bodyBB, afterBB, incrBB, true});
 
+    llvm::BasicBlock *insertBB = builder.GetInsertBlock();
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateStatement: For insert block "
+                << (insertBB ? insertBB->getName().str() : "null") << std::endl;
+    if (!insertBB || insertBB->getTerminator()) {
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] generateStatement: insert block missing or "
+                     "terminated, creating prologue\n";
+      insertBB = BasicBlock::Create(context, "for.prologue", theFunction);
+      builder.SetInsertPoint(insertBB);
+    }
+
     builder.CreateBr(condBB);
     builder.SetInsertPoint(condBB);
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateStatement: For evaluating condition\n";
     llvm::Value *condVal = nullptr;
     if (forStmt->condition) {
-      condVal = generateExpression(forStmt->condition);
-      if (condVal->getType() != Type::getInt1Ty(context))
-        condVal = builder.CreateICmpNE(
-            condVal, ConstantInt::get(condVal->getType(), 0), "forcond");
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] generateStatement: For condition\n";
+      condVal = toBool(generateExpression(forStmt->condition), "forcond");
     } else {
       condVal = ConstantInt::get(Type::getInt1Ty(context), 1);
     }
     builder.CreateCondBr(condVal, bodyBB, afterBB);
     builder.SetInsertPoint(bodyBB);
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateStatement: For body\n";
     bool bodyTerminated = generateStatement(forStmt->body);
     if (!bodyTerminated)
       builder.CreateBr(incrBB);
     builder.SetInsertPoint(incrBB);
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateStatement: For increment\n";
     if (forStmt->increment)
       generateExpression(forStmt->increment);
     builder.CreateBr(condBB);
@@ -494,6 +985,7 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
             "CodeGenerator Error: Case label must be a constant integer.");
       switchInst->addCase(cast<ConstantInt>(caseVal), caseBBs[i]);
     }
+    loopStack.push_back({nullptr, nullptr, mergeBB, nullptr, false});
     for (size_t i = 0; i < caseBBs.size(); i++) {
       builder.SetInsertPoint(caseBBs[i]);
       bool terminated = generateStatement(switchStmt->cases[i].second);
@@ -510,43 +1002,20 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
       if (!terminated)
         builder.CreateBr(mergeBB);
     }
+    loopStack.pop_back();
     builder.SetInsertPoint(mergeBB);
     return false;
-  } else if (auto declStmt = std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
+  } else if (auto declStmt =
+                 std::dynamic_pointer_cast<DeclarationStatement>(stmt)) {
     // Handle local declarations (struct, union, enum)
-    if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(declStmt->declaration)) {
-      // Handle local struct declaration
-      if (structDecl->tag.has_value()) {
-        // Create LLVM struct type for the struct
-        std::vector<Type *> memberTypes;
-        for (const auto &member : structDecl->members) {
-          Type *memberType = getLLVMType(member->type);
-          memberTypes.push_back(memberType);
-        }
-
-        StructType *structType = StructType::create(context, structDecl->tag.value());
-        structType->setBody(memberTypes, /*isPacked=*/false);
-
-        // Register the type in our type registry
-        declaredTypes[structDecl->tag.value()] = structType;
-      }
-    } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(declStmt->declaration)) {
-      // Handle local union declaration
-      if (unionDecl->tag.has_value()) {
-        // Create LLVM struct type for the union
-        std::vector<Type *> memberTypes;
-        for (const auto &member : unionDecl->members) {
-          Type *memberType = getLLVMType(member->type);
-          memberTypes.push_back(memberType);
-        }
-
-        StructType *unionType = StructType::create(context, unionDecl->tag.value());
-        unionType->setBody(memberTypes, /*isPacked=*/true); // Packed for union-like behavior
-
-        // Register the type in our type registry
-        declaredTypes[unionDecl->tag.value()] = unionType;
-      }
-    } else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(declStmt->declaration)) {
+    if (auto structDecl = std::dynamic_pointer_cast<StructDeclaration>(
+            declStmt->declaration)) {
+      registerStructType(structDecl);
+    } else if (auto unionDecl = std::dynamic_pointer_cast<UnionDeclaration>(
+                   declStmt->declaration)) {
+      registerUnionType(unionDecl);
+    } else if (auto enumDecl = std::dynamic_pointer_cast<EnumDeclaration>(
+                   declStmt->declaration)) {
       // Handle local enum declaration
       for (size_t i = 0; i < enumDecl->enumerators.size(); ++i) {
         string enumName = enumDecl->enumerators[i].first;
@@ -555,6 +1024,10 @@ bool CodeGenerator::generateStatement(const StatementPtr &stmt) {
         new GlobalVariable(*module, Type::getInt32Ty(context), true,
                            GlobalValue::ExternalLinkage, initVal, enumName);
       }
+    } else if (auto funcDecl = std::dynamic_pointer_cast<FunctionDeclaration>(
+                   declStmt->declaration)) {
+      IRBuilder<>::InsertPointGuard guard(builder);
+      generateFunction(funcDecl);
     }
     return false;
   } else {
@@ -574,17 +1047,23 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
     GlobalVariable *gVar = module->getGlobalVariable(id->name);
     if (gVar)
       return gVar;
+    if (auto *fn = module->getFunction(id->name))
+      return fn;
     throw runtime_error("Undefined variable in generateLValue: " + id->name);
   }
   // 2) MemberAccess: base.member
   else if (auto mem = std::dynamic_pointer_cast<MemberAccess>(expr)) {
-    std::cerr << "[DEBUG] generateLValue: Processing member access for member: "
-              << mem->member << std::endl;
+    if (educcDebugEnabled())
+      std::cerr
+          << "[DEBUG] generateLValue: Processing member access for member: "
+          << mem->member << std::endl;
     string baseEffectiveType = getEffectiveType(*this, mem->base);
-    std::cerr << "[DEBUG] generateLValue: Base effective type: "
-              << baseEffectiveType << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateLValue: Base effective type: "
+                << baseEffectiveType << std::endl;
     llvm::Value *basePtr = generateLValue(mem->base);
-    std::cerr << "[DEBUG] generateLValue: Got base pointer" << std::endl;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] generateLValue: Got base pointer" << std::endl;
 
     if (baseEffectiveType.rfind("struct ", 0) == 0) {
       string tag = baseEffectiveType.substr(7);
@@ -609,6 +1088,21 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
       if (!memberInfo) {
         throw runtime_error("Struct type '" + tag +
                             "' does not contain member '" + mem->member + "'.");
+      }
+      if (memberInfo->isUnionMemberAlias) {
+        auto unionIt = declaredTypes.find(memberInfo->unionTag);
+        if (unionIt == declaredTypes.end())
+          throw runtime_error("Unknown union type '" + memberInfo->unionTag +
+                              "' for member '" + mem->member + "'.");
+        StructType *unionTy = dyn_cast<StructType>(unionIt->second);
+        if (!unionTy)
+          throw runtime_error("Type '" + memberInfo->unionTag +
+                              "' is not a union type.");
+        llvm::Value *unionPtr = builder.CreateStructGEP(
+            structTy, basePtr, memberInfo->unionFieldIndex,
+            mem->member + ".union");
+        return getUnionMemberPointer(*this, unionTy, unionPtr,
+                                     memberInfo->unionTag, memberInfo->name);
       }
 
       return builder.CreateStructGEP(structTy, basePtr, memberInfo->index,
@@ -637,10 +1131,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
         throw runtime_error("Union type '" + tag +
                             "' does not contain member '" + mem->member + "'.");
       }
-
-      // For unions, we need to use the correct member index
-      // All members are stored in the struct, but we need to access the right one
-      return builder.CreateStructGEP(unionTy, basePtr, memberInfo->index, mem->member);
+      return getUnionMemberPointer(*this, unionTy, basePtr, tag, mem->member);
     }
     // non-struct/union => just get LValue of the base
     else {
@@ -649,65 +1140,7 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
   }
   // 3) PostfixExpression: e.g. i++
   else if (auto post = std::dynamic_pointer_cast<PostfixExpression>(expr)) {
-    auto id = std::dynamic_pointer_cast<Identifier>(post->operand);
-    if (!id)
-      throw runtime_error("Postfix operator applied to non-identifier.");
-    llvm::Value *v = lookupLocalVar(id->name);
-    if (!v)
-      throw runtime_error("Undefined variable in postfix expression: " +
-                          id->name);
-    AllocaInst *allocaInst = dyn_cast<AllocaInst>(v);
-    if (!allocaInst)
-      throw runtime_error("Postfix operator on non-alloca variable: " +
-                          id->name);
-    llvm::Value *oldVal =
-        builder.CreateLoad(allocaInst->getAllocatedType(), v, id->name.c_str());
-    llvm::Value *one = nullptr;
-    llvm::Value *newVal = nullptr;
-
-    if (oldVal->getType()->isIntegerTy()) {
-      one = ConstantInt::get(oldVal->getType(), 1);
-    } else if (oldVal->getType()->isFloatingPointTy()) {
-      one = ConstantFP::get(oldVal->getType(), 1.0);
-    } else if (oldVal->getType()->isPointerTy()) {
-      // For pointers, increment/decrement by the size of the pointed-to type
-      // Since we're using opaque pointers, we need to determine the size
-      // differently For now, assume int* (4 bytes) - this is a simplified
-      // approach
-      one = ConstantInt::get(Type::getInt32Ty(context), 4);
-    } else {
-      throw runtime_error("Unsupported type for postfix operator.");
-    }
-
-    if (post->op == "++") {
-      if (oldVal->getType()->isFloatingPointTy())
-        newVal = builder.CreateFAdd(oldVal, one, "postinc");
-      else if (oldVal->getType()->isPointerTy()) {
-        // For pointer increment, use GEP with int8* and cast
-        llvm::Value *ptrAsInt8 = builder.CreateBitCast(
-            oldVal, PointerType::get(context, 0), "ptrcast");
-        newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, one,
-                                   "postinc");
-        newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
-      } else
-        newVal = builder.CreateAdd(oldVal, one, "postinc");
-    } else {
-      // op == "--"
-      if (oldVal->getType()->isFloatingPointTy())
-        newVal = builder.CreateFSub(oldVal, one, "postdec");
-      else if (oldVal->getType()->isPointerTy()) {
-        llvm::Value *negOne = builder.CreateNeg(one, "negindex");
-        // For pointer decrement, use GEP with int8* and cast
-        llvm::Value *ptrAsInt8 = builder.CreateBitCast(
-            oldVal, PointerType::get(context, 0), "ptrcast");
-        newVal = builder.CreateGEP(Type::getInt8Ty(context), ptrAsInt8, negOne,
-                                   "postdec");
-        newVal = builder.CreateBitCast(newVal, oldVal->getType(), "ptrrestore");
-      } else
-        newVal = builder.CreateSub(oldVal, one, "postdec");
-    }
-    builder.CreateStore(newVal, v);
-    return oldVal; // The "postfix" expression's value is the oldVal
+    return generateLValue(post->operand);
   }
   // 4) Assignment
   else if (auto assign = std::dynamic_pointer_cast<Assignment>(expr)) {
@@ -743,36 +1176,109 @@ llvm::Value *CodeGenerator::generateLValue(const ExpressionPtr &expr) {
 // getLLVMType: convert a string type (which may contain pointer stars) into an
 // LLVM type. Updated to support multiple pointer levels (e.g. "int **").
 llvm::Type *CodeGenerator::getLLVMType(const string &type) {
-  // Count the number of '*' characters.
+  // Count trailing '*' characters (pointer levels).
   int pointerCount = 0;
-  size_t pos = type.find('*');
-  if (pos != string::npos) {
-    for (char c : type) {
-      if (c == '*')
-        pointerCount++;
-    }
+  size_t end = type.size();
+  while (end > 0 && isspace(static_cast<unsigned char>(type[end - 1])))
+    --end;
+  while (end > 0 && type[end - 1] == '*') {
+    pointerCount++;
+    --end;
+    while (end > 0 && isspace(static_cast<unsigned char>(type[end - 1])))
+      --end;
   }
-  // Remove all '*' and trim whitespace.
-  string baseType = type;
-  baseType.erase(std::remove(baseType.begin(), baseType.end(), '*'),
-                 baseType.end());
-  // Trim leading/trailing spaces.
-  while (!baseType.empty() && isspace(baseType.front()))
+  // Extract base type without trailing pointers and trim whitespace.
+  string baseType = type.substr(0, end);
+  while (!baseType.empty() &&
+         isspace(static_cast<unsigned char>(baseType.front())))
     baseType.erase(baseType.begin());
-  while (!baseType.empty() && isspace(baseType.back()))
+  while (!baseType.empty() &&
+         isspace(static_cast<unsigned char>(baseType.back())))
     baseType.pop_back();
 
+  auto tdIt = typedefRegistry.find(baseType);
+  if (tdIt != typedefRegistry.end()) {
+    baseType = tdIt->second.underlyingType;
+  }
+
+  auto stripPrefix = [](string &s, const string &prefix) {
+    bool stripped = false;
+    while (s.rfind(prefix, 0) == 0) {
+      s = s.substr(prefix.size());
+      while (!s.empty() && isspace(s.front()))
+        s.erase(s.begin());
+      stripped = true;
+    }
+    return stripped;
+  };
+
+  auto stripQualifiers = [&](string &s) {
+    bool changed = true;
+    while (changed) {
+      changed = stripPrefix(s, "const ") || stripPrefix(s, "volatile ") ||
+                stripPrefix(s, "static ") || stripPrefix(s, "_Atomic ");
+    }
+  };
+
+  bool isUnsigned = false;
+  bool isSigned = false;
+  stripQualifiers(baseType);
+  if (baseType.rfind("unsigned ", 0) == 0) {
+    isUnsigned = true;
+    stripPrefix(baseType, "unsigned ");
+  } else if (baseType.rfind("signed ", 0) == 0) {
+    isSigned = true;
+    stripPrefix(baseType, "signed ");
+  }
+
+  std::string returnType;
+  std::vector<std::string> paramTypes;
   llvm::Type *ty = nullptr;
-  if (baseType == "int")
+  if (parseFunctionPointerType(baseType, returnType, paramTypes)) {
+    vector<Type *> paramLLVM;
+    for (const auto &p : paramTypes) {
+      paramLLVM.push_back(getLLVMType(p));
+    }
+    ty = FunctionType::get(getLLVMType(returnType), paramLLVM, false)
+             ->getPointerTo();
+  } else if (baseType == "int" || baseType.empty())
     ty = Type::getInt32Ty(context);
+  else if (baseType == "float complex" || baseType == "complex float")
+    ty = StructType::get(Type::getFloatTy(context), Type::getFloatTy(context));
   else if (baseType == "float")
     ty = Type::getFloatTy(context);
   else if (baseType == "char")
     ty = Type::getInt8Ty(context);
+  else if (baseType == "double complex" || baseType == "complex double")
+    ty =
+        StructType::get(Type::getDoubleTy(context), Type::getDoubleTy(context));
   else if (baseType == "double")
     ty = Type::getDoubleTy(context);
+  else if (baseType == "long double")
+    ty = Type::getDoubleTy(context);
+  else if (baseType == "long long")
+    ty = Type::getInt64Ty(context);
+  else if (baseType == "long")
+    ty = Type::getInt64Ty(context);
+  else if (baseType == "short")
+    ty = Type::getInt16Ty(context);
+  else if (baseType == "size_t" || baseType == "uintptr_t" ||
+           baseType == "intptr_t" || baseType == "ptrdiff_t" ||
+           baseType == "ssize_t" || baseType == "uint64_t" ||
+           baseType == "int64_t")
+    ty = Type::getInt64Ty(context);
+  else if (baseType == "uint32_t" || baseType == "int32_t")
+    ty = Type::getInt32Ty(context);
+  else if (baseType == "uint16_t" || baseType == "int16_t")
+    ty = Type::getInt16Ty(context);
+  else if (baseType == "uint8_t" || baseType == "int8_t")
+    ty = Type::getInt8Ty(context);
   else if (baseType == "bool")
     ty = Type::getInt1Ty(context);
+  else if (baseType == "__builtin_va_list" || baseType == "va_list")
+    ty = PointerType::get(Type::getInt8Ty(context), 0);
+  else if (baseType == "max_align_t")
+    ty = Type::getDoubleTy(context);
   else if (baseType == "void")
     ty = Type::getVoidTy(context);
   else if (baseType.rfind("enum ", 0) == 0)
@@ -781,8 +1287,17 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     string tag = baseType.substr(6);
     auto it = declaredTypes.find(tag);
     if (it == declaredTypes.end()) {
-      throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
-                          "'.");
+      if (auto *info = getAggregateTypeInfo(tag)) {
+        uint64_t size = info->totalSize ? info->totalSize : 1;
+        ArrayType *storage = ArrayType::get(Type::getInt8Ty(context), size);
+        StructType *unionTy = StructType::create(context, tag);
+        unionTy->setBody({storage}, /*isPacked=*/false);
+        declaredTypes[tag] = unionTy;
+        it = declaredTypes.find(tag);
+      } else {
+        throw runtime_error("CodeGenerator Error: Unknown union type '" + type +
+                            "'.");
+      }
     }
     ty = it->second;
   } else if (baseType.rfind("struct ", 0) == 0) {
@@ -794,13 +1309,20 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
     }
     ty = it->second;
   } else {
-    // Check if this is an array type (e.g., "char[20]")
+    (void)isUnsigned;
+    (void)isSigned;
+    // Check if this is an array type (e.g., "char[20]" or with dynamic []).
     size_t bracketPos = baseType.find('[');
     if (bracketPos != string::npos) {
       string elementType = baseType.substr(0, bracketPos);
-      string sizeStr = baseType.substr(bracketPos + 1);
-      sizeStr = sizeStr.substr(0, sizeStr.find(']'));
-      
+      string rest = baseType.substr(bracketPos);
+      stripQualifiers(elementType);
+      if (elementType.rfind("unsigned ", 0) == 0) {
+        stripPrefix(elementType, "unsigned ");
+      } else if (elementType.rfind("signed ", 0) == 0) {
+        stripPrefix(elementType, "signed ");
+      }
+
       // Get the element type
       llvm::Type *elementTy = nullptr;
       if (elementType == "int")
@@ -811,15 +1333,47 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
         elementTy = Type::getInt8Ty(context);
       else if (elementType == "double")
         elementTy = Type::getDoubleTy(context);
+      else if (elementType == "long long")
+        elementTy = Type::getInt64Ty(context);
+      else if (elementType == "long")
+        elementTy = Type::getInt64Ty(context);
+      else if (elementType == "short")
+        elementTy = Type::getInt16Ty(context);
       else if (elementType == "bool")
         elementTy = Type::getInt1Ty(context);
       else {
-        throw runtime_error("CodeGenerator Error: Unsupported array element type '" + elementType + "'.");
+        throw runtime_error(
+            "CodeGenerator Error: Unsupported array element type '" +
+            elementType + "'.");
       }
-      
-      // Parse the array size
-      int arraySize = std::stoi(sizeStr);
-      ty = ArrayType::get(elementTy, arraySize);
+
+      // Parse each dimension; non-numeric (or empty) dims decay to pointers.
+      vector<string> dimStrs;
+      size_t pos = 0;
+      while ((pos = rest.find('[')) != string::npos) {
+        size_t close = rest.find(']', pos);
+        if (close == string::npos)
+          break;
+        dimStrs.push_back(rest.substr(pos + 1, close - pos - 1));
+        rest = rest.substr(close + 1);
+      }
+      llvm::Type *arrTy = elementTy;
+      bool dynamicSeen = false;
+      for (auto it = dimStrs.rbegin(); it != dimStrs.rend(); ++it) {
+        if (dynamicSeen || it->empty()) {
+          arrTy = PointerType::get(arrTy, 0);
+          dynamicSeen = true;
+          continue;
+        }
+        try {
+          int arraySize = std::stoi(*it);
+          arrTy = ArrayType::get(arrTy, arraySize);
+        } catch (...) {
+          arrTy = PointerType::get(arrTy, 0);
+          dynamicSeen = true;
+        }
+      }
+      ty = arrTy;
     } else {
       throw runtime_error("CodeGenerator Error: Unsupported type '" + type +
                           "'.");
@@ -827,114 +1381,7 @@ llvm::Type *CodeGenerator::getLLVMType(const string &type) {
   }
   // Now wrap the base type in pointer types as needed.
   for (int i = 0; i < pointerCount; i++) {
-    ty = PointerType::get(context, 0);
+    ty = PointerType::get(ty, 0);
   }
   return ty;
-}
-
-static bool functionSignaturesMatch(FunctionType *existing,
-                                    FunctionType *candidate) {
-  if (existing->getReturnType() != candidate->getReturnType())
-    return false;
-  if (existing->getNumParams() != candidate->getNumParams())
-    return false;
-  for (unsigned i = 0; i < existing->getNumParams(); ++i) {
-    if (existing->getParamType(i) != candidate->getParamType(i))
-      return false;
-  }
-  return true;
-}
-
-llvm::Function *CodeGenerator::getOrCreateFunctionInModule(
-    const std::string &name, llvm::Type *returnType,
-    const vector<Type *> &paramTypes, bool isDefinition) {
-  FunctionType *fType = FunctionType::get(returnType, paramTypes, false);
-  if (Function *existingFn = module->getFunction(name)) {
-    FunctionType *existingType = existingFn->getFunctionType();
-    if (!functionSignaturesMatch(existingType, fType))
-      throw runtime_error("CodeGenerator Error: Conflicting signature for '" +
-                          name + "'.");
-    if (isDefinition && !existingFn->empty())
-      throw runtime_error("CodeGenerator Error: Function '" + name +
-                          "' is already defined.");
-    return existingFn;
-  }
-  Function *newFn =
-      Function::Create(fType, Function::ExternalLinkage, name, module.get());
-  return newFn;
-}
-
-llvm::Function *CodeGenerator::generateFunction(
-    const shared_ptr<FunctionDeclaration> &funcDecl) {
-  llvm::Type *retTy = getLLVMType(funcDecl->returnType);
-  vector<Type *> paramTys;
-  for (auto &param : funcDecl->parameters) {
-    paramTys.push_back(getLLVMType(param.first));
-  }
-  bool hasBody = (funcDecl->body != nullptr);
-  llvm::Function *function =
-      getOrCreateFunctionInModule(funcDecl->name, retTy, paramTys, hasBody);
-  if (!hasBody)
-    return function;
-  if (!function->empty()) {
-    throw runtime_error(
-        "CodeGenerator Error: Unexpected redefinition encountered for '" +
-        funcDecl->name + "'.");
-  }
-
-  // Create entry block.
-  llvm::BasicBlock *entryBB =
-      llvm::BasicBlock::Create(context, "entry", function);
-  builder.SetInsertPoint(entryBB);
-
-  // Push a new local scope (used by lookupLocalVar in Statements.cpp).
-  pushLocalScope();
-
-  // For each function parameter, allocate local space and add to the local
-  // scope.
-  size_t i = 0;
-  for (auto &arg : function->args()) {
-    const string &paramName = funcDecl->parameters[i].second; // e.g., "a"
-    arg.setName(paramName);
-    llvm::AllocaInst *alloc =
-        builder.CreateAlloca(arg.getType(), nullptr, paramName);
-    builder.CreateStore(&arg, alloc);
-    localVarStack.back()[paramName] = alloc;
-    declaredTypes[paramName] = arg.getType();
-    declaredTypeStrings[paramName] = funcDecl->parameters[i].first;
-    i++;
-  }
-
-  // Generate the function body.
-  auto compound = std::dynamic_pointer_cast<CompoundStatement>(funcDecl->body);
-  if (!compound) {
-    throw runtime_error(
-        "CodeGenerator Error: Function body is not a CompoundStatement.");
-  }
-  generateStatement(compound);
-
-  // If no terminator was generated, add a default return.
-  if (!builder.GetInsertBlock()->getTerminator()) {
-    if (funcDecl->returnType == "void")
-      builder.CreateRetVoid();
-    else if (funcDecl->returnType == "int")
-      builder.CreateRet(
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0));
-    else if (funcDecl->returnType == "float")
-      builder.CreateRet(
-          llvm::ConstantFP::get(llvm::Type::getFloatTy(context), 0.0f));
-    else if (funcDecl->returnType == "double")
-      builder.CreateRet(
-          llvm::ConstantFP::get(llvm::Type::getDoubleTy(context), 0.0));
-    else if (funcDecl->returnType == "char")
-      builder.CreateRet(
-          llvm::ConstantInt::get(llvm::Type::getInt8Ty(context), 0));
-    else if (funcDecl->returnType == "bool")
-      builder.CreateRet(
-          llvm::ConstantInt::get(llvm::Type::getInt1Ty(context), 0));
-    else
-      throw runtime_error("CodeGenerator Error: Unsupported return type '" +
-                          funcDecl->returnType + "'.");
-  }
-  return function;
 }

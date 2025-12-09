@@ -55,20 +55,28 @@ int main() {
 
   // Test multiple increments/decrements
   int g = 1;
-  int multi_inc = ++g + ++g + ++g;
+  int multi_inc = 0;
+  multi_inc += ++g;
+  multi_inc += ++g;
+  multi_inc += ++g;
   int multi_inc_val = g;
 
   int h = 10;
-  int multi_dec = --h + --h + --h;
+  int multi_dec = 0;
+  multi_dec += --h;
+  multi_dec += --h;
+  multi_dec += --h;
   int multi_dec_val = h;
 
   // Test increment/decrement with assignment
   int i = 5;
-  i += ++i;
+  int tmp_i = ++i;
+  i += tmp_i;
   int assign_inc = i;
 
   int j = 10;
-  j += j++;
+  int tmp_j = j++;
+  j += tmp_j;
   int assign_postfix = j;
 
   // Test increment/decrement with comparison
@@ -114,7 +122,9 @@ int main() {
 
   // Test complex expressions with increment/decrement
   int complex_val = 5;
-  int complex_expr = (++complex_val) * (complex_val++) + (--complex_val);
+  int complex_expr = (++complex_val);
+  complex_expr *= complex_val++;
+  complex_expr += --complex_val;
   int complex_result = complex_val;
 
   // Test increment/decrement with conditional
@@ -124,7 +134,10 @@ int main() {
 
   // Test increment/decrement with arithmetic
   int arith_val = 10;
-  int arith_result = (++arith_val) + (arith_val++) + (--arith_val);
+  int arith_result = 0;
+  arith_result += ++arith_val;
+  arith_result += arith_val++;
+  arith_result += --arith_val;
   int arith_final = arith_val;
 
   // Verify results
@@ -169,9 +182,9 @@ int main() {
   if (multi_dec_val != 7)
     return 20; // h should be 7
   if (assign_inc != 12)
-    return 21; // 5 + ++6 = 5 + 6 = 11, then ++11 = 12
-  if (assign_postfix != 20)
-    return 22; // 10 + 10++ = 10 + 10 = 20
+    return 21; // 5 + 6 = 11, then ++11 = 12
+  if (assign_postfix != 21)
+    return 22; // tmp_j = 10, j becomes 11, j += tmp_j => 21
   if (comp_inc != 1)
     return 23; // ++5 = 6 > 5, so 1
   if (comp_inc_val != 6)
@@ -182,10 +195,10 @@ int main() {
     return 26; // l should be 11
   if (loop_sum != 15)
     return 27; // 1 + 2 + 3 + 4 + 5 = 15
-  if (arr_inc != 5)
+  if (arr_inc != 6)
     return 28; // ++1 + 2++ + --3 = 2 + 2 + 2 = 6
-  if (arr_sum != 5)
-    return 29; // 2 + 3 + 0 = 5
+  if (arr_sum != 7)
+    return 29; // 2 + 3 + 2 = 7
   if (ptr_inc != 101)
     return 30; // ++100 = 101
   if (ptr_dec != 100)

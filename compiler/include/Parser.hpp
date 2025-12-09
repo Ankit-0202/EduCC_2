@@ -4,6 +4,7 @@
 #include "AST.hpp"
 #include "Token.hpp"
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -52,16 +53,25 @@ public:
   DeclarationPtr parseDeclaration();
   DeclarationPtr parseStructDeclaration();
   DeclarationPtr parseVariableDeclaration();
-  DeclarationPtr parseVariableDeclarationWithType(const std::string &givenType);
+  DeclarationPtr parseVariableDeclarationWithType(
+      const std::string &givenType,
+      const std::vector<ExpressionPtr> &typeDimensions = {},
+      std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr,
+      std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr);
   DeclarationPtr parseFunctionDeclaration();
   DeclarationPtr parseFunctionDeclarationWithType(const std::string &givenType);
   std::vector<std::pair<std::string, std::string>> parseParameters();
   DeclarationPtr parseEnumDeclaration();
   DeclarationPtr parseUnionDeclaration();
   std::shared_ptr<VariableDeclaration> parseUnionMemberDeclaration();
+  DeclarationPtr parseTypedefDeclaration();
   std::vector<Token> tokens;
 
   size_t current;
+  std::string currentFunctionName;
+  std::optional<int> pendingAlignment;
+  bool structPackedFlag;
+  bool varArgsPending;
 
   // Utility parsing methods.
   Token advance();
@@ -72,5 +82,22 @@ public:
   void consume(TokenType type, const std::string &errorMessage);
   void error(const std::string &message) const;
 };
+
+struct ParsedDeclarator {
+  std::string type;
+  std::string name;
+  std::vector<ExpressionPtr> dimensions;
+  bool isFunctionPointer{false};
+  std::vector<std::string> functionParamTypes;
+  bool hasEmptyArrayDimension{false};
+};
+
+std::string
+parseSimpleType(Parser &parser, bool &hasConstQualifier,
+                bool &hasStaticQualifier, bool &hasVolatileQualifier,
+                std::shared_ptr<StructDeclaration> *inlineStructDecl = nullptr,
+                std::shared_ptr<UnionDeclaration> *inlineUnionDecl = nullptr);
+ParsedDeclarator parseDeclarator(Parser &parser, const std::string &baseType,
+                                 bool requireName);
 
 #endif // PARSER_HPP

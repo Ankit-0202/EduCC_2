@@ -1,14 +1,14 @@
 #include <stdio.h>
 
 struct S {
-    struct {
-        int x;
-    };
+  struct {
+    int x;
+  };
 };
 
 int main() {
-    struct S s;
-    s.x = 10;
-    printf("%d\n", s.x);
-    return 0;
+  struct S s;
+  s.x = 10;
+  printf("%d\n", s.x);
+  return 0;
 }

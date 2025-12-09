@@ -80,8 +80,6 @@ Token Lexer::identifier() {
          (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
     lexeme.push_back(get());
   }
-  for (char c : lexeme) std::cerr << (int)(unsigned char)c << ' ';
-  std::cerr << std::endl;
   Token token;
   if (lexeme == "int")
     token.type = TokenType::KW_INT;
@@ -127,6 +125,8 @@ Token Lexer::identifier() {
     token.type = TokenType::KW_DO;
   else if (lexeme == "void")
     token.type = TokenType::KW_VOID;
+  else if (lexeme == "typedef")
+    token.type = TokenType::KW_TYPEDEF;
   else
     token.type = TokenType::IDENTIFIER;
   token.lexeme = lexeme;
@@ -141,12 +141,74 @@ Token Lexer::number() {
   int startColumn = column;
   std::string lexeme;
   bool sawDot = false;
-  
+  bool sawExponent = false;
+
   // Handle hexadecimal literals (0x...)
-  if (peek() == '0' && !isAtEnd() && peekNext() == 'x') {
+  if (peek() == '0' && !isAtEnd() && (peekNext() == 'x' || peekNext() == 'X')) {
     lexeme.push_back(get()); // consume '0'
     lexeme.push_back(get()); // consume 'x'
     while (!isAtEnd() && (std::isxdigit(static_cast<unsigned char>(peek())))) {
+      lexeme.push_back(get());
+    }
+
+    bool sawHexDot = false;
+    if (!isAtEnd() && peek() == '.') {
+      sawHexDot = true;
+      lexeme.push_back(get());
+      while (!isAtEnd() &&
+             (std::isxdigit(static_cast<unsigned char>(peek())))) {
+        lexeme.push_back(get());
+      }
+    }
+
+    bool sawHexExponent = false;
+    if (!isAtEnd() && (peek() == 'p' || peek() == 'P')) {
+      sawHexExponent = true;
+      lexeme.push_back(get());
+      if (!isAtEnd() && (peek() == '+' || peek() == '-'))
+        lexeme.push_back(get());
+      while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
+        lexeme.push_back(get());
+      }
+    }
+
+    bool isFloatSuffix = false;
+    if (!isAtEnd() && (peek() == 'f' || peek() == 'F')) {
+      isFloatSuffix = true;
+      lexeme.push_back(get());
+    } else if (!isAtEnd() && (peek() == 'l' || peek() == 'L')) {
+      // Treat long double the same as double for now.
+      lexeme.push_back(get());
+    }
+
+    Token token;
+    token.lexeme = lexeme;
+    token.line = startLine;
+    token.column = startColumn;
+    if (sawHexDot || sawHexExponent) {
+      token.type =
+          isFloatSuffix ? TokenType::LITERAL_FLOAT : TokenType::LITERAL_DOUBLE;
+      return token;
+    }
+
+    while (!isAtEnd() &&
+           (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
+      lexeme.push_back(get());
+    }
+    token.lexeme = lexeme;
+    token.type = TokenType::LITERAL_INT;
+    return token;
+  }
+
+  // Handle binary literals (0b... or 0B...)
+  if (peek() == '0' && !isAtEnd() && (peekNext() == 'b' || peekNext() == 'B')) {
+    lexeme.push_back(get()); // consume '0'
+    lexeme.push_back(get()); // consume 'b' or 'B'
+    while (!isAtEnd() && (peek() == '0' || peek() == '1')) {
+      lexeme.push_back(get());
+    }
+    while (!isAtEnd() &&
+           (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
       lexeme.push_back(get());
     }
     Token token;
@@ -156,7 +218,7 @@ Token Lexer::number() {
     token.column = startColumn;
     return token;
   }
-  
+
   while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
     lexeme.push_back(get());
   }
@@ -167,13 +229,26 @@ Token Lexer::number() {
       lexeme.push_back(get());
     }
   }
+  if (!isAtEnd() && (peek() == 'e' || peek() == 'E')) {
+    sawExponent = true;
+    lexeme.push_back(get()); // consume 'e' or 'E'
+    if (!isAtEnd() && (peek() == '+' || peek() == '-'))
+      lexeme.push_back(get());
+    while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek()))) {
+      lexeme.push_back(get());
+    }
+  }
   bool isFloatLiteral = false;
   if (!isAtEnd() && (peek() == 'f' || peek() == 'F')) {
     isFloatLiteral = true;
     lexeme.push_back(get());
   }
+  while (!isAtEnd() &&
+         (peek() == 'u' || peek() == 'U' || peek() == 'l' || peek() == 'L')) {
+    lexeme.push_back(get());
+  }
   Token token;
-  if (!sawDot) {
+  if (!sawDot && !sawExponent) {
     token.type = TokenType::LITERAL_INT;
   } else if (isFloatLiteral) {
     token.type = TokenType::LITERAL_FLOAT;
@@ -215,6 +290,24 @@ Token Lexer::character() {
     case '\\':
       ch = '\\';
       break;
+    case '0':
+      ch = '\0';
+      break;
+    case 'r':
+      ch = '\r';
+      break;
+    case 'a':
+      ch = '\a';
+      break;
+    case 'b':
+      ch = '\b';
+      break;
+    case 'f':
+      ch = '\f';
+      break;
+    case 'v':
+      ch = '\v';
+      break;
     default:
       ch = escapeChar;
       break;
@@ -240,38 +333,18 @@ Token Lexer::string() {
   // Consume the opening quote.
   get(); // consume '"'
   lexeme = "\"";
-  // Read characters until closing quote.
+  // Read characters until closing quote. Keep escape sequences verbatim so the
+  // parser can handle unescaping while preserving the original spelling.
   while (!isAtEnd() && peek() != '"') {
     char ch = get();
     if (ch == '\\') {
-      // Handle escape sequences.
       if (isAtEnd())
         throw std::runtime_error(
             "Lexer Error: Unterminated escape sequence in string literal");
       char escapeChar = get();
-      switch (escapeChar) {
-      case 'n':
-        ch = '\n';
-        break;
-      case 't':
-        ch = '\t';
-        break;
-      case 'r':
-        ch = '\r';
-        break;
-      case '\\':
-        ch = '\\';
-        break;
-      case '"':
-        ch = '"';
-        break;
-      case '\'':
-        ch = '\'';
-        break;
-      default:
-        ch = escapeChar;
-        break;
-      }
+      lexeme += '\\';
+      lexeme += escapeChar;
+      continue;
     }
     lexeme += ch;
   }
@@ -347,7 +420,13 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '%': {
-    token.type = TokenType::OP_MODULO;
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_MODULO_ASSIGN;
+    } else {
+      token.type = TokenType::OP_MODULO;
+    }
     break;
   }
   case '=': {
@@ -374,7 +453,13 @@ Token Lexer::opOrDelim() {
     if (!isAtEnd() && peek() == '<') {
       get();
       lexeme = "<<";
-      token.type = TokenType::OP_LEFT_SHIFT;
+      if (!isAtEnd() && peek() == '=') {
+        get();
+        lexeme += "=";
+        token.type = TokenType::OP_LEFT_SHIFT_ASSIGN;
+      } else {
+        token.type = TokenType::OP_LEFT_SHIFT;
+      }
     } else if (!isAtEnd() && peek() == '=') {
       get();
       lexeme += "=";
@@ -388,7 +473,13 @@ Token Lexer::opOrDelim() {
     if (!isAtEnd() && peek() == '>') {
       get();
       lexeme = ">>";
-      token.type = TokenType::OP_RIGHT_SHIFT;
+      if (!isAtEnd() && peek() == '=') {
+        get();
+        lexeme += "=";
+        token.type = TokenType::OP_RIGHT_SHIFT_ASSIGN;
+      } else {
+        token.type = TokenType::OP_RIGHT_SHIFT;
+      }
     } else if (!isAtEnd() && peek() == '=') {
       get();
       lexeme += "=";
@@ -399,7 +490,11 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '&': {
-    if (!isAtEnd() && peek() == '&') {
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_BITWISE_AND_ASSIGN;
+    } else if (!isAtEnd() && peek() == '&') {
       get();
       lexeme += "&";
       token.type = TokenType::OP_LOGICAL_AND;
@@ -409,7 +504,11 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '|': {
-    if (!isAtEnd() && peek() == '|') {
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_BITWISE_OR_ASSIGN;
+    } else if (!isAtEnd() && peek() == '|') {
       get();
       lexeme += "|";
       token.type = TokenType::OP_LOGICAL_OR;
@@ -419,7 +518,13 @@ Token Lexer::opOrDelim() {
     break;
   }
   case '^': {
-    token.type = TokenType::OP_BITWISE_XOR;
+    if (!isAtEnd() && peek() == '=') {
+      get();
+      lexeme += "=";
+      token.type = TokenType::OP_BITWISE_XOR_ASSIGN;
+    } else {
+      token.type = TokenType::OP_BITWISE_XOR;
+    }
     break;
   }
   case '~': {

@@ -11,6 +11,10 @@
 class Expression;
 class Statement;
 class Declaration;
+class StructDeclaration;
+class UnionDeclaration;
+class EnumDeclaration;
+class TypedefDeclaration;
 
 using ExpressionPtr = std::shared_ptr<Expression>;
 using StatementPtr = std::shared_ptr<Statement>;
@@ -40,15 +44,29 @@ public:
 class Literal : public Expression {
 public:
   enum class LiteralType { Int, Float, Double, Char, Bool, String };
+  std::string rawLexeme;
+  std::string literalType;
   LiteralType type;
-  int intValue;
+  long long intValue = 0;
+  unsigned long long uintValue = 0;
+  bool isUnsignedLiteral = false;
   float floatValue;
   double doubleValue;
   char charValue;
   bool boolValue;
   std::string stringValue;
 
-  Literal(int value) : type(LiteralType::Int), intValue(value) {}
+  Literal(long long value, const std::string &raw = "",
+          const std::string &litType = "int", bool isUnsigned = false)
+      : rawLexeme(raw), literalType(litType), type(LiteralType::Int),
+        intValue(value), uintValue(static_cast<unsigned long long>(value)),
+        isUnsignedLiteral(isUnsigned) {}
+  Literal(int value, const std::string &raw = "",
+          const std::string &litType = "int", bool isUnsigned = false)
+      : rawLexeme(raw), literalType(litType), type(LiteralType::Int),
+        intValue(static_cast<long long>(value)),
+        uintValue(static_cast<unsigned long long>(value)),
+        isUnsignedLiteral(isUnsigned) {}
   Literal(float value) : type(LiteralType::Float), floatValue(value) {}
   Literal(double value) : type(LiteralType::Double), doubleValue(value) {}
   Literal(char value) : type(LiteralType::Char), charValue(value) {}
@@ -61,6 +79,30 @@ class Identifier : public Expression {
 public:
   std::string name;
   Identifier(const std::string &n) : name(n) {}
+};
+
+class AlignOfExpression : public Expression {
+public:
+  bool isType;
+  std::string typeName;
+  ExpressionPtr operand;
+  AlignOfExpression(const std::string &type)
+      : isType(true), typeName(type), operand(nullptr) {}
+  AlignOfExpression(ExpressionPtr expr)
+      : isType(false), typeName(""), operand(expr) {}
+};
+
+class GenericSelection : public Expression {
+public:
+  ExpressionPtr selector;
+  std::vector<std::pair<std::string, ExpressionPtr>> associations;
+  std::optional<ExpressionPtr> defaultExpr;
+  GenericSelection(
+      ExpressionPtr selector,
+      const std::vector<std::pair<std::string, ExpressionPtr>> &associations,
+      std::optional<ExpressionPtr> defaultExpr)
+      : selector(selector), associations(associations),
+        defaultExpr(defaultExpr) {}
 };
 
 class BinaryExpression : public Expression {
@@ -107,9 +149,13 @@ public:
 class FunctionCall : public Expression {
 public:
   std::string functionName;
+  ExpressionPtr calleeExpr;
   std::vector<ExpressionPtr> arguments;
   FunctionCall(const std::string &name, const std::vector<ExpressionPtr> &args)
-      : functionName(name), arguments(args) {}
+      : functionName(name), calleeExpr(nullptr), arguments(args) {}
+  FunctionCall(ExpressionPtr callee, const std::vector<ExpressionPtr> &args)
+      : functionName(""), calleeExpr(callee), arguments(args) {}
+  bool hasCalleeExpr() const { return calleeExpr != nullptr; }
 };
 
 class CastExpression : public Expression {
@@ -153,7 +199,22 @@ public:
 class InitializerList : public Expression {
 public:
   std::vector<ExpressionPtr> elements;
-  InitializerList(const std::vector<ExpressionPtr> &elems) : elements(elems) {}
+  std::vector<std::optional<std::string>> designators;
+  InitializerList(
+      const std::vector<ExpressionPtr> &elems,
+      const std::vector<std::optional<std::string>> &designators = {})
+      : elements(elems), designators(designators) {}
+};
+
+class CompoundLiteral : public Expression {
+public:
+  std::string type;
+  std::vector<ExpressionPtr> dimensions;
+  ExpressionPtr initializer;
+  CompoundLiteral(const std::string &type,
+                  const std::vector<ExpressionPtr> &dimensions,
+                  ExpressionPtr initializer)
+      : type(type), dimensions(dimensions), initializer(initializer) {}
 };
 
 //--------------------//
@@ -248,6 +309,14 @@ public:
   GotoStatement(const std::string &label) : label(label) {}
 };
 
+class LabeledStatement : public Statement {
+public:
+  std::string label;
+  StatementPtr statement;
+  LabeledStatement(const std::string &label, StatementPtr stmt)
+      : label(label), statement(stmt) {}
+};
+
 class DoWhileStatement : public Statement {
 public:
   StatementPtr body;
@@ -261,13 +330,26 @@ class VariableDeclarationStatement : public Statement {
 public:
   std::string type;
   std::string name;
+  std::optional<int> bitWidth;
+  std::optional<int> alignment;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
-  VariableDeclarationStatement(const std::string &type, const std::string &name,
-                               std::optional<ExpressionPtr> initializer,
-                               const std::vector<ExpressionPtr> &dimensions)
-      : type(type), name(name), initializer(initializer),
-        dimensions(dimensions) {}
+  bool hasEmptyArrayDimension;
+  std::shared_ptr<StructDeclaration> inlineStructDecl;
+  std::shared_ptr<UnionDeclaration> inlineUnionDecl;
+  VariableDeclarationStatement(
+      const std::string &type, const std::string &name,
+      std::optional<int> bitWidth, std::optional<int> alignment,
+      std::optional<ExpressionPtr> initializer,
+      const std::vector<ExpressionPtr> &dimensions,
+      bool hasEmptyArrayDimension = false,
+      std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr,
+      std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr)
+      : type(type), name(name), bitWidth(bitWidth), alignment(alignment),
+        initializer(initializer), dimensions(dimensions),
+        hasEmptyArrayDimension(hasEmptyArrayDimension),
+        inlineStructDecl(std::move(inlineStructDecl)),
+        inlineUnionDecl(std::move(inlineUnionDecl)) {}
 };
 
 class MultiVariableDeclarationStatement : public Statement {
@@ -291,13 +373,31 @@ class VariableDeclaration : public Declaration {
 public:
   std::string type;
   std::string name;
+  std::optional<int> bitWidth;
   std::optional<ExpressionPtr> initializer;
   std::vector<ExpressionPtr> dimensions;
-  VariableDeclaration(const std::string &type, const std::string &name,
-                      std::optional<ExpressionPtr> initializer = std::nullopt,
-                      const std::vector<ExpressionPtr> &dimensions = {})
-      : type(type), name(name), initializer(initializer),
-        dimensions(dimensions) {}
+  std::optional<int> alignment;
+  bool hasEmptyArrayDimension;
+  bool isAnonymousUnionField;
+  bool isAnonymousStructField;
+  std::shared_ptr<StructDeclaration> inlineStructDecl;
+  std::shared_ptr<UnionDeclaration> inlineUnionDecl;
+  VariableDeclaration(
+      const std::string &type, const std::string &name,
+      std::optional<int> bitWidth = std::nullopt,
+      std::optional<ExpressionPtr> initializer = std::nullopt,
+      const std::vector<ExpressionPtr> &dimensions = {},
+      std::optional<int> alignment = std::nullopt,
+      bool hasEmptyArrayDimension = false, bool isAnonymousUnionField = false,
+      bool isAnonymousStructField = false,
+      std::shared_ptr<StructDeclaration> inlineStructDecl = nullptr,
+      std::shared_ptr<UnionDeclaration> inlineUnionDecl = nullptr)
+      : type(type), name(name), bitWidth(bitWidth), initializer(initializer),
+        dimensions(dimensions), alignment(alignment),
+        hasEmptyArrayDimension(hasEmptyArrayDimension),
+        isAnonymousUnionField(isAnonymousUnionField),
+        isAnonymousStructField(isAnonymousStructField),
+        inlineStructDecl(inlineStructDecl), inlineUnionDecl(inlineUnionDecl) {}
 };
 
 // NEW: Multiple variable declarations in a single declaration.
@@ -316,21 +416,30 @@ public:
   // Each parameter: pair of (type, name)
   std::vector<std::pair<std::string, std::string>> parameters;
   StatementPtr body; // if nullptr, it's a forward declaration
+  bool isVarArgs;
   FunctionDeclaration(
       const std::string &retType, const std::string &name,
       const std::vector<std::pair<std::string, std::string>> &params,
-      StatementPtr body)
-      : returnType(retType), name(name), parameters(params), body(body) {}
+      StatementPtr body, bool isVarArgs = false)
+      : returnType(retType), name(name), parameters(params), body(body),
+        isVarArgs(isVarArgs) {}
 };
 
 class StructDeclaration : public Declaration {
 public:
   std::optional<std::string> tag;
   std::vector<std::shared_ptr<VariableDeclaration>> members;
+  std::vector<std::shared_ptr<UnionDeclaration>> nestedUnions;
+  std::vector<std::shared_ptr<StructDeclaration>> nestedStructs;
+  bool isPacked;
   StructDeclaration(
       std::optional<std::string> tag,
-      const std::vector<std::shared_ptr<VariableDeclaration>> &members)
-      : tag(tag), members(members) {}
+      const std::vector<std::shared_ptr<VariableDeclaration>> &members,
+      const std::vector<std::shared_ptr<UnionDeclaration>> &nestedUnions = {},
+      const std::vector<std::shared_ptr<StructDeclaration>> &nestedStructs = {},
+      bool packed = false)
+      : tag(tag), members(members), nestedUnions(nestedUnions),
+        nestedStructs(nestedStructs), isPacked(packed) {}
 };
 
 class UnionDeclaration : public Declaration {
@@ -353,6 +462,38 @@ public:
       const std::vector<std::pair<std::string, std::optional<ExpressionPtr>>>
           &enumerators)
       : tag(tag), enumerators(enumerators) {}
+};
+
+class TypedefDeclaration : public Declaration {
+public:
+  std::string alias;
+  std::string underlyingType;
+  std::vector<ExpressionPtr> dimensions;
+  bool isFunctionPointer;
+  std::vector<std::string> functionParamTypes;
+  std::shared_ptr<StructDeclaration> structDecl;
+  std::shared_ptr<UnionDeclaration> unionDecl;
+  std::shared_ptr<EnumDeclaration> enumDecl;
+  TypedefDeclaration(const std::string &alias,
+                     const std::string &underlyingType,
+                     const std::vector<ExpressionPtr> &dimensions,
+                     bool isFunctionPointer,
+                     const std::vector<std::string> &functionParamTypes,
+                     std::shared_ptr<StructDeclaration> structDecl = nullptr,
+                     std::shared_ptr<UnionDeclaration> unionDecl = nullptr,
+                     std::shared_ptr<EnumDeclaration> enumDecl = nullptr)
+      : alias(alias), underlyingType(underlyingType), dimensions(dimensions),
+        isFunctionPointer(isFunctionPointer),
+        functionParamTypes(functionParamTypes), structDecl(structDecl),
+        unionDecl(unionDecl), enumDecl(enumDecl) {}
+};
+
+class StaticAssertDeclaration : public Declaration {
+public:
+  ExpressionPtr condition;
+  std::string message;
+  StaticAssertDeclaration(ExpressionPtr condition, const std::string &message)
+      : condition(condition), message(message) {}
 };
 
 #endif // AST_HPP

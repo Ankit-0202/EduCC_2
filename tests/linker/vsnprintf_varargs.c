@@ -12,7 +12,8 @@ static int format_into(char *buffer, size_t size, const char *fmt, ...) {
 
 int main(void) {
   char buffer[128];
-  int written = format_into(buffer, sizeof buffer, "value=%d, hex=%#x", 42, 255);
+  int written =
+      format_into(buffer, sizeof buffer, "value=%d, hex=%#x", 42, 255);
   if (written <= 0) {
     return 1;
   }
@@ -31,5 +32,3 @@ int main(void) {
 
   return 0;
 }
-
-

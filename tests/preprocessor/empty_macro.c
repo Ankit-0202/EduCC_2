@@ -3,8 +3,7 @@
 #define EMPTY
 
 int main() {
-    EMPTY
-    printf("OK\n");
-    return 0;
+  EMPTY
+  printf("OK\n");
+  return 0;
 }
-

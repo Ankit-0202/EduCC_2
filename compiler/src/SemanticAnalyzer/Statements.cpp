@@ -54,16 +54,20 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
     // Convert the local variable declaration statement into a
     // VariableDeclaration node.
     auto varDecl = std::make_shared<VariableDeclaration>(
-        varDeclStmt->type, varDeclStmt->name, varDeclStmt->initializer,
-        varDeclStmt->dimensions);
+        varDeclStmt->type, varDeclStmt->name, varDeclStmt->bitWidth,
+        varDeclStmt->initializer, varDeclStmt->dimensions,
+        varDeclStmt->alignment, varDeclStmt->hasEmptyArrayDimension, false,
+        false, varDeclStmt->inlineStructDecl, varDeclStmt->inlineUnionDecl);
     analyzeVariableDeclaration(varDecl);
   } else if (auto multiVarDeclStmt =
                  std::dynamic_pointer_cast<MultiVariableDeclarationStatement>(
                      stmt)) {
     for (const auto &singleDecl : multiVarDeclStmt->declarations) {
       auto varDecl = std::make_shared<VariableDeclaration>(
-          singleDecl->type, singleDecl->name, singleDecl->initializer,
-          singleDecl->dimensions);
+          singleDecl->type, singleDecl->name, singleDecl->bitWidth,
+          singleDecl->initializer, singleDecl->dimensions,
+          singleDecl->alignment, singleDecl->hasEmptyArrayDimension, false,
+          false, singleDecl->inlineStructDecl, singleDecl->inlineUnionDecl);
       analyzeVariableDeclaration(varDecl);
     }
   } else if (auto declStmt =
@@ -79,7 +83,11 @@ void SemanticAnalyzer::analyzeStatement(const StatementPtr &stmt) {
   } else if (auto gotoStmt = std::dynamic_pointer_cast<GotoStatement>(stmt)) {
     // Goto statements are valid
     // For now, we'll just accept them
-  } else if (auto doWhileStmt = std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
+  } else if (auto labeledStmt =
+                 std::dynamic_pointer_cast<LabeledStatement>(stmt)) {
+    analyzeStatement(labeledStmt->statement);
+  } else if (auto doWhileStmt =
+                 std::dynamic_pointer_cast<DoWhileStatement>(stmt)) {
     analyzeStatement(doWhileStmt->body);
     analyzeExpression(doWhileStmt->condition);
   } else {

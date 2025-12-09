@@ -77,7 +77,7 @@ GCC_EXE    := gcc_executable
 OUR_OUTPUT := our_output.txt
 GCC_OUTPUT := gcc_output.txt
 
-PYTEST ?= python3 -m pytest
+PYTEST ?= ./scripts/pytest_runner.sh
 PYTEST_ARGS ?=
 PYTEST_TARGETS ?= tests_py
 
@@ -134,7 +134,7 @@ $(COMPILER_TARGET): $(COMPILER_OBJ) | $(COMPILER_BUILD)
 # Main Executable
 $(MAIN_TARGET): $(MAIN_SRC) $(PREPROC_TARGET) $(COMPILER_TARGET) $(COMMON_TARGET) | $(BUILD_DIR)
 	@echo "Linking $@"
-	$(CXX) $(CXXFLAGS) -I$(COMPILER_DIR)/include -I$(PREPROCESSOR_DIR)/include $(COMMON_INCLUDE) -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS) -lc++
+	$(CXX) $(CXXFLAGS) -I$(COMPILER_DIR)/include -I$(PREPROCESSOR_DIR)/include $(COMMON_INCLUDE) -o $@ $^ -L$(LLVM_LIBDIR) $(LLVM_LIBS)
 
 # =============================================================================
 # Testing

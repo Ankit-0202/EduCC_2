@@ -28,6 +28,7 @@ public:
 
   // Set the current file name for built-in macro expansion (__FILE__).
   void setCurrentFile(const std::string &fileName);
+  void setLineDelta(int delta);
 
 private:
   // Recursively expand macros in the source text.
@@ -54,6 +55,7 @@ private:
 
   // Built-in macro state.
   std::string currentFile; // For __FILE__ replacement.
+  int lineDelta;
 };
 
 #endif // MACRO_EXPANDER_HPP

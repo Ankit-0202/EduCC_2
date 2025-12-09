@@ -7,4 +7,3 @@ int main(void) {
   double delta = fabs(value - 1.0);
   return (delta < 1e-6) ? 0 : 1;
 }
-

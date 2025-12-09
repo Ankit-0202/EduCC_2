@@ -43,5 +43,3 @@ private:
 };
 
 #endif // EDUCC_LINKER_HPP
-
-

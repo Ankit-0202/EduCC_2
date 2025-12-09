@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Wrapper to force GNU89 inline semantics and gnu99 mode so GCC behaves like
+# our reference compiler in tests.
+set -euo pipefail
+
+REAL_GCC="/opt/homebrew/bin/gcc-15"
+
+# Pass through pure version queries untouched.
+if [[ "${1:-}" == "--version" || "${1:-}" == "-dumpversion" || "${1:-}" == "-dumpmachine" ]]; then
+  exec "$REAL_GCC" "$@"
+fi
+
+EXTRA_FLAGS=(-fgnu89-inline -Wno-implicit-function-declaration)
+exec "$REAL_GCC" "${EXTRA_FLAGS[@]}" "$@"

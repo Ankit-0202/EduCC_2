@@ -1,4 +1,5 @@
 #include "MacroExpander.hpp"
+#include "Debug.hpp"
 #include "Lexer.hpp"
 #include "Token.hpp"
 
@@ -22,13 +23,15 @@ static std::string tokensToString(const std::vector<Token> &tokens) {
   return oss.str();
 }
 
-MacroExpander::MacroExpander() : currentFile("<unknown>") {
+MacroExpander::MacroExpander() : currentFile("<unknown>"), lineDelta(0) {
   // Empty constructor.
 }
 
 void MacroExpander::setCurrentFile(const std::string &fileName) {
   currentFile = fileName;
 }
+
+void MacroExpander::setLineDelta(int delta) { lineDelta = delta; }
 
 //
 // processDirective:
@@ -94,7 +97,8 @@ void MacroExpander::processDirective(const std::string &line) {
       replacement = line.substr(pos);
     macro.replacement = replacement;
     macros[name] = macro;
-    std::cerr << "[DEBUG] Defined macro: " << name;
+    if (educcDebugEnabled())
+      std::cerr << "[DEBUG] Defined macro: " << name;
     if (macro.isFunctionLike) {
       std::cerr << " (function-like, params: ";
       for (const auto &p : macro.parameters)
@@ -113,7 +117,8 @@ void MacroExpander::processDirective(const std::string &line) {
         pos++;
       std::string name = line.substr(start, pos - start);
       macros.erase(name);
-      std::cerr << "[DEBUG] Undefining macro: " << name << "\n";
+      if (educcDebugEnabled())
+        std::cerr << "[DEBUG] Undefining macro: " << name << "\n";
     }
   }
 }
@@ -151,7 +156,10 @@ std::string MacroExpander::expandTokens(
       } else if (token.lexeme == "__LINE__") {
         Token newToken;
         newToken.type = TokenType::LITERAL_INT;
-        newToken.lexeme = std::to_string(token.line);
+        int logicalLine = token.line + lineDelta;
+        if (logicalLine < 1)
+          logicalLine = token.line;
+        newToken.lexeme = std::to_string(logicalLine);
         newToken.line = token.line;
         newToken.column = token.column;
         output.push_back(newToken);
@@ -266,9 +274,14 @@ std::string MacroExpander::expand(const std::string &source) {
   std::string prev;
   std::string curr = source;
   std::unordered_map<std::string, bool> disabled;
+  size_t iteration = 0;
   do {
     prev = curr;
     curr = expandTokens(prev, disabled);
+    if (++iteration > 10000) {
+      throw std::runtime_error(
+          "Macro expansion did not converge after 10000 iterations.");
+    }
   } while (curr != prev);
   return curr;
 }
@@ -452,14 +465,17 @@ std::string MacroExpander::expandFunctionMacro(
 std::string MacroExpander::stringifyArgument(const std::vector<Token> &tokens) {
   std::ostringstream oss;
   oss << "\"";
+  bool first = true;
   for (const auto &t : tokens) {
+    if (!first)
+      oss << " ";
+    first = false;
     for (char c : t.lexeme) {
       if (c == '\\' || c == '"') {
         oss << '\\';
       }
       oss << c;
     }
-    oss << " ";
   }
   oss << "\"";
   return oss.str();

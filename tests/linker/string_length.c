@@ -7,5 +7,3 @@ int main(void) {
   printf("len=%zu:%s\n", len, message);
   return len == 24 ? 0 : 1;
 }
-
-

@@ -60,7 +60,7 @@ int main() {
 
   // Test dereference for function pointers
   int (*func_ptr)(int) = &test_func;
-  int func_result = (*func_ptr)(21);
+  int func_ptr_result_initial = (*func_ptr)(21);
   // Expected: 21 * 2 = 42
 
   // Test dereference for different types
@@ -113,7 +113,7 @@ int main() {
   // Expected: 65 (since 42 < 50, use char value)
 
   // Test dereference with function calls
-  int func_result = test_deref_func(ptr_int);
+  int func_result_call = test_deref_func(ptr_int);
   // Expected: 42 * 3 = 126
 
   // Test dereference with pointer arithmetic
@@ -264,7 +264,7 @@ int main() {
     return 8;
   if (deref_struct_c < 2.4f || deref_struct_c > 2.6f)
     return 9;
-  if (func_result != 42)
+  if (func_ptr_result_initial != 42)
     return 10;
   if (deref_short != 100)
     return 11;
@@ -286,7 +286,7 @@ int main() {
     return 19;
   if (cond_result != 65)
     return 20;
-  if (func_result != 126)
+  if (func_result_call != 126)
     return 21;
   if (arith_ptr_result != 6)
     return 22;

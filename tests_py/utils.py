@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
+import sys
 
 import pytest
 
@@ -44,6 +45,11 @@ def _run_command(
     if result.returncode != 0:
         raise CommandError(cmd, result)
     return result
+
+
+_LINK_FLAGS: list[str] = ["-lm"]
+if sys.platform.startswith("linux"):
+    _LINK_FLAGS.append("-no-pie")
 
 
 def _run_program(
@@ -94,7 +100,7 @@ def _execute_frontend_case(
     our_exe = workdir / "educc.out"
     gcc_exe = workdir / "gcc.out"
 
-    compiler_cmd = [str(compiler_binary), str(case.path), str(ll_file)]
+    compiler_cmd = [str(compiler_binary), str(case.path), str(ll_file), "--no-link"]
     compiler_cmd.extend(case.compiler_args)
     _run_command(compiler_cmd, cwd=workdir, env=env)
 
@@ -104,12 +110,12 @@ def _execute_frontend_case(
         env=env,
     )
     _run_command(
-        [toolchain["clang"], str(obj_file), "-o", str(our_exe)],
+        [toolchain["clang"], str(obj_file), "-o", str(our_exe), *_LINK_FLAGS],
         cwd=workdir,
         env=env,
     )
     _run_command(
-        [toolchain["gcc"], str(case.path), "-o", str(gcc_exe)],
+        [toolchain["gcc"], str(case.path), "-o", str(gcc_exe), *_LINK_FLAGS],
         cwd=workdir,
         env=env,
     )
@@ -147,7 +153,7 @@ def _execute_linker_case(
     _run_command(compiler_cmd, cwd=workdir, env=env)
 
     _run_command(
-        [toolchain["gcc"], str(case.path), "-o", str(gcc_exe)],
+        [toolchain["gcc"], str(case.path), "-o", str(gcc_exe), *_LINK_FLAGS],
         cwd=workdir,
         env=env,
     )
