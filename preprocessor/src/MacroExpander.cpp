@@ -465,14 +465,17 @@ std::string MacroExpander::expandFunctionMacro(
 std::string MacroExpander::stringifyArgument(const std::vector<Token> &tokens) {
   std::ostringstream oss;
   oss << "\"";
+  bool first = true;
   for (const auto &t : tokens) {
+    if (!first)
+      oss << " ";
+    first = false;
     for (char c : t.lexeme) {
       if (c == '\\' || c == '"') {
         oss << '\\';
       }
       oss << c;
     }
-    oss << " ";
   }
   oss << "\"";
   return oss.str();

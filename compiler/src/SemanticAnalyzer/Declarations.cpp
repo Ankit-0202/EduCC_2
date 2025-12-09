@@ -319,9 +319,8 @@ void SemanticAnalyzer::analyzeVariableDeclaration(
     if (varDecl->initializer) {
       if (auto initList = std::dynamic_pointer_cast<InitializerList>(
               varDecl->initializer.value())) {
-        inferredSize = initList->elements.empty()
-                           ? static_cast<size_t>(1)
-                           : initList->elements.size();
+        inferredSize = initList->elements.empty() ? static_cast<size_t>(1)
+                                                  : initList->elements.size();
       } else if (auto lit = std::dynamic_pointer_cast<Literal>(
                      varDecl->initializer.value())) {
         if (lit->type == Literal::LiteralType::String)
@@ -336,10 +335,9 @@ void SemanticAnalyzer::analyzeVariableDeclaration(
 
   if (educcDebugEnabled()) {
     std::cerr << "[DEBUG] semantic: declaring variable '" << varDecl->name
-              << "' type '" << typeWithDimensions << "' dims="
-              << varDecl->dimensions.size()
-              << " emptyDim=" << (varDecl->hasEmptyArrayDimension ? "true"
-                                                                  : "false")
+              << "' type '" << typeWithDimensions
+              << "' dims=" << varDecl->dimensions.size() << " emptyDim="
+              << (varDecl->hasEmptyArrayDimension ? "true" : "false")
               << std::endl;
   }
   Symbol symbol(varDecl->name, typeWithDimensions);

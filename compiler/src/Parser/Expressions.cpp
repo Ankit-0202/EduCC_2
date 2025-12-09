@@ -228,6 +228,7 @@ ExpressionPtr Parser::parseUnary() {
     if (check(TokenType::KW_INT) || check(TokenType::KW_FLOAT) ||
         check(TokenType::KW_CHAR) || check(TokenType::KW_DOUBLE) ||
         check(TokenType::KW_BOOL) || check(TokenType::KW_VOID) ||
+        peek().lexeme == "short" || peek().lexeme == "long" ||
         peek().lexeme == "unsigned" || peek().lexeme == "signed" ||
         peek().lexeme == "struct" || peek().lexeme == "union" ||
         isTypedefName(peek().lexeme) || peek().lexeme == "size_t" ||
