@@ -514,8 +514,6 @@ static string consumePointerTokens(Parser &parser, const string &baseType) {
   }
   return newType;
 }
-static int anonymousStructCounter = 0;
-static int anonymousUnionCounter = 0;
 
 static std::shared_ptr<StructDeclaration>
 parseStructDefinition(Parser &parser, std::optional<std::string> tag) {

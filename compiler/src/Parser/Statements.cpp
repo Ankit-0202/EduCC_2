@@ -92,16 +92,35 @@ StatementPtr Parser::parseStatement() {
   if (check(TokenType::KW_UNION)) {
     size_t save = current;
     advance(); // consume KW_UNION
+    bool standaloneUnion = false;
     if (check(TokenType::DELIM_LBRACE) ||
         (check(TokenType::IDENTIFIER) &&
          (current + 1 < tokens.size() &&
           tokens[current + 1].type == TokenType::DELIM_LBRACE))) {
-      current = save; // revert
-      DeclarationPtr unionDecl = parseUnionDeclaration();
-      return std::make_shared<DeclarationStatement>(unionDecl);
-    } else {
-      current = save; // revert pointer to handle in variable-decl logic below
+      size_t bracePos = current;
+      if (check(TokenType::IDENTIFIER))
+        bracePos++;
+      int depth = 0;
+      for (size_t i = bracePos; i < tokens.size(); ++i) {
+        if (tokens[i].type == TokenType::DELIM_LBRACE)
+          depth++;
+        else if (tokens[i].type == TokenType::DELIM_RBRACE) {
+          depth--;
+          if (depth == 0) {
+            if (i + 1 < tokens.size() &&
+                tokens[i + 1].type == TokenType::DELIM_SEMICOLON)
+              standaloneUnion = true;
+            break;
+          }
+        }
+      }
+      if (standaloneUnion) {
+        current = save; // revert
+        DeclarationPtr unionDecl = parseUnionDeclaration();
+        return std::make_shared<DeclarationStatement>(unionDecl);
+      }
     }
+    current = save; // revert pointer to handle in variable-decl logic below
   }
 
   auto startsWithType = [this]() {
